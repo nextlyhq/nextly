@@ -355,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
 
         const second = await describeSpanish();
         expect(second.marks?.languages.es).not.toBe(first.marks?.languages.es);
-        expect(second.marks?.rest).toBe(first.marks?.rest);
+        expect(second.marks?.shared).toBe(first.marks?.shared);
         const moved = await publishFrom(second._rev);
         expect(moved.success, JSON.stringify(moved)).toBe(true);
         expect(moved.data).not.toHaveProperty("_rev");

@@ -248,18 +248,16 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await states(id)).toMatchObject({ es: "draft" });
     const second = await describeSpanish(id);
     expect(second.marks.languages.es).not.toBe(first.marks.languages.es);
-    expect(second.marks.rest).toBe(first.marks.rest);
+    expect(second.marks.shared).toBe(first.marks.shared);
 
     // A shared field's live value, which is shown in Spanish too.
     await save(id, "en", { tagline: "Changed" });
     expect(await moveSpanish(id, second.rev)).toBe("STALE_VERSION");
 
-    // French, which is not described: nothing of Spanish changed.
+    // French, which is not described: nothing of Spanish changed, and nothing tells it was saved.
     const third = await describeSpanish(id);
     await save(id, "fr", { title: "Salut" });
-    expect((await describeSpanish(id)).marks).toMatchObject({
-      languages: third.marks.languages,
-    });
+    expect((await describeSpanish(id)).marks).toEqual(third.marks);
     expect(await moveSpanish(id, third.rev)).toBe("moved");
     expect(await states(id)).toMatchObject({ es: "published", fr: "draft" });
   });
@@ -280,14 +278,14 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await moveSpanish(id, first.rev)).toBe("STALE_VERSION");
     const second = await describeSpanish(id);
     expect(second.marks.languages.es).not.toBe(first.marks.languages.es);
-    expect(second.marks.rest).toBe(first.marks.rest);
+    expect(second.marks.shared).toBe(first.marks.shared);
 
-    // Another language's draft moves the document's own counter: refused, and not marked Spanish's.
+    // Another language's draft moves the document's own counter, so the move is refused; its
+    // marks say nothing of it, since the caller may not be allowed to read that language.
     await save(id, "fr", { title: "Salut" });
     expect(await moveSpanish(id, second.rev)).toBe("STALE_VERSION");
     const third = await describeSpanish(id);
-    expect(third.marks.languages).toEqual(second.marks.languages);
-    expect(third.marks.rest).not.toBe(second.marks.rest);
+    expect(third.marks).toEqual(second.marks);
 
     expect(await moveSpanish(id, third.rev)).toBe("moved");
     const live = await t!.nextly.findByID({

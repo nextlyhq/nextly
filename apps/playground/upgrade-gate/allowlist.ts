@@ -78,7 +78,15 @@ const ATTRIBUTION_COLUMN_ADDED =
 const ATTRIBUTION_INDEX_ADDED =
   "Two indexes on the activity log back reading one agent's or one agent session's rows, newest first. Building an index changes no row.";
 
+/** Why the table of command-line sign-ins and agent passes is created. */
+const CLI_CREDENTIALS_KEPT =
+  "The sign-ins and passes the command line and agents hold are stored from the first one made after the upgrade. The table is new, so nothing an installation held lives in it.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
+  {
+    operation: "create table nextly_cli_credentials",
+    reason: CLI_CREDENTIALS_KEPT,
+  },
   {
     operation: "create table nextly_translation_sources",
     reason: TRANSLATION_SOURCES_KEPT,

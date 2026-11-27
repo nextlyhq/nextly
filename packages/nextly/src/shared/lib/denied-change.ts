@@ -32,7 +32,10 @@
 
 import { isDeepStrictEqual } from "node:util";
 
-import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
+import {
+  fieldGroupTypeKeys,
+  readFieldGroupType,
+} from "../../domains/field-groups/storage/field-group-type-key";
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
@@ -215,6 +218,11 @@ export async function resolvePromotedDocument(
  * column is not written, so the row keeps it without being handed it back.
  * The row is narrowed to the update's own keys for the same reason, so a field
  * the update does not name is never written.
+ *
+ * A value inside a container that the writer may not READ is kept too, where
+ * they send none (`unread`): the container they read had no such key, so one
+ * they send back without it removes nothing. A value they do send there is
+ * theirs to write, as their update rules decide.
  */
 export async function keepDeniedAtStored(input: {
   /** The update as the caller sent it, before any rule has run. */
@@ -223,6 +231,8 @@ export async function keepDeniedAtStored(input: {
   stored: Record<string, unknown>;
   /** Applies the field rules to the document it is given, in place. */
   applyRules: (document: Record<string, unknown>) => Promise<void>;
+  /** What the writer may not read; absent where nothing inside a container is hidden from anyone. */
+  unread?: UnreadValues;
 }): Promise<{
   /** The document to write: the update, with denied values kept from the row. */
   kept: Record<string, unknown>;
@@ -259,7 +269,175 @@ export async function keepDeniedAtStored(input: {
   for (const key of Object.keys(input.update)) {
     if (!hasOwn(permitted, key)) delete out[key];
   }
-  return { kept: out, permitted };
+  return {
+    kept: input.unread ? await withUnread(out, input.unread) : out,
+    permitted,
+  };
+}
+
+/** What a writer was not shown of the document they save, and what decides it. */
+export interface UnreadValues {
+  /** The document as it stands, with the pending change its editors are shown. */
+  stored: Record<string, unknown>;
+  /** Applies the writer's field READ rules to the document it is given, in place. */
+  applyRules: (document: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * `update` with each value its writer was not shown, and sends none of, put back in the container
+ * it sits in. A value counts as unread where the read rules hide it on the document as it stands,
+ * the one its writer was shown, or on the document as this update leaves it. A read rule reads
+ * its siblings too, and a save that changes one shows its writer nothing it hid from them: a
+ * value hidden before the save was never sent back, so the save must not be taken to delete it.
+ */
+async function withUnread(
+  update: Record<string, unknown>,
+  unread: UnreadValues
+): Promise<Record<string, unknown>> {
+  const stored: Record<string, unknown> = {};
+  for (const key of Object.keys(unread.stored)) {
+    assign(stored, key, opened(unread.stored[key]));
+  }
+  // Copies, since what is put back must reach neither the row nor the caller's own values.
+  const kept = detachData(update);
+  const views = [stored, overlayRecord(stored, kept)].map(detachData);
+  for (const readable of views) await unread.applyRules(readable);
+  for (const readable of views) {
+    for (const key of Object.keys(kept)) {
+      if (hasOwn(stored, key)) {
+        keepUnread(kept[key], stored[key], valueIn(readable, key));
+      }
+    }
+  }
+  return kept;
+}
+
+/** A container kept as JSON text, opened; any other value as it is. */
+function opened(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) || Array.isArray(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+/** The value at `key` where a record holds it, and nothing where it was taken out. */
+function valueIn(record: unknown, key: string): unknown {
+  return isRecord(record) && hasOwn(record, key) ? record[key] : undefined;
+}
+
+/** {@link withUnread} for one value the update holds, in place. */
+function keepUnread(kept: unknown, stored: unknown, readable: unknown): void {
+  if (Array.isArray(kept)) {
+    if (Array.isArray(stored)) keepUnreadInRows(kept, stored, readable);
+    return;
+  }
+  if (isRecord(kept) && isRecord(stored) && sameFieldGroupType(kept, stored)) {
+    keepUnreadInRecord(kept, stored, readable);
+  }
+}
+
+/** Whether two records are of one field group, or either is of none: another's fields are not its. */
+function sameFieldGroupType(
+  kept: Record<string, unknown>,
+  stored: Record<string, unknown>
+): boolean {
+  const type = readFieldGroupType(kept);
+  const storedType = readFieldGroupType(stored);
+  return !type || !storedType || type === storedType;
+}
+
+/** {@link withUnread} for a group: each of its stored fields the update leaves out, or reaches into. */
+function keepUnreadInRecord(
+  kept: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  readable: unknown
+): void {
+  for (const key of Object.keys(stored)) {
+    const judged = valueIn(readable, key);
+    if (hasOwn(kept, key)) {
+      keepUnread(kept[key], stored[key], judged);
+      continue;
+    }
+    const hidden = hiddenPart(stored[key], judged);
+    if (hidden !== undefined) assign(kept, key, detachData(hidden));
+  }
+}
+
+/**
+ * {@link withUnread} for a list: each row the update keeps, as {@link isStoredRow} knows it. A row
+ * the update drops goes with what it held.
+ */
+function keepUnreadInRows(
+  kept: readonly unknown[],
+  stored: readonly unknown[],
+  readable: unknown
+): void {
+  const pairing = rowPairing(kept, stored);
+  const known = isStoredRow(stored);
+  for (const [index, row] of kept.entries()) {
+    const at = pairing(index);
+    if (at === undefined || !known(row, stored[at])) continue;
+    keepUnread(row, stored[at], itemAt(readable, at));
+  }
+}
+
+/**
+ * Whether a row the update sends is the stored row {@link rowPairing} pairs it with.
+ *
+ * Where the stored rows carry ids, only by its own: a row sent without one is not known to be the
+ * row at its place, and a hidden value taken from there could land on a row it never belonged
+ * to. Where none does (rows saved before rows were given ids, or whose own field is called `id`),
+ * there is only position, as the update rules pair them, and the row must send the `id` the
+ * stored one holds, or none where it holds none: a row moved among rows that name themselves is
+ * not taken for the row at its new place.
+ */
+function isStoredRow(
+  stored: readonly unknown[]
+): (row: unknown, storedRow: unknown) => boolean {
+  if (stored.some(row => rowId(row) !== undefined)) {
+    return (row, storedRow) =>
+      rowId(row) !== undefined && rowId(row) === rowId(storedRow);
+  }
+  return (row, storedRow) =>
+    isRecord(row) &&
+    isRecord(storedRow) &&
+    isDeepStrictEqual(row.id, storedRow.id);
+}
+
+/**
+ * What of `value` its reader was not shown: all of it where the rules took it out, the hidden
+ * fields of a group they left, and nothing of a list they left, whose rows the reader saw. Nothing
+ * is kept of an empty value.
+ */
+function hiddenPart(value: unknown, readable: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (readable === undefined) return value;
+  if (!isRecord(value) || !isRecord(readable)) return undefined;
+  const hidden: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const part = hiddenPart(value[key], valueIn(readable, key));
+    if (part !== undefined) assign(hidden, key, part);
+  }
+  if (Object.keys(hidden).length === 0) return undefined;
+  return { ...identityOf(value), ...hidden };
+}
+
+/**
+ * What names a field-group instance: its id and the type it announces, where it holds them. A
+ * hidden part kept of one is that instance's, so it keeps both, or a field group of either type
+ * would be kept with no type, and one of a single type under an id of its own.
+ */
+function identityOf(value: Record<string, unknown>): Record<string, unknown> {
+  const identity: Record<string, unknown> = {};
+  for (const key of ["id", ...fieldGroupTypeKeys]) {
+    if (value[key] !== undefined && hasOwn(value, key)) {
+      assign(identity, key, value[key]);
+    }
+  }
+  return identity;
 }
 
 /**

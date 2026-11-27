@@ -116,6 +116,10 @@
       "samples": 7,
       "compiled": 6
     },
+    "docs/guides/build-your-front-end-in-code.mdx": {
+      "samples": 13,
+      "compiled": 13
+    },
     "docs/guides/deployment.mdx": {
       "samples": 3,
       "compiled": 3
@@ -512,6 +516,20 @@
       "reader-name #1 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #1 error TS2304: Cannot find name 'Media'.": 1,
       "reader-name #2 error TS2552: Cannot find name 'MyCollection'. Did you mean 'HTMLCollection'?": 1
+    },
+    "docs/guides/build-your-front-end-in-code.mdx": {
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
+      "reader-file #6 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
+      "reader-file #9 error TS2307: Cannot find module './src/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #11 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #11 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #11 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
       "implicit-any #7 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,

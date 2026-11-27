@@ -1,4 +1,5 @@
 import { CACHE_TAG_EXPIRIES_TABLE } from "../schemas/cache-tag-expiries/table-name";
+import { CLI_CREDENTIALS_TABLE } from "../schemas/cli-credentials/table-name";
 import { DASHBOARD_PINS_TABLE } from "../schemas/dashboard-pins/table-name";
 import { DASHBOARD_PREFERENCES_TABLE } from "../schemas/dashboard-preferences/table-name";
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
@@ -871,6 +872,33 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "ncte_expired_at_idx"
       ON "${CACHE_TAG_EXPIRIES_TABLE}" ("expired_at")`,
+    // The sign-ins and passes the command line and agents hold. Columns match
+    // schemas/cli-credentials/sqlite.ts; times are integers of milliseconds.
+    `CREATE TABLE IF NOT EXISTS "${CLI_CREDENTIALS_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "purpose" TEXT NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "family_id" TEXT NOT NULL,
+      "parent_id" TEXT,
+      "agent_name" TEXT,
+      "door" TEXT NOT NULL,
+      "machine" TEXT,
+      "refresh_token_hash" TEXT,
+      "refresh_generation" INTEGER NOT NULL DEFAULT 0,
+      "session_epoch" INTEGER NOT NULL DEFAULT 0,
+      "created_at" INTEGER NOT NULL,
+      "last_used_at" INTEGER,
+      "idle_ends_at" INTEGER,
+      "ends_at" INTEGER NOT NULL,
+      "revoked_at" INTEGER,
+      "revoked_reason" TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS "ncc_user_id_idx"
+      ON "${CLI_CREDENTIALS_TABLE}" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "ncc_family_id_idx"
+      ON "${CLI_CREDENTIALS_TABLE}" ("family_id")`,
+    `CREATE INDEX IF NOT EXISTS "ncc_ends_at_idx"
+      ON "${CLI_CREDENTIALS_TABLE}" ("ends_at")`,
     // The two-factor challenges already answered, so an answer is accepted
     // once on every instance. An integer of milliseconds for the expiry, as
     // the Drizzle bundle declares.

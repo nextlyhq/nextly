@@ -76,7 +76,9 @@ export interface PluginInfo {
 }
 
 /** What a plugin's manifest declares about its reach, with absences filled. */
-function manifestSummary(plugin: PluginDefinition): PluginInfo["manifest"] {
+export function manifestSummary(
+  plugin: PluginDefinition
+): PluginInfo["manifest"] {
   const capabilities = plugin.capabilities ?? {};
   return {
     outbound: capabilities.net?.outbound ?? [],

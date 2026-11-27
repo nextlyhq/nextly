@@ -280,11 +280,11 @@ jobs:
       # edge; without it `nextly#build` can start before the adapters emit their
       # declarations and fails on TS7016. They stay in the filter list so each
       # leg still builds all three regardless of which suites it runs.
-      # `plugin-seo` is built for the upgrade gate after the suite, which loads
-      # the playground's config, and that imports it.
+      # `plugin-seo` and `plugin-mcp` are built for the upgrade gate after the
+      # suite, which loads the playground's config, and that imports them.
       - name: Run integration tests (postgres)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-mcp
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the PostgreSQL integration suite" \
             pnpm lane:test:integration:postgres -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
@@ -453,7 +453,7 @@ jobs:
       # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-mcp
           # The watcher sleeps in a child it waits on, and stops that child
           # when it is stopped: otherwise the sleep outlives it holding the
           # step's output open, and the step waits for it.
@@ -679,7 +679,7 @@ jobs:
 
       - name: Run integration tests (sqlite)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-mcp
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the SQLite integration suite" \
             pnpm lane:test:integration:sqlite -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
