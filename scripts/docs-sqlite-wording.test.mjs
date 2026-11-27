@@ -22,6 +22,7 @@ const SENTENCE =
 
 /** The pages that describe SQLite to someone choosing a database. */
 const PAGES = [
+  "docs/index.mdx",
   "docs/database/index.mdx",
   "docs/database/sqlite.mdx",
   "docs/getting-started/installation.mdx",
@@ -66,12 +67,16 @@ const read = file => readFileSync(resolve(repoRoot, file), "utf-8");
 export const statesTheSentence = text =>
   text.toLowerCase().includes(SENTENCE.toLowerCase());
 
-/** The lines of a page that use an old wording, as `file:line: text`. */
+/**
+ * The lines of a page that describe SQLite in an old wording, as
+ * `file:line: text`. Only a line that names SQLite counts, so another feature
+ * described as "for local work" or "demos only" is left alone.
+ */
 export function oldWordingsIn(file, text) {
   return text
     .split("\n")
     .flatMap((line, index) =>
-      OLD_WORDINGS.some(pattern => pattern.test(line))
+      /\bsqlite\b/i.test(line) && OLD_WORDINGS.some(pattern => pattern.test(line))
         ? [`${file}:${String(index + 1)}: ${line.trim()}`]
         : []
     );
@@ -114,7 +119,7 @@ describe("docs: how SQLite is described", () => {
     // page carried, and the agreed sentence is shown not to.
     for (const line of [
       "SQLite is for local demos only.",
-      "| **Local demos only.** Not recommended for serious local development",
+      "| [SQLite](/docs/database/sqlite) | **Local demos only.** Not recommended for serious use",
       "MySQL, or SQLite (local demo only)",
       "Pick SQLite only for one-off local demos.",
       "on your own PostgreSQL or MySQL database, or SQLite for local work.",
@@ -123,6 +128,10 @@ describe("docs: how SQLite is described", () => {
       expect(oldWordingsIn("page.mdx", line)).toHaveLength(1);
     }
     expect(oldWordingsIn("page.mdx", `SQLite is ${SENTENCE}.`)).toEqual([]);
+    // The same words about something other than SQLite are not this check's.
+    expect(
+      oldWordingsIn("page.mdx", "The mock mailer is for local work and demos only.")
+    ).toEqual([]);
     expect(
       statesTheSentence(
         "Great on your own machine and on a single server; on Vercel, choose PostgreSQL."

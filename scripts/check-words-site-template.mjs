@@ -3,10 +3,14 @@
  * Where the words "site template" are used, in the places people and agents
  * read.
  *
- * "Site templates" names ready-made whole sites. None is offered yet, so the
- * words have no right use in these places today. An email template a site
- * owns is one of "your own templates", as against "plugin templates"; calling
- * it a site template made one name mean two things.
+ * "Site templates" is the product's name for the ready-made whole-site designs
+ * a gallery will offer, and no such gallery exists yet. The starts the
+ * installer offers (Blank, Blog, Plugin) are project templates, called by
+ * their own names, so the words have no right use in these places today. An
+ * email template a site owns is one of "your own templates", as against
+ * "plugin templates"; calling it a site template made one name mean two
+ * things. When the gallery ships, its pages and code are where the words
+ * belong, and this check learns to allow them there.
  *
  * Read as text, comments and test names included, because the email code's
  * comments and tests are where the second meaning lived, and an agent reads
@@ -88,7 +92,8 @@ if (process.argv[1]?.endsWith("check-words-site-template.mjs")) {
   const found = siteTemplateWordsInRepository();
   if (found.length > 0) {
     console.error(
-      `"site template" names ready-made whole sites, and none is offered yet. ` +
+      `"Site templates" names the ready-made whole-site designs a gallery will offer, ` +
+        `and no gallery exists yet; call an installer start by its name. ` +
         `Say "your own template" for an email template a site owns:\n` +
         found.map(line => `  ${line}`).join("\n")
     );

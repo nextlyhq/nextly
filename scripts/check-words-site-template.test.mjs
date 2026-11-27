@@ -7,7 +7,9 @@ import {
 } from "./check-words-site-template.mjs";
 
 /**
- * "Site templates" names ready-made whole sites, and nothing offers one yet.
+ * "Site templates" names the ready-made whole-site designs a gallery will
+ * offer, and no gallery exists yet; the installer's starts go by their own
+ * names.
  * An email template a site owns is one of "your own templates", as against
  * "plugin templates". These tests keep the two apart in every place a person
  * or an agent reads: the docs, the admin, the installer and the email code,
