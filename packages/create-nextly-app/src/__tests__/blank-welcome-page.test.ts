@@ -9,7 +9,7 @@
  * It is not rendered here because it is written for a Next.js app, and this
  * package installs no Next.js.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
@@ -22,6 +22,8 @@ const PAGE = fileURLToPath(
     import.meta.url
   )
 );
+/** The repository root, where the docs the site publishes live. */
+const REPO = new URL("../../../../", import.meta.url);
 const GUIDE = "https://nextlyhq.com/docs/guides/build-your-front-end-in-code";
 const GUIDE_NAME = "Build your front end in code";
 
@@ -42,6 +44,28 @@ function textInside(node: Node): string {
     .flatMap(child => (child.type === "JSXText" ? [child.value] : []))
     .join("")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * What a reader sees of an element: its text, its children's text, and the
+ * strings written as `{" "}`, with JSX's spacing.
+ */
+function readerText(node: Node): string {
+  if (node.type === "JSXText") return node.value;
+  if (
+    node.type === "JSXExpressionContainer" &&
+    node.expression.type === "Literal" &&
+    typeof node.expression.value === "string"
+  ) {
+    return node.expression.value;
+  }
+  if (node.type !== "JSXElement") return "";
+  return node.children
+    .map(readerText)
+    .join("")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,:;])/g, "$1")
     .trim();
 }
 
@@ -76,14 +100,21 @@ function guideLinks(): { link: Node; paragraph: Node | undefined }[] {
   return found;
 }
 
+/** The page's paragraphs, in source order. */
+function paragraphs(): Node[] {
+  const found: Node[] = [];
+  walk(program, node => {
+    if (tagOf(node) === "p") found.push(node);
+  });
+  return found.sort((a, b) => a.start - b.start);
+}
+
 describe("blank template: the welcome page", () => {
-  it("links the guide for building the front end in code", () => {
+  it("links the guide for building the front end in code, with Next.js's Link", () => {
     const links = guideLinks();
     expect(links).toHaveLength(1);
     expect(attribute(links[0].link, "href")).toBe(GUIDE);
-  });
-
-  it("renders the link with Next.js's Link", () => {
+    // The element is Next.js's Link, not some other component of that name.
     const fromNextLink = program.body.some(
       statement =>
         statement.type === "ImportDeclaration" &&
@@ -93,21 +124,29 @@ describe("blank template: the welcome page", () => {
     expect(fromNextLink).toBe(true);
   });
 
-  it("puts the link in its own sentence after the introduction", () => {
+  it("links an address the docs publish a page at", () => {
+    // Read from the page, so a renamed or moved guide fails here rather than
+    // sending every new project to a missing page.
+    const href = attribute(guideLinks()[0]?.link ?? program, "href") ?? "";
+    const address = new URL(href);
+    expect(address.origin).toBe("https://nextlyhq.com");
+    expect(address.pathname.startsWith("/docs/")).toBe(true);
+    const page = new URL(`.${address.pathname}.mdx`, REPO);
+    expect(existsSync(page)).toBe(true);
+  });
+
+  it("puts the link in its own sentence, after the introduction", () => {
     const paragraph = guideLinks()[0]?.paragraph;
     expect(paragraph).toBeDefined();
-    const written = paragraph ? text.slice(paragraph.start, paragraph.end) : "";
-    expect(written).toMatchInlineSnapshot(`
-      "<p className="mt-3 mx-auto text-slate-500 dark:text-slate-400 max-w-[42ch] text-[clamp(14px,1.6vw,16px)] leading-[1.6]">
-                Then show it on your site:{" "}
-                <Link
-                  href="https://nextlyhq.com/docs/guides/build-your-front-end-in-code"
-                  className="text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground transition-colors"
-                >
-                  Build your front end in code
-                </Link>
-                .
-              </p>"
-    `);
+    if (!paragraph) return;
+    expect(readerText(paragraph)).toBe(
+      `Then show it on your site: ${GUIDE_NAME}.`
+    );
+    const order = paragraphs();
+    const intro = order.findIndex(p =>
+      readerText(p).startsWith("This is the blank template.")
+    );
+    expect(intro).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(paragraph)).toBe(intro + 1);
   });
 });

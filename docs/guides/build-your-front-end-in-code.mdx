@@ -180,7 +180,7 @@ address with a ready-made route, see
 
 Add `generateMetadata` to the detail page. `buildMetadata` turns the post into
 Next.js metadata: the title, the description, the canonical address, Open Graph
-and Twitter tags. With the [SEO plugin](/docs/plugins), the values an editor sets
+and Twitter tags. With the [SEO plugin](/docs/plugins/seo), the values an editor sets
 in the post's SEO fields win over the ones you pass here.
 
 ```tsx title="src/app/(frontend)/posts/[slug]/page.tsx"
@@ -230,7 +230,8 @@ export default nextlySitemap({
       { url: absoluteUrl("/posts") },
       ...items.map(post => ({
         url: absoluteUrl(`/posts/${String(post.slug)}`),
-        lastModified: String(post.updatedAt),
+        // A Date, which Next.js writes as an ISO 8601 date.
+        lastModified: post.updatedAt instanceof Date ? post.updatedAt : undefined,
       })),
     ];
   },
@@ -371,7 +372,7 @@ export async function GET() {
       const { items } = await nextly.find({
         collection: "posts",
         where: { status: { equals: "published" } },
-        sort: "-createdAt",
+        sort: "-firstPublishedAt",
         limit: 20,
       });
       return items;
@@ -381,13 +382,13 @@ export async function GET() {
 
   const items = posts.map(post => {
     const link = absoluteUrl(`/posts/${String(post.slug)}`);
-    const published = new Date(String(post.firstPublishedAt));
+    const published = post.firstPublishedAt;
     return `<item>
   <title>${xml(post.title)}</title>
   <link>${xml(link)}</link>
   <guid>${xml(link)}</guid>
   <description>${xml(post.excerpt)}</description>
-  <pubDate>${published.toUTCString()}</pubDate>
+  ${published instanceof Date ? `<pubDate>${published.toUTCString()}</pubDate>` : ""}
 </item>`;
   });
 
@@ -405,7 +406,8 @@ ${items.join("\n")}
 ```
 
 `firstPublishedAt` is set when a post is first published and stays put after
-later edits, which is what a feed reader expects of a date.
+later edits, which is what a feed reader expects of a date. Dates come back as
+`Date` objects.
 
 ## Caching and revalidation
 
@@ -425,8 +427,10 @@ yourself:
 - **A read that shows other collections** also carries their tags, so an edit to
   an author or an image refreshes it too:
   `tags: [...nextlyTags("posts"), ...nextlyTags("authors")]`.
-- **A read that depends on who is asking** puts the visitor's id in `keyParts`,
-  or one visitor is served another's rows.
+- **A read that depends on who is asking** puts in `keyParts` everything its
+  access rules read: the visitor's id, and their `role` and `roles` too when a
+  rule checks them. Otherwise one visitor is served another's rows, or someone keeps what
+  they could see before a role was taken away.
 
 ```ts
 import type { UserContext } from "nextly";
@@ -437,7 +441,7 @@ declare function findOrdersFor(user: UserContext): Promise<unknown[]>;
 
 const orders = await cachedFind(() => findOrdersFor(user), {
   tags: nextlyTags("orders"),
-  keyParts: ["orders", "list", user.id],
+  keyParts: ["orders", "list", user.id, user.role ?? "", ...(user.roles ?? [])],
 });
 ```
 
