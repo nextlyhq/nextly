@@ -19,13 +19,14 @@ describe("the words 'site template'", () => {
     expect(siteTemplateWordsInRepository()).toEqual([]);
   });
 
-  it("scan the docs, the admin, the installer and the email code", () => {
+  it("scan the docs, the admin, the installer, core and the form builder", () => {
     expect(SCANNED).toEqual(
       expect.arrayContaining([
         "docs",
         "packages/admin/src",
         "packages/create-nextly-app/src",
-        "packages/nextly/src/domains/email",
+        "packages/nextly/src",
+        "packages/plugin-form-builder/src",
       ])
     );
   });

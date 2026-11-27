@@ -277,7 +277,7 @@ Before going live, verify:
 
 - [ ] `NODE_ENV=production`.
 - [ ] `NEXTLY_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`).
-- [ ] `DATABASE_URL` points to a production database (not localhost / SQLite).
+- [ ] `DATABASE_URL` points to your production database, not one on your own machine. SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.
 - [ ] `NEXT_PUBLIC_APP_URL` is the public URL of your deployment.
 - [ ] `NEXTLY_ALLOWED_ORIGINS` lists the origin browsers use whenever it differs from the address the self-hosted server listens on (behind a proxy, by IP or hostname, or in a container), and any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).

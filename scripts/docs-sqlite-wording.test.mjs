@@ -5,13 +5,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The docs describe SQLite in one sentence, the one the installer uses:
- * great on your own machine and on a single server, and PostgreSQL on
- * Vercel, where a function's disk does not last. Earlier pages called it
- * "for local demos only", which told people a database the installer picks by
- * default was not fit for the single-server site it serves well. These tests
- * keep the sentence on the pages people read first and the old wording out of
- * every page.
+ * The docs describe SQLite in one agreed sentence: great on your own machine
+ * and on a single server, and PostgreSQL on Vercel, where a function's disk
+ * does not last. Calling it "for local demos only" tells people that the
+ * database a new project starts on is not fit for the single-server site it
+ * serves well. These tests keep the sentence on the pages people choose a
+ * database from, keep any second verdict off those pages, and keep the old
+ * wording out of every page.
  */
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,12 +28,21 @@ const PAGES = [
   "docs/getting-started/quick-start.mdx",
 ];
 
-/** What the docs said before, in each spelling a page used. */
+/** Wordings that describe SQLite as unfit for real sites, in each spelling seen. */
 const OLD_WORDINGS = [
   /\bdemos? only\b/i,
   /not recommended for serious/i,
   /one-off (?:local )?demos?\b/i,
+  /\bfor local work\b/i,
+  /\bnot localhost\b.*\bsqlite\b/i,
 ];
+
+/**
+ * Words that pass a verdict on what SQLite is fit for. A sentence naming
+ * SQLite with one of these is a description of it.
+ */
+const VERDICT =
+  /\b(?:demos?|local (?:work|development|only)|serious|recommended|not suitable|single server|vercel|production)\b/i;
 
 /** Every docs page, with forward slashes whatever the platform spells. */
 function docsPages() {
@@ -53,7 +62,7 @@ function docsPages() {
 
 const read = file => readFileSync(resolve(repoRoot, file), "utf-8");
 
-/** Whether a page states the sentence, its first letter in either case. */
+/** Whether a text states the sentence, its first letter in either case. */
 export const statesTheSentence = text =>
   text.toLowerCase().includes(SENTENCE.toLowerCase());
 
@@ -68,9 +77,28 @@ export function oldWordingsIn(file, text) {
     );
 }
 
+/**
+ * The sentences of a page that describe SQLite in other words: they name it
+ * with a verdict and do not carry the agreed sentence. A sentence ends at a
+ * full stop, a question or exclamation mark, or a line break.
+ */
+export function otherDescriptionsIn(text) {
+  return text
+    .split(/(?<=[.!?])\s+|\n/)
+    .filter(
+      sentence =>
+        /\bsqlite\b/i.test(sentence) &&
+        VERDICT.test(sentence) &&
+        !statesTheSentence(sentence)
+    )
+    .map(sentence => sentence.trim());
+}
+
 describe("docs: how SQLite is described", () => {
-  it.each(PAGES)("%s states the agreed sentence", file => {
-    expect(statesTheSentence(read(file))).toBe(true);
+  it.each(PAGES)("%s states the agreed sentence and no other", file => {
+    const text = read(file);
+    expect(statesTheSentence(text)).toBe(true);
+    expect(otherDescriptionsIn(text)).toEqual([]);
   });
 
   it("no docs page keeps the old wording", () => {
@@ -83,16 +111,36 @@ describe("docs: how SQLite is described", () => {
 
   it("would catch each old spelling", () => {
     // The patterns are the instrument, so each is shown to fire on a line a
-    // page really carried, and the agreed sentence is shown not to.
+    // page carried, and the agreed sentence is shown not to.
     for (const line of [
       "SQLite is for local demos only.",
       "| **Local demos only.** Not recommended for serious local development",
       "MySQL, or SQLite (local demo only)",
       "Pick SQLite only for one-off local demos.",
+      "on your own PostgreSQL or MySQL database, or SQLite for local work.",
+      "points to a production database (not localhost / SQLite).",
     ]) {
       expect(oldWordingsIn("page.mdx", line)).toHaveLength(1);
     }
     expect(oldWordingsIn("page.mdx", `SQLite is ${SENTENCE}.`)).toEqual([]);
-    expect(statesTheSentence(`Great on your own machine and on a single server; on Vercel, choose PostgreSQL.`)).toBe(true);
+    expect(
+      statesTheSentence(
+        "Great on your own machine and on a single server; on Vercel, choose PostgreSQL."
+      )
+    ).toBe(true);
+  });
+
+  it("would catch a second description beside the agreed one", () => {
+    const page = [
+      `SQLite is ${SENTENCE}.`,
+      "Pick SQLite only when you are trying something out locally, never in production.",
+    ].join("\n");
+    expect(otherDescriptionsIn(page)).toEqual([
+      "Pick SQLite only when you are trying something out locally, never in production.",
+    ]);
+    // A technical fact about SQLite passes no verdict.
+    expect(
+      otherDescriptionsIn("SQLite is a local file; remote access does not exist.")
+    ).toEqual([]);
   });
 });

@@ -30,7 +30,10 @@ export const SCANNED = [
   "docs",
   "packages/admin/src",
   "packages/create-nextly-app/src",
-  "packages/nextly/src/domains/email",
+  // The whole core, whose email domain held the second meaning, and the form
+  // builder, whose notifications send a site's own email templates.
+  "packages/nextly/src",
+  "packages/plugin-form-builder/src",
 ];
 
 /** Files a person or an agent reads: source, tests and docs. */
