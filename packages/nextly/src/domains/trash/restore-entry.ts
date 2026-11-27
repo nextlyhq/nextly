@@ -330,12 +330,12 @@ function rowToPutBack(
   const row = rowGivenBack(kept);
   const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
   if (table === collection.tableName) {
-    if (collection.lifecycle && row.status === PUBLISHED) row.status = DRAFT;
+    asDraft(row, "status", collection.lifecycle);
     for (const field of asked.cleared) row[field] = null;
     return withNewValues(row, asked.conflicts, asked.values, undefined);
   }
   if (table === companion) {
-    if (collection.lifecycle && row._status === PUBLISHED) row._status = DRAFT;
+    asDraft(row, "_status", collection.lifecycle);
     return withNewValues(
       row,
       asked.conflicts,
@@ -343,14 +343,30 @@ function rowToPutBack(
       String(row._locale)
     );
   }
-  // A record kept about the entry names its collection: by the slug it has
-  // now, which a rename since moved the trash record to.
-  if (table.startsWith("nextly_")) {
-    for (const column of ["scopeSlug", "targetSlug", "subjectSlug"]) {
-      if (column in row) row[column] = collection.slug;
-    }
-  }
+  if (table.startsWith("nextly_")) underSlug(row, collection.slug);
   return row;
+}
+
+/**
+ * A published row's lifecycle column put back as a draft, where the
+ * collection has the lifecycle: without it, the column is the author's own.
+ */
+function asDraft(
+  row: Record<string, unknown>,
+  column: string,
+  lifecycle: boolean
+): void {
+  if (lifecycle && row[column] === PUBLISHED) row[column] = DRAFT;
+}
+
+/**
+ * A record kept about the entry names its collection by the slug it has now,
+ * which a rename since moved the trash record to.
+ */
+function underSlug(row: Record<string, unknown>, slug: string): void {
+  for (const column of ["scopeSlug", "targetSlug", "subjectSlug"]) {
+    if (column in row) row[column] = slug;
+  }
 }
 
 /**
