@@ -282,8 +282,10 @@ export interface UnreadValues {
 
 /**
  * `update` with each value its writer was not shown, and sends none of, put back in the container
- * it sits in. Judged on the document as this update leaves it, as the update rules are: a read
- * rule reads its siblings too.
+ * it sits in. A value counts as unread where the read rules hide it on the document as it stands,
+ * the one its writer was shown, or on the document as this update leaves it. A read rule reads
+ * its siblings too, and a save that changes one shows its writer nothing it hid from them: a
+ * value hidden before the save was never sent back, so the save must not be taken to delete it.
  */
 async function withUnread(
   update: Record<string, unknown>,
@@ -295,11 +297,14 @@ async function withUnread(
   }
   // Copies, since what is put back must reach neither the row nor the caller's own values.
   const kept = detachData(update);
-  const readable = detachData(overlayRecord(stored, kept));
-  await unread.applyRules(readable);
-  for (const key of Object.keys(kept)) {
-    if (!hasOwn(stored, key)) continue;
-    keepUnread(kept[key], stored[key], valueIn(readable, key));
+  const views = [stored, overlayRecord(stored, kept)].map(detachData);
+  for (const readable of views) await unread.applyRules(readable);
+  for (const readable of views) {
+    for (const key of Object.keys(kept)) {
+      if (hasOwn(stored, key)) {
+        keepUnread(kept[key], stored[key], valueIn(readable, key));
+      }
+    }
   }
   return kept;
 }
@@ -326,11 +331,27 @@ function keepUnread(kept: unknown, stored: unknown, readable: unknown): void {
     if (Array.isArray(stored)) keepUnreadInRows(kept, stored, readable);
     return;
   }
-  if (!isRecord(kept) || !isRecord(stored)) return;
-  // Another component's fields are not this one's.
+  if (isRecord(kept) && isRecord(stored) && sameFieldGroupType(kept, stored)) {
+    keepUnreadInRecord(kept, stored, readable);
+  }
+}
+
+/** Whether two records are of one field group, or either is of none: another's fields are not its. */
+function sameFieldGroupType(
+  kept: Record<string, unknown>,
+  stored: Record<string, unknown>
+): boolean {
   const type = readFieldGroupType(kept);
   const storedType = readFieldGroupType(stored);
-  if (type && storedType && type !== storedType) return;
+  return !type || !storedType || type === storedType;
+}
+
+/** {@link withUnread} for a group: each of its stored fields the update leaves out, or reaches into. */
+function keepUnreadInRecord(
+  kept: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  readable: unknown
+): void {
   for (const key of Object.keys(stored)) {
     const judged = valueIn(readable, key);
     if (hasOwn(kept, key)) {
@@ -343,9 +364,8 @@ function keepUnread(kept: unknown, stored: unknown, readable: unknown): void {
 }
 
 /**
- * {@link withUnread} for a list: each row the update keeps, known by its id. A row sent without
- * one is not known to be the row at its place, and a hidden value taken from there could land on
- * a row it never belonged to; a row the update drops goes with what it held.
+ * {@link withUnread} for a list: each row the update keeps, as {@link isStoredRow} knows it. A row
+ * the update drops goes with what it held.
  */
 function keepUnreadInRows(
   kept: readonly unknown[],
@@ -353,12 +373,35 @@ function keepUnreadInRows(
   readable: unknown
 ): void {
   const pairing = rowPairing(kept, stored);
+  const known = isStoredRow(stored);
   for (const [index, row] of kept.entries()) {
     const at = pairing(index);
-    if (at === undefined || rowId(row) === undefined) continue;
-    if (rowId(row) !== rowId(stored[at])) continue;
+    if (at === undefined || !known(row, stored[at])) continue;
     keepUnread(row, stored[at], itemAt(readable, at));
   }
+}
+
+/**
+ * Whether a row the update sends is the stored row {@link rowPairing} pairs it with.
+ *
+ * Where the stored rows carry ids, only by its own: a row sent without one is not known to be the
+ * row at its place, and a hidden value taken from there could land on a row it never belonged
+ * to. Where none does (rows saved before rows were given ids, or whose own field is called `id`),
+ * there is only position, as the update rules pair them, and the row must send the `id` the
+ * stored one holds, or none where it holds none: a row moved among rows that name themselves is
+ * not taken for the row at its new place.
+ */
+function isStoredRow(
+  stored: readonly unknown[]
+): (row: unknown, storedRow: unknown) => boolean {
+  if (stored.some(row => rowId(row) !== undefined)) {
+    return (row, storedRow) =>
+      rowId(row) !== undefined && rowId(row) === rowId(storedRow);
+  }
+  return (row, storedRow) =>
+    isRecord(row) &&
+    isRecord(storedRow) &&
+    isDeepStrictEqual(row.id, storedRow.id);
 }
 
 /**

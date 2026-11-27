@@ -399,6 +399,8 @@ export async function findPartDrafts(
 /**
  * `live`, the document in one language, as its editors are shown it: with the
  * pending change it holds in that language laid over it, where it holds one.
+ * Asked only where a read shows that change (`resolveDraftOverlay`), in the
+ * language slot that rule names; the caller asks it first.
  */
 export async function withPendingChange(
   repo: VersionsRepository,

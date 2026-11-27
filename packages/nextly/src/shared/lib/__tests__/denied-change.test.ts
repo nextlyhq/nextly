@@ -860,7 +860,7 @@ describe("keepDeniedAtStored keeps what the writer may not read", () => {
     });
   });
 
-  it("judges a read rule that reads its siblings on the container as the update leaves it", async () => {
+  it("keeps what a read rule reading its siblings hid before the update, or hides after it", async () => {
     /** Hides `secret` while `kind` is private. */
     const hiddenWhilePrivate = (
       document: Record<string, unknown>
@@ -876,13 +876,75 @@ describe("keepDeniedAtStored keeps what the writer may not read", () => {
         hiddenWhilePrivate
       )
     ).toEqual({ meta: { kind: "private", secret: "s" } });
+    // Not shown to its writer, so not sent back: the save that shows it deletes nothing.
     expect(
       await saved(
         { meta: { kind: "public" } },
         { meta: { kind: "private", secret: "s" } },
         hiddenWhilePrivate
       )
+    ).toEqual({ meta: { kind: "public", secret: "s" } });
+    // Shown before and after, and left out: a deletion of theirs.
+    expect(
+      await saved(
+        { meta: { kind: "public" } },
+        { meta: { kind: "public", secret: "s" } },
+        hiddenWhilePrivate
+      )
     ).toEqual({ meta: { kind: "public" } });
+  });
+
+  it("keeps each row's own in a list whose rows carry no ids, by position", async () => {
+    expect(
+      await saved(
+        { rows: [{ label: "A2" }, { label: "B2" }] },
+        {
+          rows: [
+            { label: "A", secret: "sa" },
+            { label: "B", secret: "sb" },
+          ],
+        },
+        hidesRowSecrets
+      )
+    ).toEqual({
+      rows: [
+        { label: "A2", secret: "sa" },
+        { label: "B2", secret: "sb" },
+      ],
+    });
+  });
+
+  it("keeps a row's own by an id of its own field where it stays in place, and none where it moved", async () => {
+    const stored = {
+      rows: [
+        { id: 7, label: "A", secret: "sa" },
+        { id: 8, label: "B", secret: "sb" },
+      ],
+    };
+    expect(
+      await saved(
+        {
+          rows: [
+            { id: 7, label: "A2" },
+            { id: 8, label: "B2" },
+          ],
+        },
+        stored,
+        hidesRowSecrets
+      )
+    ).toEqual({
+      rows: [
+        { id: 7, label: "A2", secret: "sa" },
+        { id: 8, label: "B2", secret: "sb" },
+      ],
+    });
+    expect(
+      await saved(
+        { rows: [{ id: 8, label: "B2" }, { label: "new" }] },
+        stored,
+        hidesRowSecrets
+      )
+    ).toEqual({ rows: [{ id: 8, label: "B2" }, { label: "new" }] });
   });
 
   it("shows the read rules the whole document, not the update's keys alone", async () => {

@@ -22,6 +22,7 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  password,
   repeater,
   text,
 } from "../../../config";
@@ -56,6 +57,9 @@ afterEach(async () => {
 const ANN = { id: "ann", email: "ann@x.test", roles: [] };
 /** Hidden from Ann, and from everyone but trusted code. */
 const hidden = { read: () => false };
+/** Shown where the value beside it is "public". */
+const shownWhenPublic = ({ data }: { data?: Record<string, unknown> }) =>
+  data?.visibility === "public";
 
 /** The containers under test: each with a field Ann sees and one she does not. */
 const containers = () => [
@@ -87,6 +91,23 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "secret", access: hidden }),
         ],
       }),
+      // A group its readers are shown by a value beside it, on the instance's own row.
+      defineFieldGroup({
+        slug: "card",
+        fields: [
+          text({ name: "visibility" }),
+          group({
+            name: "info",
+            access: { read: shownWhenPublic },
+            fields: [text({ name: "note" }), text({ name: "extra" })],
+          }),
+          // Something hidden inside a container, so a save of it asks what its writer may read.
+          group({
+            name: "vault",
+            fields: [text({ name: "secret", access: hidden })],
+          }),
+        ],
+      }),
     ],
     collections: [
       defineCollection({ slug: "notices", access: open, fields: containers() }),
@@ -103,6 +124,29 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         versions: { drafts: true },
         access: open,
         fields: containers(),
+      }),
+      // A value hidden by the one beside it.
+      defineCollection({
+        slug: "gated",
+        access: open,
+        fields: [
+          group({
+            name: "card",
+            fields: [
+              text({ name: "visibility" }),
+              text({ name: "secret", access: { read: shownWhenPublic } }),
+            ],
+          }),
+          fieldGroup({ name: "badge", component: "card" }),
+        ],
+      }),
+      // Keeps drafts but can't hold one: a password field takes it out of them.
+      defineCollection({
+        slug: "unheld",
+        status: true,
+        versions: { drafts: true },
+        access: open,
+        fields: [...containers(), password({ name: "pin" })],
       }),
       // Nothing in it is hidden from anyone.
       defineCollection({
@@ -128,10 +172,28 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         access: { read: () => true, update: () => true },
         fields: containers(),
       }),
+      // Keeps drafts but can't hold one, as the collection `unheld`.
+      defineSingle({
+        slug: "footer",
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [...containers(), password({ name: "pin" })],
+      }),
     ],
   } as never);
   expect(t.adapter.dialect).toBe(dialect);
-  const slugs = ["notices", "stories", "drafted", "plain", "banner", "header"];
+  const slugs = [
+    "notices",
+    "stories",
+    "drafted",
+    "plain",
+    "banner",
+    "header",
+    "gated",
+    "unheld",
+    "footer",
+  ];
   await userWhoMay(t, ANN.id, "read", slugs);
   await grantTo(t, ANN.id, "update", slugs);
   return t;
@@ -474,6 +536,122 @@ describe.each(getConfiguredTestDialects())(
           hiding.save({ meta: { note: "n" } }, "en", ANN)
         )
       ).toBeGreaterThan(0);
+    });
+
+    // Broken by judging what Ann may read on the document as her save leaves it.
+    it("keeps a value hidden by the one beside it, which her save shows", async () => {
+      await boot(dialect);
+      const door = await entryDoor("gated", {
+        card: { visibility: "private", secret: "s" },
+      });
+      const read = await door.read(undefined, ANN);
+      expect(read.card).toEqual({ visibility: "private" });
+
+      await door.save({ card: { visibility: "public" } }, undefined, ANN);
+
+      expect((await door.read(undefined)).card).toEqual({
+        visibility: "public",
+        secret: "s",
+      });
+    });
+
+    // Broken by knowing a row only by an id that is a non-empty string.
+    it.each([
+      [
+        "no ids",
+        [
+          { label: "x", secret: "s" },
+          { label: "y", secret: "t" },
+        ],
+      ],
+      [
+        "ids that are numbers",
+        [
+          { id: 7, label: "x", secret: "s" },
+          { id: 8, label: "y", secret: "t" },
+        ],
+      ],
+    ] as const)("keeps it in rows stored with %s", async (_name, stored) => {
+      await boot(dialect);
+      const door = await entryDoor("notices", values("en"));
+      // Rows as an older release, or a field of the author's called `id`, stored them.
+      const [row] = await t!.adapter.select<{ id: string }>("dc_notices", {});
+      await t!.adapter.update(
+        "dc_notices",
+        { sections: JSON.stringify(stored) },
+        { and: [{ column: "id", op: "=", value: row!.id }] }
+      );
+      const read = rowsOf(await door.read(undefined, ANN));
+      expect(JSON.stringify(read)).not.toContain("secret");
+
+      await door.save(
+        { sections: read.map(each => ({ ...each, label: "Ann" })) },
+        undefined,
+        ANN
+      );
+
+      const now = rowsOf(await door.read(undefined));
+      expect(now.map(each => [each.label, each.secret])).toEqual([
+        ["Ann", "s"],
+        ["Ann", "t"],
+      ]);
+    });
+
+    // Broken by laying a pending change no read shows over what Ann saves.
+    it.each([
+      ["an entry", "collection", () => entryDoor("unheld", values("en"))],
+      ["a Single", "single", () => singleDoor("footer", values("en"))],
+    ] as const)(
+      "keeps the live value of %s where a pending change can't be shown",
+      async (_name, scopeKind, openDoor) => {
+        await boot(dialect);
+        const door = await openDoor();
+        const { id } = await door.read(undefined);
+        // A pending change it can't hold, left from before, which no read shows: its shared part,
+        // and the text it holds in the language saved.
+        for (const locale of [null, "en"]) {
+          await new VersionsRepository(t!.adapter).upsertWorkingDraft({
+            ref: {
+              scopeKind,
+              scopeSlug: scopeKind === "single" ? "footer" : "unheld",
+              entryId: String(id),
+            },
+            locale,
+            snapshot: { meta: { note: "stale", secret: "stale" } },
+          });
+        }
+        const read = await door.read(undefined, ANN);
+        expect(read.meta).toEqual({ note: "en" });
+
+        await door.save({ meta: { note: "Ann" } }, undefined, ANN);
+
+        expect((await door.read(undefined)).meta).toEqual({
+          note: "Ann",
+          secret: "meta en",
+        });
+      }
+    );
+
+    // Broken by judging a field group's read rules on its containers alone.
+    it("judges what Ann may read of a field group on the whole instance", async () => {
+      await boot(dialect);
+      const door = await entryDoor("gated", {
+        badge: { visibility: "public", info: { note: "n", extra: "e" } },
+      });
+      const read = await door.read(undefined, ANN);
+      expect(read.badge).toMatchObject({ info: { note: "n", extra: "e" } });
+
+      // Ann clears what she could see, sending the instance's group alone: its value beside
+      // the group, which shows it, stays as stored.
+      await door.save(
+        { badge: { id: (read.badge as Doc).id, info: { note: "Ann" } } },
+        undefined,
+        ANN
+      );
+
+      const info = ((await door.read(undefined)).badge as Doc).info as Doc;
+      expect(info.note).toBe("Ann");
+      expect(info.extra ?? null).toBeNull();
     });
   }
 );

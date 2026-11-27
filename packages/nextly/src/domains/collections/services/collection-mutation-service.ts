@@ -383,6 +383,11 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+  type DraftDocumentConfig,
+} from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import {
   evaluateDraftSplitEligibility,
@@ -4522,7 +4527,10 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * `stored`, the entry in the write's language, with the change its editors
-   * are shown in place of it there, where the collection keeps one.
+   * are shown in place of it there, where the collection keeps one. Shown by
+   * the rule every read of "the draft" uses (`resolveDraftOverlay`), so a
+   * pending change no read shows, one the collection can no longer hold, lends
+   * the save nothing its writer was not shown.
    */
   private async asItsEditorsSeeIt(args: {
     stored: Record<string, unknown>;
@@ -4536,8 +4544,21 @@ export class CollectionMutationService extends BaseService {
     const collection = (await this.collectionService.getCollection(
       args.collectionName,
       args.executor
-    )) as { localized?: boolean; versions?: ResolvedVersionsConfig | null };
+    )) as DraftDocumentConfig;
     if (collection.versions?.drafts?.enabled !== true) return args.stored;
+    const fields = args.fields as unknown as FieldConfig[];
+    const shown = resolveDraftOverlay({
+      ...draftDocumentFacts(collection),
+      entityKind: "collection",
+      fields,
+      componentSchemas: await resolveComponentSchemas(fields, args.executor),
+      includeWorkingDraft: true,
+      // A writer who may update the entry may edit it.
+      callerMayEdit: true,
+      requestLocale: args.params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    if (!shown.overlay) return args.stored;
     return withPendingChange(
       new VersionsRepository(args.tx ?? this.adapter),
       {
@@ -4545,11 +4566,7 @@ export class CollectionMutationService extends BaseService {
         scopeSlug: args.collectionName,
         entryId: args.storedId,
       },
-      workingDraftLocale({
-        documentLocalized: collection.localized === true,
-        requestLocale: args.params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      }),
+      shown.draftLocale,
       args.stored,
       args.fields,
       args.executor

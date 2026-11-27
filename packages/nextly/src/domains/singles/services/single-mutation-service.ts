@@ -892,20 +892,33 @@ export class SingleMutationService extends BaseService {
         documentId,
         mainTableName: singleMeta.tableName,
       })) ?? stored;
-    const seen =
+    const fields = singleMeta.fields ?? [];
+    // By the rule every read of "the draft" uses, so a pending change no read
+    // shows (one held before the Single could no longer hold it) lends the
+    // save nothing its writer was not shown.
+    const overlay =
       singleMeta.versions?.drafts?.enabled === true
-        ? await withPendingChange(
-            new VersionsRepository(this.adapter),
-            { scopeKind: "single", scopeSlug: args.slug, entryId: documentId },
-            workingDraftLocale({
-              documentLocalized: singleMeta.localized === true,
-              requestLocale: args.locale ?? null,
-              defaultLocale: this.localization?.defaultLocale ?? null,
-            }),
-            inLanguage,
-            singleMeta.fields
-          )
-        : inLanguage;
+        ? resolveDraftOverlay({
+            ...draftDocumentFacts(singleMeta),
+            entityKind: "single",
+            fields,
+            componentSchemas: await resolveComponentSchemas(fields),
+            includeWorkingDraft: true,
+            // A writer who may update the Single may edit it.
+            callerMayEdit: true,
+            requestLocale: args.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          })
+        : undefined;
+    const seen = overlay?.overlay
+      ? await withPendingChange(
+          new VersionsRepository(this.adapter),
+          { scopeKind: "single", scopeSlug: args.slug, entryId: documentId },
+          overlay.draftLocale,
+          inLanguage,
+          singleMeta.fields
+        )
+      : inLanguage;
     const shown = detachData(seen);
     stripPasswordFieldValues(
       shown,

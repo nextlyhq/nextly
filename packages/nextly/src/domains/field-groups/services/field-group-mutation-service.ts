@@ -354,6 +354,28 @@ function storedContainers(
   return Object.keys(found).length > 0 ? found : undefined;
 }
 
+/**
+ * Every value `row` holds of `fields`, by field name: a container opened from its JSON column, any
+ * other value as stored. A column holding nothing is left out, so a companion row's untranslated
+ * value does not stand over the instance's own.
+ */
+function storedFieldValues(
+  row: Record<string, unknown> | undefined,
+  fields: readonly FieldConfig[]
+): Record<string, unknown> {
+  const found: Record<string, unknown> = {};
+  if (!row) return found;
+  for (const field of fieldsStoredOnRow(fields)) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string") continue;
+    const column = row[toSnakeCase(name)];
+    const value =
+      containerName(field) === undefined ? column : parsedColumn(column);
+    if (value !== undefined && value !== null) found[name] = value;
+  }
+  return found;
+}
+
 /** A field's name where it is a group or repeater, which holds fields. */
 function containerName(field: FieldConfig): string | undefined {
   const { name, fields } = field as { name?: unknown; fields?: unknown };
@@ -2727,14 +2749,17 @@ export class FieldGroupMutationService extends BaseService {
       mode === "update" && storedId !== undefined
         ? await this.storedContainerValues(slug, storedId, componentFields)
         : undefined;
-    if (!stored) {
+    if (!stored || storedId === undefined) {
       await judge(instance);
       return new Set();
     }
+    const instanceId = storedId;
     const unread = await unreadBy({
       entity: { kind: "fieldGroup", slug },
-      id: storedId,
-      stored: () => Promise.resolve(stored),
+      id: instanceId,
+      // The whole instance, as a read of it is judged: a rule on a container
+      // reads its plain siblings too.
+      stored: () => this.storedInstance(slug, instanceId, componentFields),
       fields: componentFields,
       source: this.nestedFieldsSource(),
       access,
@@ -2774,12 +2799,50 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
+   * Every value a stored instance holds, by field name, as a read of it in the
+   * write's language is judged: its own row, with a translated field's value
+   * from its companion row in that language.
+   */
+  private async storedInstance(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<Record<string, unknown>> {
+    const own = writeScope.getStore()?.stored.get(instanceId);
+    const translated = await this.translatedRow(
+      slug,
+      instanceId,
+      componentFields
+    );
+    return {
+      ...storedFieldValues(own, componentFields),
+      ...storedFieldValues(translated, componentFields),
+    };
+  }
+
+  /**
    * The translated containers a localized field group's stored instance holds
    * on its companion row in the write's language, or nothing where it has
-   * none. Read on the write's own connection; a failed read fails the write
-   * rather than leaving a denied child unrestored.
+   * none.
    */
   private async translatedContainers(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<Record<string, unknown> | undefined> {
+    return storedContainers(
+      await this.translatedRow(slug, instanceId, componentFields),
+      componentFields
+    );
+  }
+
+  /**
+   * A localized field group's stored instance's companion row in the write's
+   * language, where its containers are translated and it has one. Read on the
+   * write's own connection; a failed read fails the write rather than leaving
+   * a denied child unrestored.
+   */
+  private async translatedRow(
     slug: string,
     instanceId: string,
     componentFields: readonly FieldConfig[]
@@ -2826,7 +2889,7 @@ export class FieldGroupMutationService extends BaseService {
         ),
       }),
     });
-    return storedContainers(rows[0], componentFields);
+    return rows[0];
   }
 
   /** Where the fields of a field group placed in an instance are read from. */
