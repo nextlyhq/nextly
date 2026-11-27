@@ -144,6 +144,11 @@ export interface DocumentEvent {
   actorKind: HistoryActorKind;
   actorId: string | null;
   actorName: string | null;
+  /**
+   * The agent that acted for this actor ("Claude Code"), kept after the
+   * person's name is erased. Absent from a server that does not record it.
+   */
+  actorAgentName?: string | null;
   occurredAt: string;
   fromState: string | null;
   toState: string | null;

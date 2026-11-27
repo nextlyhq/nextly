@@ -19,6 +19,7 @@ and which fields changed.
 | Field | Meaning |
 |---|---|
 | Actor | Who made the change |
+| Agent and door | Which agent acted for that person, if one did, and how the call arrived (see below) |
 | Action | What happened — a create, an update, a delete |
 | Target | The collection and document |
 | Changed fields | Which fields differed, computed from the write itself |
@@ -33,6 +34,39 @@ Recording the changed field list — rather than the whole document — keeps th
 without turning it into a second copy of your content. [Version
 history](/docs/versions) is where the full before-and-after lives.
 
+## Agents, doors and approvals
+
+When an AI agent acts for a person, the person stays the actor and the record names the agent
+beside them. The admin's Team activity card and an entry's history read, for example,
+"Claude Code, for Sara Malik, approved on phone".
+
+Each activity and audit record can also hold:
+
+| Field | Meaning |
+|---|---|
+| Agent | The agent's name, such as "Claude Code", and the agent session the call belongs to |
+| Door | How the call arrived: the command line on the person's own machine (`local`), the site's command door (`command`), a chat app (`chat-app`), the REST API with a key marked as an agent's (`rest-key`), or a deploy pipeline (`deploy`) |
+| Credential | The agent's pass, the chat app's connection or the key, by id |
+| Approval | The approval request the call ran under, who approved it, and where: on a phone, in the browser or in the admin |
+| Grant | The standing "always allow" rule that let the call run without asking |
+| Undo | The agent session that an undo put back |
+| Deployment | The host and commit of a deploy pipeline, read as "Deployment (Vercel build, commit 3f2a1c9)", or the machine it ran from |
+
+Work at the command line on the person's own machine reads "Sara Malik, from the command line".
+
+Records hold ids only. A token, a whole API key or a signed value is refused wherever an id
+belongs, and the rest of the record is still written.
+
+The dashboard's activity read takes `agent` (an agent's name) and `session` (an agent session's
+id) to show only that agent's or that session's records:
+
+```
+GET /api/dashboard/activity?agent=Claude%20Code
+GET /api/dashboard/activity?session=<session id>
+```
+
+Records written before these fields existed hold none of them, and read as they always did.
+
 ## Erasing a person without erasing the record
 
 A deletion request under privacy law asks you to remove a person's data. An audit log
@@ -42,6 +76,10 @@ Nextly resolves it by separating the actor from the act: a person's identifying 
 be erased while the entries they produced remain, still counted, still ordered, still
 showing that a change happened and what it touched. You keep the record and lose the
 person, which is what both obligations actually require.
+
+An agent that acted for the person keeps its name on those entries, since it names software
+and not anyone: after the erasure the Team activity card reads "Claude Code, for [deleted
+user · 1a2b3c4d]", and the entry's history "Claude Code, for a deleted user".
 
 ## Signed-in people a plugin defines
 

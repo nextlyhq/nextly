@@ -186,6 +186,77 @@ describe("where a feed row leads", () => {
   });
 });
 
+describe("who a feed row names", () => {
+  const byAgent = {
+    ...row,
+    collection: "posts",
+    agentName: "Claude Code",
+    door: "command",
+    approvedVia: "phone",
+  };
+
+  it("names the agent for the person, with the approval beside them, on the card", () => {
+    // The card reads the widget source's rows through this.
+    expect(activityFromRow(byAgent)?.user.name).toBe(
+      "Claude Code, for Ada, approved on phone"
+    );
+    // The person's own initials and email stay: the person is who acted.
+    expect(activityFromRow(byAgent)?.user).toMatchObject({
+      id: "u1",
+      email: "ada@example.com",
+      deleted: false,
+    });
+  });
+
+  it("names them the same way through the activity endpoint", async () => {
+    answer.activities = [byAgent];
+    const { result } = renderHook(() => useRecentActivity(5), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.activities[0]?.user.name).toBe(
+      "Claude Code, for Ada, approved on phone"
+    );
+  });
+
+  it("says the person worked from the command line", () => {
+    expect(
+      activityFromRow({ ...row, collection: "posts", door: "local" })?.user.name
+    ).toBe("Ada, from the command line");
+  });
+
+  it("names a deployment in place of the system", () => {
+    expect(
+      activityFromRow({
+        ...row,
+        collection: "posts",
+        actorType: "system",
+        userId: "deployment",
+        userName: null,
+        userEmail: null,
+        door: "deploy",
+        deploymentHost: "Vercel build",
+        deploymentCommit: "3f2a1c9d8e7b",
+      })?.user.name
+    ).toBe("Deployment (Vercel build, commit 3f2a1c9)");
+  });
+
+  it("keeps the agent's name once the person is erased", () => {
+    const name = activityFromRow({
+      ...byAgent,
+      userName: null,
+      userEmail: null,
+      identityErasedAt: "2026-03-02T00:00:00Z",
+    })?.user.name;
+    expect(name).toMatch(/^Claude Code, for \[deleted user · u1\]/);
+    expect(name).not.toContain("Ada");
+  });
+
+  it("reads a row from a server that records no agents as before", () => {
+    expect(activityFromRow({ ...row, collection: "posts" })?.user.name).toBe(
+      "Ada"
+    );
+  });
+});
+
 describe("a search of the email delivery log", () => {
   const search = {
     ...row,

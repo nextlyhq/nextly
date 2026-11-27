@@ -11,6 +11,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import type { ActivityEvent } from "nextly/widget-result";
 
+import { attributedActorName } from "@admin/components/features/versions/history-story-attribution";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
 import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
@@ -62,6 +63,14 @@ interface ActivityLogEntry {
   countAtLeast?: boolean;
   /** When this row's identity was erased; null while the actor exists. */
   identityErasedAt: string | null;
+  // Who stood behind the actor: the agent acting for them, how the call
+  // arrived, where an approval was given, or the deployment. Optional and
+  // nullable: an older server sends none, and most rows hold none.
+  agentName?: string | null;
+  door?: string | null;
+  approvedVia?: string | null;
+  deploymentHost?: string | null;
+  deploymentCommit?: string | null;
 }
 
 interface ActivityLogApiResponse {
@@ -119,6 +128,17 @@ function mapEntry(entry: ActivityLogEntry): Activity {
   };
 }
 
+/**
+ * The actor as the card shows them, with who stood behind them in the name:
+ * "Claude Code, for Ana, approved on phone". The person stays the actor, so
+ * their id, initials, email and deletion are theirs; the wording comes from
+ * the one helper the entry history names an actor through.
+ */
+function attributedActor(entry: ActivityLogEntry): Activity["user"] {
+  const actor = describeActivityActor(entry);
+  return { ...actor, name: attributedActorName(actor.name, entry) };
+}
+
 /** What every row carries whatever it is about: who, what they did, when. */
 function shared(
   entry: ActivityLogEntry
@@ -129,7 +149,7 @@ function shared(
     // exists changes the name, the initials and the email it may show, and a
     // second surface deriving those rules independently is how two views of
     // the same deleted actor start disagreeing. One helper owns them.
-    user: describeActivityActor(entry),
+    user: attributedActor(entry),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
     ...(entry.event === undefined ? {} : { event: entry.event }),
@@ -229,6 +249,11 @@ export function activityFromRow(
     subjectKind: subjectKind ?? null,
     metadata: null,
     identityErasedAt: textOrNull(row.identityErasedAt),
+    agentName: textOrNull(row.agentName),
+    door: textOrNull(row.door),
+    approvedVia: textOrNull(row.approvedVia),
+    deploymentHost: textOrNull(row.deploymentHost),
+    deploymentCommit: textOrNull(row.deploymentCommit),
     ...(typeof row.count === "number" ? { count: row.count } : {}),
     ...(typeof row.countAtLeast === "boolean"
       ? { countAtLeast: row.countAtLeast }

@@ -295,6 +295,43 @@ describe("the Team activity card", () => {
     expect(only).not.toHaveTextContent("blog_posts");
   });
 
+  it("names the agent that acted for the person, with the approval beside them", () => {
+    draw([
+      row(1, {
+        agentName: "Claude Code",
+        door: "command",
+        approvedVia: "phone",
+      }),
+      row(2, { door: "local" }),
+      row(3, {
+        actorType: "system",
+        userId: "deployment",
+        userName: null,
+        userEmail: null,
+        door: "deploy",
+        deploymentHost: "Vercel build",
+        deploymentCommit: "3f2a1c9d8e7b",
+      }),
+      row(4),
+    ]);
+    const said = screen
+      .getAllByTestId("entity-row-title")
+      .map(title => title.textContent);
+    expect(said).toEqual([
+      // The clauses about the actor close with a comma, so the verb reads
+      // as theirs.
+      expect.stringContaining(
+        "Claude Code, for Ana, approved on phone, saved Doc 1"
+      ),
+      expect.stringContaining("Ana, from the command line, saved Doc 2"),
+      // A deployment's own commas are inside its name.
+      expect.stringContaining(
+        "Deployment (Vercel build, commit 3f2a1c9) saved Doc 3"
+      ),
+      expect.stringContaining("Ana saved Doc 4"),
+    ]);
+  });
+
   describe("a deletion", () => {
     const titleOf = (items: readonly Row[]) => {
       draw(items, { limit: 10 });

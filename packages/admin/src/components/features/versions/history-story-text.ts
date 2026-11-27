@@ -14,6 +14,7 @@ import type {
 } from "@admin/services/versionApi";
 
 import { REMOVAL_EVENT, SHARED_PART } from "./history-story";
+import { attributedActorName } from "./history-story-attribution";
 import { versionAuthorLabel } from "./version-author";
 
 /** A field as a comparison reports it, as much as its label needs. */
@@ -60,8 +61,20 @@ export function versionActor(
   };
 }
 
-/** An event's actor, as the list names it. */
+/**
+ * An event's actor, as the list names it, with the agent that acted for them
+ * when one did. A person erased since is "a deleted user" beside their agent,
+ * whose name is kept, so the event still says an agent made it.
+ */
 export function eventActor(event: DocumentEvent): StoryActor {
+  if (event.actorAgentName) {
+    return {
+      kind: event.actorKind,
+      name: attributedActorName(event.actorName || "a deleted user", {
+        agentName: event.actorAgentName,
+      }),
+    };
+  }
   if (event.actorName) return { kind: event.actorKind, name: event.actorName };
   return {
     kind: event.actorKind,
