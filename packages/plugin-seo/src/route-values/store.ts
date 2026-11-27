@@ -41,12 +41,40 @@ export function routeValuesKey(page: RouteValuesPage): string {
   return sha256(`${page.type}\u0000${keptId(page)}\u0000${page.language}`);
 }
 
+/**
+ * What a page's route supplied: the values its head is built from, and the
+ * name it gives the page in structured data (`structuredDataHints.name`),
+ * which names the page in every output as it names it there.
+ */
+export interface RouteRecord {
+  values: PageMetadataValues;
+  name?: string;
+}
+
 /** A stored row, read loosely. */
 interface StoredRow {
   id: string;
   key: string;
-  values: PageMetadataValues;
+  record: RouteRecord;
 }
+
+/**
+ * What a route supplied, as kept: its values, and its name beside them in
+ * the same stored value, so a site whose rows hold no name reads none.
+ */
+function recordOf(stored: unknown): RouteRecord {
+  const name = isRecord(stored) ? textOf(stored.name) : undefined;
+  return {
+    values: codeValuesOf(stored),
+    ...(name === undefined ? {} : { name }),
+  };
+}
+
+/** A route record as it is stored: its values, with its name beside them. */
+const storedOf = (record: RouteRecord): Record<string, unknown> => ({
+  ...record.values,
+  ...(record.name === undefined ? {} : { name: record.name }),
+});
 
 function rowOf(entry: unknown): StoredRow | undefined {
   if (!isRecord(entry)) return undefined;
@@ -55,7 +83,7 @@ function rowOf(entry: unknown): StoredRow | undefined {
   return {
     id: String(entry.id),
     key,
-    values: codeValuesOf(entry.codeValues),
+    record: recordOf(entry.codeValues),
   };
 }
 
@@ -97,20 +125,32 @@ async function rowsOf(
  * page without its code level, as they did before it was kept, rather than
  * fail to open.
  */
-export async function readRouteValues(
+export async function readRouteRecords(
   ctx: PluginContext,
   pages: readonly RouteValuesPage[]
-): Promise<Map<string, PageMetadataValues>> {
+): Promise<Map<string, RouteRecord>> {
   if (pages.length === 0) return new Map();
   try {
     const rows = await rowsOf(ctx, pages.map(routeValuesKey));
-    return new Map([...rows].map(([key, row]) => [key, row.values]));
+    return new Map([...rows].map(([key, row]) => [key, row.record]));
   } catch (error) {
     ctx.logger.warn("What pages' routes supply in code could not be read", {
       error,
     });
     return new Map();
   }
+}
+
+/**
+ * The values each of `pages` last had supplied by its route's code, by
+ * {@link routeValuesKey}: its records' values ({@link readRouteRecords}).
+ */
+export async function readRouteValues(
+  ctx: PluginContext,
+  pages: readonly RouteValuesPage[]
+): Promise<Map<string, PageMetadataValues>> {
+  const records = await readRouteRecords(ctx, pages);
+  return new Map([...records].map(([key, record]) => [key, record.values]));
 }
 
 /** What the route of the one page `page` last supplied, or nothing. */
@@ -121,16 +161,16 @@ export async function routeValuesOf(
   return (await readRouteValues(ctx, [page])).get(routeValuesKey(page)) ?? {};
 }
 
-/** Change the row `id` to hold `values`. */
+/** Change the row `id` to hold `record`. */
 async function rewrite(
   ctx: PluginContext,
   id: string,
-  values: PageMetadataValues
+  record: RouteRecord
 ): Promise<void> {
   // Applied over whatever version is current: the row is the plugin's own
   // bookkeeping, never edited beside it.
   await ctx.services.collections.updateEntry(routeValuesSlug(ctx), id, {
-    codeValues: values,
+    codeValues: storedOf(record),
     _overwrite: true,
   });
 }
@@ -145,22 +185,28 @@ async function rewrite(
 export async function recordRouteValues(
   ctx: PluginContext,
   page: RouteValuesPage,
-  values: PageMetadataValues
+  values: PageMetadataValues,
+  name?: string
 ): Promise<void> {
   const key = routeValuesKey(page);
-  const kept = codeValuesOf(values);
-  const json = sortedJson(kept);
+  const kept = recordOf({
+    ...values,
+    ...(name === undefined ? {} : { name }),
+  });
+  const json = sortedJson(storedOf(kept));
   const row = (await rowsOf(ctx, [key])).get(key);
   if (row !== undefined) {
-    if (sortedJson(row.values) !== json) await rewrite(ctx, row.id, kept);
-  } else if (Object.keys(kept).length > 0) {
+    if (sortedJson(storedOf(row.record)) !== json) {
+      await rewrite(ctx, row.id, kept);
+    }
+  } else if (Object.keys(storedOf(kept)).length > 0) {
     try {
       await ctx.services.collections.createEntry(routeValuesSlug(ctx), {
         pageKey: key,
         type: page.type,
         pageId: keptId(page),
         language: page.language,
-        codeValues: kept,
+        codeValues: storedOf(kept),
       });
     } catch (error) {
       // Another request made the row first: change that one.

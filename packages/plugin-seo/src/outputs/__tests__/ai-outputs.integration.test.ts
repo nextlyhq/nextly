@@ -773,6 +773,31 @@ describe.each(getConfiguredTestDialects())(
       expect(copy).toBe("# Thoughts \\& Insights\n\nWhat I think.\n");
     });
 
+    it("names an entry by the name its route gives it in structured data, as structured data does", async () => {
+      const t = await boot(dialect);
+      const id = await post(t, "jasper", "published");
+      const ctx = seoContext;
+      if (ctx === undefined) throw new Error("no SEO plugin context");
+      // What the entry's route gave its head, its name among it.
+      await recordRouteValues(
+        ctx,
+        {
+          type: "posts",
+          id,
+          language: await ctx.publicAddresses.defaultLanguage(),
+        },
+        { title: "Jasper vs Rext AI | Acme" },
+        "Jasper or Rext AI?"
+      );
+      await switches(t, { llmsTxt: true, plainTextCopies: true });
+
+      const list = (await rootFile("llms.txt")).body;
+      expect(list).toContain(`- [Jasper or Rext AI?](${SITE}/blog/jasper.md)`);
+      expect(withoutFrontMatter((await ask("/blog/jasper.md")).body)).toBe(
+        "# Jasper or Rext AI?\n\nAcme makes rockets.\n"
+      );
+    });
+
     it("builds no page's words past where llms-full.txt stops short", async () => {
       const t = await boot(dialect);
       for (const n of [1, 2, 3, 4, 5, 6]) {

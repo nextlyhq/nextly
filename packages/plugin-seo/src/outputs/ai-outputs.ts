@@ -18,7 +18,6 @@ import {
   languageAddressOf,
   NextlyError,
   publicAddressOf,
-  type PageMetadataValues,
   type PluginContext,
   type PublicAddressType,
   type PluginProxyHandler,
@@ -52,8 +51,9 @@ import {
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import {
-  readRouteValues,
+  readRouteRecords,
   routeValuesKey,
+  type RouteRecord,
   type RouteValuesPage,
 } from "../route-values/store";
 
@@ -720,7 +720,7 @@ async function publicHeads(
   readRules: ReadRules
 ): Promise<Map<number, HeadNames>> {
   const heads = new Map<number, HeadNames>();
-  const supplied = await readRouteValues(
+  const supplied = await readRouteRecords(
     ctx,
     pages.filter(page => readable.has(readingKey(page))).map(routePageOf)
   );
@@ -737,8 +737,8 @@ async function publicHeads(
         const page = pages[at];
         const document = page && readable.get(readingKey(page));
         if (page === undefined || document === undefined) continue;
-        const code = supplied.get(routeValuesKey(routePageOf(page))) ?? {};
-        heads.set(at, await publicHead(ctx, page, document, readRules, code));
+        const route = supplied.get(routeValuesKey(routePageOf(page)));
+        heads.set(at, await publicHead(ctx, page, document, readRules, route));
       }
     });
   }
@@ -800,7 +800,7 @@ const typeOfPage = (page: ListedPage): PublicAddressType =>
 /**
  * The title and description a page's head carries, worked out from what
  * the public may read of it, so a value kept from the public is never told,
- * and what its route last supplied (`code`); and the page's own name, as
+ * and what its route last supplied (`route`); and the page's own name, as
  * structured data names it (`pageNameOf`).
  */
 async function publicHead(
@@ -808,8 +808,9 @@ async function publicHead(
   page: ListedPage,
   document: Record<string, unknown>,
   readRules: ReadRules,
-  code: PageMetadataValues = {}
+  route: RouteRecord | undefined
 ): Promise<HeadNames> {
+  const code = route?.values ?? {};
   const answer = await resolveIn(
     ctx,
     typeOfPage(page),
@@ -826,6 +827,8 @@ async function publicHead(
   );
   const title = answer.title?.value;
   const name = pageNameOf({
+    // The name the route gives the page in structured data comes first.
+    ...(route?.name === undefined ? {} : { hint: route.name }),
     home: page.path === "/",
     document,
     fields: sources.fields,
@@ -1050,10 +1053,10 @@ async function copyOf(
   }
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
-  const code = (await readRouteValues(ctx, [routePageOf(page)])).get(
+  const route = (await readRouteRecords(ctx, [routePageOf(page)])).get(
     routeValuesKey(routePageOf(page))
   );
-  const head = await publicHead(ctx, page, document, readRules, code);
+  const head = await publicHead(ctx, page, document, readRules, route);
   // The stored copy without front matter, so a page whose stored fields
   // hold no words can be copied from its rendered page instead.
   const stored = await documentCopyOf(ctx, page, document, head, {
