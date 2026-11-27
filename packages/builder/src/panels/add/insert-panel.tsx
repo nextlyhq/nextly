@@ -91,8 +91,10 @@ import { useInsertOffers } from "./insert-panel-offers";
 import { useSummonAnswer } from "./insert-panel-summon";
 import {
   beginEntryDrag,
+  GRID_COLUMNS,
   InsertAnnouncement,
   movesTheHighlight,
+  PICTURE_COLUMNS,
   PlacementLine,
   tileWhere,
   TilePopover,
@@ -148,29 +150,6 @@ const SEARCH_PLACEHOLDERS: Readonly<Record<PanelTab, string>> = {
 function tabOf(entry: InsertEntry): PanelTab {
   return entry.kind === "pattern" ? "sections" : "blocks";
 }
-
-/**
- * How many tiles sit in a row.
- *
- * A CONSTANT rather than a count derived from the panel's measured width:
- * measuring would need the layout to have happened before anything could read
- * it. Three because the panel opens at 300px and its padding and gaps leave
- * about 85px per tile there — a glyph and a short word. It is also what keeps
- * the grid from REFLOWING while the author drags the panel's edge, which would
- * move a tile out from under the cursor mid-drag.
- *
- * LAYOUT ONLY. No keyboard behaviour derives from it, and that is deliberate
- * rather than an omission: arrow keys stepping by a row would contradict the
- * listbox semantics the palette announces. See this module's documentation.
- */
-const GRID_COLUMNS = 3;
-
-/**
- * How many tiles sit in a row where each draws a picture of its saved
- * section: two, so a picture is wide enough to read at the panel's default
- * width. Fixed per tab for the reason {@link GRID_COLUMNS} is.
- */
-const PICTURE_COLUMNS = 2;
 
 /**
  * The tier a tab offers: components among the blocks, patterns as sections.
