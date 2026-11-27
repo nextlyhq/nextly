@@ -92,8 +92,10 @@ vi.mock("@admin/lib/api/protectedApi", () => {
           const tab = url.searchParams.get("tab");
           const items =
             tab === "for-you" || tab === "alerts" ? server.items[tab] : all();
+          // Copies, as a real answer is: a later change on the server must
+          // not reach an answer the admin already holds.
           return {
-            items,
+            items: items.map(entry => ({ ...entry })),
             meta: { total: items.length, page: 1, limit: 20, hasNext: false },
           };
         }
@@ -648,5 +650,58 @@ describe("the Inbox popover", () => {
       expect.objectContaining({ description: expect.any(String) })
     );
     expect(unreadOnServer()).toBe(1);
+  });
+
+  it("shows what the server holds after a mark whose answer was lost, and never claims nothing changed", async () => {
+    // No link, so opening it keeps the Inbox open to show the row.
+    fill("for-you", [item("n1", "One", { link: null }), item("n2", "Two")]);
+    renderInbox();
+    await button("Inbox, 2 unread");
+    await openInbox();
+    // The server makes the change, then the answer never arrives.
+    const post = vi.mocked(protectedApi.post);
+    const real = post.getMockImplementation()!;
+    post.mockImplementationOnce(async (path, body) => {
+      await real(path, body);
+      throw new Error("the connection closed before the answer");
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /One/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(unreadOnServer()).toBe(1);
+    // The Inbox reads the server again, so the count and the row agree with it.
+    expect(await button("Inbox, 1 unread")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^One/ })
+      ).not.toHaveTextContent("Unread")
+    );
+    const [, options] = vi.mocked(toast.error).mock.calls[0]!;
+    expect(String(options?.description)).not.toMatch(/nothing was changed/i);
+  });
+
+  it("brings an open Inbox's rows up to date with its counts when the admin regains focus", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    renderInbox();
+    await openInbox();
+    expect(await screen.findByRole("link", { name: /One/ })).toHaveTextContent(
+      "Unread"
+    );
+
+    // Read in another browser while this Inbox stays open.
+    server.items["for-you"][0]!.readAt = new Date().toISOString();
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await button("Inbox, 1 unread");
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: /One/ })).not.toHaveTextContent(
+        "Unread"
+      )
+    );
+    // Read now, so its menu offers Mark as unread.
+    expect(
+      screen.getByRole("button", { name: "More actions for One" })
+    ).toBeInTheDocument();
   });
 });

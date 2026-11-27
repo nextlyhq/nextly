@@ -429,6 +429,10 @@ export class NoticesService {
   /**
    * Make this person's named notices unread again ("Mark as unread").
    *
+   * Unread is `readAt` being empty, so this clears the time the notice was
+   * read; reading it again records the new time. There is one read time, not
+   * a first-read time kept beside it.
+   *
    * The same reach as `markRead`: the person's own rows, of a kind they may
    * see now; an id that is someone else's, or already unread, changes nothing.
    *

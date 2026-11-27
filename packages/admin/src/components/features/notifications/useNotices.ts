@@ -32,7 +32,11 @@ const NOTICES_KEY = ["notices"] as const;
 /** How often the count is asked again while the admin is visible. */
 const INBOX_REFRESH_MS = 60_000;
 
-/** A tab's newest items, asked for only while the Inbox is open on it. */
+/**
+ * A tab's newest items, asked for only while the Inbox is open on it, and
+ * asked again on the counts' own schedule (focus regained, every minute), so a
+ * row read or made unread in another browser changes with the counts.
+ */
 export function useNoticeList(
   tab: InboxTab,
   enabled: boolean
@@ -42,6 +46,8 @@ export function useNoticeList(
     queryFn: () => noticesApi.list(tab),
     enabled,
     staleTime: 10_000,
+    refetchInterval: INBOX_REFRESH_MS,
+    refetchOnWindowFocus: "always",
     retry: 1,
   });
 }
@@ -81,14 +87,17 @@ export function tabUnread(
   return tab === "alerts" ? counts.alerts : counts.total - counts.alerts;
 }
 
-/** What a mark that did not reach the server says, so it never fails unseen. */
+/**
+ * What a mark that failed says, so it never fails unseen. It may still have
+ * been saved, when only the server's answer was lost, so it claims neither.
+ */
 function markFailed(): void {
   toast.error("Your Inbox could not be updated", {
-    description: "Nothing was changed. Try again in a moment.",
+    description: "It may not have been saved. Try again in a moment.",
   });
 }
 
-/** Mark items read, then read the counts and lists again. */
+/** Mark items read, then read the counts and lists again, however it ended. */
 export function useMarkNoticesRead(): UseMutationResult<
   { marked: number },
   Error,
@@ -97,13 +106,15 @@ export function useMarkNoticesRead(): UseMutationResult<
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: MarkNoticesRead) => noticesApi.markRead(body),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
     onError: markFailed,
+    // Read again however it ended: a mark whose answer was lost may still
+    // have been saved, and the Inbox shows what the server holds.
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
   });
 }
 
-/** Make items unread again, then read the counts and lists again. */
+/** Make items unread again, then read the counts and lists again, however it ended. */
 export function useMarkNoticesUnread(): UseMutationResult<
   { marked: number },
   Error,
@@ -112,8 +123,9 @@ export function useMarkNoticesUnread(): UseMutationResult<
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: { ids: string[] }) => noticesApi.markUnread(body),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
     onError: markFailed,
+    // Read again however it ended, as marking read does.
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
   });
 }

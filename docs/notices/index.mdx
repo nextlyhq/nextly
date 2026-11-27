@@ -9,12 +9,12 @@ sees anyone else's.
 
 ## What a notice is
 
-|       |                                                                                                                              |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-| For   | Exactly one person, who is the only one who can see it or mark it read                                                       |
-| About | One thing, such as a release, kept as a snapshot so the notice still reads correctly after that thing is deleted             |
-| Once  | A notice is stored once per occurrence: a release that stops twice gives two notices, and the same stop seen twice gives one |
-| Read  | Each notice records when its person first read it                                                                            |
+|       |                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| For   | Exactly one person, who is the only one who can see it or mark it read                                                                                             |
+| About | One thing, such as a release, kept as a snapshot so the notice still reads correctly after that thing is deleted                                                   |
+| Once  | A notice is stored once per occurrence: a release that stops twice gives two notices, and the same stop seen twice gives one                                       |
+| Read  | Each notice records when its person read it (`readAt`), and is unread while that is empty. Marking it unread clears the time; reading it again records the new one |
 
 ## The Inbox
 
