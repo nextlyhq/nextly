@@ -47,9 +47,6 @@ const SYSTEM_NAMES: Readonly<Record<SystemResource, string>> = {
   webhooks: "webhooks",
   "content-releases": "content releases",
   "background-jobs": "background jobs",
-  ai: "AI",
-  "bulk-ai-jobs": "bulk AI jobs",
-  "ai-settings": "AI settings",
 };
 
 const NOTHING_NAMED = "You can't do that.";

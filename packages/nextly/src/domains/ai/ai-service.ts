@@ -19,12 +19,13 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import {
   AI_MODEL_ROLES,
-  AI_OFF_SWITCH,
-  AI_PERMISSIONS,
+  AI_LOCK_OFF,
+  AI_LOCK_VARIABLE,
   type AIAgent,
   type AIModelRole,
   type AINotConfiguredReason,
   type AIPermissionKey,
+  type AIPermissionRef,
   type AIProvider,
   type AIProviderRunRequest,
   type AIProviderStream,
@@ -160,7 +161,7 @@ function notConfiguredError(reason: AINotConfiguredReason): NextlyError {
   return NextlyError.serviceUnavailable({
     publicMessage:
       reason === "turned-off"
-        ? `AI is turned off on this site by ${AI_OFF_SWITCH}. Unset it to turn AI back on; its settings are kept.`
+        ? `AI is turned off where this site is deployed (${AI_LOCK_VARIABLE}=${AI_LOCK_OFF}). Nothing in the admin turns it back on; AI's settings are kept.`
         : "AI isn't set up on this site. Add @nextlyhq/ai to the plugins in your Nextly config.",
     logContext: { reason: `ai-${reason}` },
   });
@@ -241,6 +242,13 @@ interface Admission {
   providerFailed: boolean;
 }
 
+/** A permission as stored and as the rules spell it: `use-ai`. */
+function slugOf(permission: AIPermissionRef | undefined): string | undefined {
+  return permission === undefined
+    ? undefined
+    : `${permission.action}-${permission.resource}`;
+}
+
 /** What the provider is handed for one admitted task run. */
 function providerRequest(
   caller: AICaller,
@@ -293,19 +301,29 @@ export function createAIService(deps: AIServiceDeps): AIService {
     return provider;
   }
 
+  /**
+   * Whether the caller may do `key` with AI, asked of core's one access
+   * decision with the permission the provider says stands for it. Without a
+   * provider there is nothing to hold; trusted code holds everything.
+   */
   async function holds(
     caller: AICaller,
-    key: AIPermissionKey
+    key: AIPermissionKey,
+    provider: AIProvider | undefined
   ): Promise<boolean> {
-    return caller === null || deps.holds(caller, AI_PERMISSIONS[key]);
+    if (caller === null) return true;
+    if (provider === undefined) return false;
+    return deps.holds(caller, provider.permissions[key]);
   }
 
+  /** Refuse a checked caller who lacks `key`, as {@link holds} judges it. */
   async function requirePermission(
     caller: AICaller,
-    key: AIPermissionKey
+    key: AIPermissionKey,
+    provider: AIProvider
   ): Promise<void> {
     if (caller !== null) {
-      await deps.requirePermission(caller, AI_PERMISSIONS[key]);
+      await deps.requirePermission(caller, provider.permissions[key]);
     }
   }
 
@@ -378,7 +396,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
   ): Promise<{ provider: AIProvider; task: AITaskRef }> {
     const provider = admittedProvider(admission);
     const task = findTask(args.task);
-    await requirePermission(caller, "use");
+    await requirePermission(caller, "use", provider);
     const target = args.target ?? null;
     if (caller !== null && target !== null) {
       await deps.authorizeTarget(caller, "read", target);
@@ -566,9 +584,9 @@ export function createAIService(deps: AIServiceDeps): AIService {
           ? await rolesWithModels(provider)
           : noRoles();
       const permissions = {
-        use: await holds(caller, "use"),
-        bulk: await holds(caller, "bulk"),
-        manage: await holds(caller, "manage"),
+        use: await holds(caller, "use", provider),
+        bulk: await holds(caller, "bulk", provider),
+        manage: await holds(caller, "manage", provider),
       };
       // What the caller may do to the target, asked once for every task, and
       // only of a checked caller: trusted code may do anything.
@@ -592,7 +610,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
             ...base,
             available: false,
             reason: "missing-permission",
-            permission: AI_PERMISSIONS.use.slug,
+            permission: slugOf(provider?.permissions.use),
           };
         }
         const lacking = !may.read
@@ -684,7 +702,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
         args.agent,
         async admission => {
           const provider = admittedProvider(admission);
-          await requirePermission(caller, "use");
+          await requirePermission(caller, "use", provider);
           if (!(await admittedRoles(provider, admission)).embedding) {
             throw NextlyError.serviceUnavailable({
               publicMessage:
@@ -720,9 +738,9 @@ export function createAIService(deps: AIServiceDeps): AIService {
     },
 
     async checkBulkJob(caller) {
-      requireProvider();
-      await requirePermission(caller, "use");
-      await requirePermission(caller, "bulk");
+      const provider = requireProvider();
+      await requirePermission(caller, "use", provider);
+      await requirePermission(caller, "bulk", provider);
     },
   };
 }

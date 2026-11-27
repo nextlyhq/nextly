@@ -20,7 +20,6 @@ import {
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
-import { AI_PERMISSIONS } from "../../ai/ai-contract";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
@@ -545,28 +544,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "background-jobs",
     description:
       "Permission to run the background job queue by hand, outside its schedule",
-  },
-  // AI. Three powers, not a CRUD set: using AI on content the person may
-  // edit, running bulk jobs that spend the site's AI budget many items at a
-  // time, and managing the providers, keys, budgets and instructions. Read
-  // from the AI contract so the seeding and every check spell them alike.
-  // Seeded whether or not an AI package is configured, so the grants are in
-  // place the moment one is.
-  {
-    name: "Use AI",
-    ...AI_PERMISSIONS.use,
-    description: "Permission to run AI tasks on content the person may edit",
-  },
-  {
-    name: "Run Bulk AI Jobs",
-    ...AI_PERMISSIONS.bulk,
-    description: "Permission to start, cancel and resume bulk AI jobs",
-  },
-  {
-    name: "Manage AI Settings",
-    ...AI_PERMISSIONS.manage,
-    description:
-      "Permission to manage AI providers, keys, model roles, budgets, instructions, what is never sent, and the usage page",
   },
 ];
 

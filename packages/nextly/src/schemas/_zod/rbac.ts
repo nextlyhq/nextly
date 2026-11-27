@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { AI_PERMISSIONS } from "../../domains/ai/ai-contract";
-
 export const IdSchema = z.string().min(1, "ID is required");
 
 /**
@@ -46,12 +44,6 @@ export const SYSTEM_RESOURCES = [
   // one reads as a system concept and cannot be mistaken for content, which is
   // the whole test.
   "background-jobs",
-  // The three AI permissions' resources: using AI, running bulk AI jobs, and
-  // the AI settings. Each reads as a system concept, not content, so
-  // reserving it costs a site nothing it would name a collection.
-  "ai",
-  "bulk-ai-jobs",
-  "ai-settings",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
@@ -98,30 +90,6 @@ export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
     "This name became a reserved system resource when queued email could be managed. " +
       "An installation that already has a collection or Single with this slug must rename it: " +
       "the read- and manage-email-deliveries permissions are seeded under this name, so a content entity " +
-      "sharing it would have its own permissions treated as system-owned and preset roles " +
-      "would silently lose access to it.",
-  ],
-  [
-    "ai",
-    "This name became a reserved system resource when AI was added. " +
-      "An installation that already has a collection or Single with this slug must rename it: " +
-      "the use-ai permission is seeded under this name, so a content entity " +
-      "sharing it would have its own permissions treated as system-owned and preset roles " +
-      "would silently lose access to it.",
-  ],
-  [
-    "bulk-ai-jobs",
-    "This name became a reserved system resource when AI was added. " +
-      "An installation that already has a collection or Single with this slug must rename it: " +
-      "the run-bulk-ai-jobs permission is seeded under this name, so a content entity " +
-      "sharing it would have its own permissions treated as system-owned and preset roles " +
-      "would silently lose access to it.",
-  ],
-  [
-    "ai-settings",
-    "This name became a reserved system resource when AI was added. " +
-      "An installation that already has a collection or Single with this slug must rename it: " +
-      "the manage-ai-settings permission is seeded under this name, so a content entity " +
       "sharing it would have its own permissions treated as system-owned and preset roles " +
       "would silently lose access to it.",
   ],
@@ -324,22 +292,6 @@ export const PermissionActionSchema = z.enum(
   }
 );
 
-/**
- * @experimental The actions a STORED permission row may carry: every action
- * a permission may be created with, plus the two verbs only the AI
- * permissions use (`use-ai`, `run-bulk-ai-jobs`), read from the AI contract
- * so the seeding and this list spell them alike.
- *
- * For reading what a site holds, never for creating: the create and update
- * routes keep {@link PermissionActionSchema}, and so does the list of
- * actions a workflow step finds already seeded.
- */
-export const StoredPermissionActionSchema = z.enum([
-  ...PermissionActionSchema.options,
-  AI_PERMISSIONS.use.action,
-  AI_PERMISSIONS.bulk.action,
-]);
-
 // Resources: any valid kebab-case slug (system resources + dynamic collection slugs).
 // Actual validation against existing collections happens in the service layer,
 // not in the Zod schema, since collections are dynamic.
@@ -367,8 +319,7 @@ export const PermissionSchema = z.object({
       "Slug must be lowercase alphanumeric with hyphens"
     )
     .toLowerCase(),
-  // As stored, so a row seeded with an AI verb reads like any other.
-  action: StoredPermissionActionSchema,
+  action: PermissionActionSchema,
   resource: PermissionResourceSchema,
   description: z
     .string()
@@ -501,8 +452,7 @@ export const GetUserPermissionsSchema = z.object({
 
 export const CheckUserPermissionSchema = z.object({
   userId: IdSchema,
-  // Any action a stored permission may carry, the AI ones included.
-  action: StoredPermissionActionSchema,
+  action: PermissionActionSchema,
   resource: PermissionResourceSchema,
 });
 

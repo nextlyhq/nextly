@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthContext } from "../../../auth/middleware";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
-  AI_PERMISSIONS,
   type AIProvider,
   type AIProviderRunRequest,
   type AIProviderStream,
@@ -21,7 +20,12 @@ import {
   STREAM_USAGE_WAIT_MS,
   type AIServiceDeps,
 } from "../ai-service";
-import { aiTurnedOff } from "../ai-switch";
+import {
+  aiLockedOff,
+  aiTurnedOff,
+  forgetAILock,
+  recordAILock,
+} from "../ai-switch";
 import { emitAIUsage, onAIUsage } from "../ai-usage-events";
 
 const ALT_TEXT: AITaskRef = {
@@ -44,6 +48,16 @@ const USAGE = {
   estimatedCostMicroUsd: 56,
 };
 
+/**
+ * The permissions the stub provider declares for the three, as the AI
+ * package declares its own. Core names none of them.
+ */
+const DECLARED = {
+  use: { action: "use", resource: "ai" },
+  bulk: { action: "run", resource: "bulk-ai-jobs" },
+  manage: { action: "manage", resource: "ai-settings" },
+};
+
 /** A provider that records what it was asked, with every role mapped. */
 function stubProvider(roles: Partial<Record<string, boolean>> = {}) {
   const settings = {
@@ -53,6 +67,7 @@ function stubProvider(roles: Partial<Record<string, boolean>> = {}) {
   const provider = {
     settings,
     asked,
+    permissions: { ...DECLARED },
     status: vi.fn(() => ({ roles: { ...settings.roles } })),
     run: vi.fn(async (request: AIProviderRunRequest) => {
       asked.push(request);
@@ -79,11 +94,7 @@ function person(id = "user-1"): AuthContext {
   return { userId: id, permissions: [], roles: [], authMethod: "session" };
 }
 
-const ALL_AI = [
-  AI_PERMISSIONS.use.slug,
-  AI_PERMISSIONS.bulk.slug,
-  AI_PERMISSIONS.manage.slug,
-];
+const ALL_AI = ["use-ai", "run-bulk-ai-jobs", "manage-ai-settings"];
 
 interface Setup {
   provider?: AIProvider;
@@ -207,7 +218,7 @@ describe("the AI contract against a stub provider", () => {
   it("reports configured, which roles have a model, the caller's permissions and their tasks", async () => {
     const { service } = setup({
       provider: stubProvider({ writer: false }),
-      held: [AI_PERMISSIONS.use.slug],
+      held: ["use-ai"],
     });
     await expect(service.status(person())).resolves.toEqual({
       configured: true,
@@ -285,7 +296,7 @@ describe("the environment switch", () => {
       })
     );
     expect(error.code).toBe("SERVICE_UNAVAILABLE");
-    expect(error.publicMessage).toContain("NEXTLY_AI_DISABLED");
+    expect(error.publicMessage).toContain("NEXTLY_AI=off");
     expect(provider.run).not.toHaveBeenCalled();
     expect(provider.status).not.toHaveBeenCalled();
   });
@@ -307,15 +318,92 @@ describe("the environment switch", () => {
   it.each([
     [undefined, false],
     ["", false],
+    ["on", false],
     ["0", false],
     ["false", false],
-    [" FALSE ", false],
-    ["1", true],
-    ["true", true],
-    ["yes", true],
-    ["TRUE", true],
-  ])("NEXTLY_AI_DISABLED=%j turns AI off: %s", (value, off) => {
-    expect(aiTurnedOff({ NEXTLY_AI_DISABLED: value })).toBe(off);
+    ["disabled", false],
+    ["off", true],
+    [" OFF ", true],
+    ["Off", true],
+  ])("NEXTLY_AI=%j locks AI off: %s", (value, off) => {
+    expect(aiLockedOff({ environment: { NEXTLY_AI: value } })).toBe(off);
+  });
+
+  it("is locked by the configuration's setting too, which cannot lift the environment's", () => {
+    expect(aiLockedOff({ environment: {}, configuration: true })).toBe(true);
+    expect(
+      aiLockedOff({ environment: { NEXTLY_AI: "off" }, configuration: false })
+    ).toBe(true);
+    expect(aiLockedOff({ environment: {}, configuration: false })).toBe(false);
+  });
+});
+
+describe("the lock, as a boot records it", () => {
+  const saved = process.env.NEXTLY_AI;
+  afterEach(() => {
+    forgetAILock();
+    if (saved === undefined) delete process.env.NEXTLY_AI;
+    else process.env.NEXTLY_AI = saved;
+  });
+
+  it("holds for the whole boot, whatever the environment says later", () => {
+    recordAILock({ environment: { NEXTLY_AI: "off" } });
+    process.env.NEXTLY_AI = "on";
+    expect(aiTurnedOff()).toBe(true);
+  });
+
+  it("is read from the environment before any boot has recorded it", () => {
+    forgetAILock();
+    process.env.NEXTLY_AI = "off";
+    expect(aiTurnedOff()).toBe(true);
+    delete process.env.NEXTLY_AI;
+    expect(aiTurnedOff()).toBe(false);
+  });
+});
+
+describe("with no AI package", () => {
+  it("holds no AI permission, whoever asks", async () => {
+    const { service } = setup();
+    expect((await service.status(person())).permissions).toEqual({
+      use: false,
+      bulk: false,
+      manage: false,
+    });
+  });
+});
+
+describe("the permissions asked", () => {
+  it("are the ones the provider declares", async () => {
+    const provider = stubProvider();
+    const asked: string[] = [];
+    // A provider whose "use" permission core has never heard of.
+    provider.permissions = {
+      ...provider.permissions,
+      use: { action: "employ", resource: "robots" },
+    };
+    const status = await createAIService({
+      provider: () => provider,
+      turnedOff: () => false,
+      tasks: () => [SUMMARY],
+      holds: async (_caller, permission) => {
+        asked.push(`${permission.action}-${permission.resource}`);
+        return false;
+      },
+      requirePermission: async () => undefined,
+      authorizeTarget: async () => undefined,
+      mayTarget: async () => true,
+      emit: async () => undefined,
+      now: () => new Date(),
+    }).status(person());
+    expect(asked).toEqual([
+      "employ-robots",
+      "run-bulk-ai-jobs",
+      "manage-ai-settings",
+    ]);
+    expect(status.tasks[0]).toMatchObject({
+      reason: "missing-permission",
+      permission: "employ-robots",
+    });
   });
 });
 
@@ -437,7 +525,7 @@ describe("bulk jobs", () => {
   it("refuses a caller who may use AI but not run bulk jobs", async () => {
     const { service } = setup({
       provider: stubProvider(),
-      held: [AI_PERMISSIONS.use.slug],
+      held: ["use-ai"],
     });
     const error = await refusal(service.checkBulkJob(person()));
     expect(error.publicMessage).toBe("refused run-bulk-ai-jobs");

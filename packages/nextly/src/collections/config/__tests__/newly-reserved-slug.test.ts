@@ -89,25 +89,6 @@ describe("a slug that became reserved in this version", () => {
       "content-releases",
       "background-jobs",
       "email-deliveries",
-      "ai",
-      "bulk-ai-jobs",
-      "ai-settings",
     ]);
   });
-
-  it.each(["ai", "bulk-ai-jobs", "ai-settings"])(
-    "tells a `%s` owner the rule changed when AI was added",
-    slug => {
-      const result = validateCollectionConfig({
-        slug,
-        fields: [{ name: "title", type: "text" }],
-      } as unknown as CollectionConfig);
-
-      const message = reservedError(result.errors.map(e => e.message));
-      expect(message).toContain(
-        "became a reserved system resource when AI was added"
-      );
-      expect(message).toContain("must rename it");
-    }
-  );
 });

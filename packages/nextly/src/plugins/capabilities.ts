@@ -18,6 +18,7 @@
 import { z } from "zod";
 
 import { AI_CAPABILITY, AI_SERVICE } from "../domains/ai/ai-contract";
+import { forgetAILock, recordAILock } from "../domains/ai/ai-switch";
 import { SCHEMA_VERSION_SHAPE } from "../domains/schema/migrate/plugin/schema-version-shape";
 import {
   PAGE_METADATA_CAPABILITY,
@@ -729,6 +730,9 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
     }
   }
   globalForCapabilityProviders.__nextly_capabilityProviders = provided;
+  // The AI lock is decided by the same boot step, once, so the answer every
+  // AI check reads is this boot's and cannot change under a running site.
+  recordAILock({ environment: process.env });
 }
 
 /**
@@ -739,6 +743,7 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
  */
 export function forgetCapabilityProviders(): void {
   globalForCapabilityProviders.__nextly_capabilityProviders = undefined;
+  forgetAILock();
 }
 
 /**

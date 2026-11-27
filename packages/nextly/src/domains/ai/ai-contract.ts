@@ -30,11 +30,14 @@ export const AI_CAPABILITY = "ai";
 export const AI_SERVICE = "ai";
 
 /**
- * The environment switch that turns every AI run off without touching the
- * provider's settings: for an incident, or for a staging copy that must not
- * spend or send anything.
+ * The deploy-time lock that turns AI off for a site: `NEXTLY_AI=off` in the
+ * environment where it is deployed. Nothing in the admin undoes it, and the
+ * AI settings are kept as they were.
  */
-export const AI_OFF_SWITCH = "NEXTLY_AI_DISABLED";
+export const AI_LOCK_VARIABLE = "NEXTLY_AI";
+
+/** The {@link AI_LOCK_VARIABLE} value that turns AI off. */
+export const AI_LOCK_OFF = "off";
 
 /**
  * @experimental The kinds of model a task may ask for. A task names a role,
@@ -52,25 +55,21 @@ export const AI_MODEL_ROLES = [
 export type AIModelRole = (typeof AI_MODEL_ROLES)[number];
 
 /**
- * @experimental The three permissions that govern AI, as stored: an action on
- * a resource, the slug spelling the two. One place, so the seeding, the
- * presets, the checks and the admin read the same names.
+ * @experimental The three things a person may be allowed to do with AI: use
+ * it on content they may edit, run bulk jobs, and manage its settings. Core
+ * names no permission for them: the package that provides AI registers its
+ * own and says which one stands for each ({@link AIProvider.permissions}).
  */
-export const AI_PERMISSIONS = {
-  /** Run AI tasks on content the person may edit. */
-  use: { action: "use", resource: "ai", slug: "use-ai" },
-  /** Start, cancel and resume bulk AI jobs. */
-  bulk: { action: "run", resource: "bulk-ai-jobs", slug: "run-bulk-ai-jobs" },
-  /** Providers, keys, model roles, budgets, instructions and usage. */
-  manage: {
-    action: "manage",
-    resource: "ai-settings",
-    slug: "manage-ai-settings",
-  },
-} as const;
+export const AI_PERMISSION_KEYS = ["use", "bulk", "manage"] as const;
 
-/** @experimental Which of the three permissions, by its key. */
-export type AIPermissionKey = keyof typeof AI_PERMISSIONS;
+/** @experimental One of {@link AI_PERMISSION_KEYS}. */
+export type AIPermissionKey = (typeof AI_PERMISSION_KEYS)[number];
+
+/** @experimental A permission as stored: an action on a resource. */
+export interface AIPermissionRef {
+  action: string;
+  resource: string;
+}
 
 /**
  * @experimental A task as core knows it: enough to say who may run it and
@@ -175,6 +174,12 @@ export interface AIProviderEmbedOutcome {
  * {@link AI_SERVICE}. Core has checked the caller before calling any of it.
  */
 export interface AIProvider {
+  /**
+   * Which of the provider's own permissions stands for each of the three, so
+   * core asks its one access decision with them. The provider registers
+   * them; core never names one.
+   */
+  readonly permissions: Readonly<Record<AIPermissionKey, AIPermissionRef>>;
   status(): AIProviderStatus | Promise<AIProviderStatus>;
   run(request: AIProviderRunRequest): Promise<AIProviderRunOutcome>;
   stream(request: AIProviderRunRequest): Promise<AIProviderStream>;

@@ -5,6 +5,8 @@
  *
  * @module domains/ai/ai-wiring
  */
+import { z } from "zod";
+
 import {
   type AuthContext,
   authorizeCaller,
@@ -27,12 +29,30 @@ import { aiTurnedOff } from "./ai-switch";
 import { recordedAITasks } from "./ai-task-list";
 import { emitAIUsage } from "./ai-usage-events";
 
-/** True for a value shaped like a provider: the four calls core makes. */
+/** A permission the provider declares, as stored: a kebab-case action and resource. */
+const permissionRef = z.object({
+  action: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  resource: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+});
+
+/** The provider's declared permissions: one for each of the three. */
+const declaredPermissions = z.object({
+  use: permissionRef,
+  bulk: permissionRef,
+  manage: permissionRef,
+});
+
+/**
+ * True for a value shaped like a provider: the four calls core makes, and a
+ * permission for each of the three things a person may do with AI.
+ */
 function isAIProvider(value: unknown): value is AIProvider {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return ["status", "run", "stream", "embed"].every(
-    name => typeof candidate[name] === "function"
+  return (
+    ["status", "run", "stream", "embed"].every(
+      name => typeof candidate[name] === "function"
+    ) && declaredPermissions.safeParse(candidate.permissions).success
   );
 }
 
@@ -52,7 +72,7 @@ function startedProvider(): AIProvider | undefined {
     throw NextlyError.internal({
       logContext: {
         plugin,
-        reason: `"${AI_SERVICE}" service lacks status, run, stream or embed`,
+        reason: `"${AI_SERVICE}" service lacks status, run, stream, embed or its permissions`,
       },
     });
   }
