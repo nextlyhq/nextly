@@ -94,7 +94,26 @@ function context(): PluginContext {
   };
   const ctx = {
     self: { collections: {} },
-    config: {},
+    // Each Single here declares its own `title`, so its pages are named by it.
+    config: {
+      singles: [
+        "about",
+        "blog",
+        "code",
+        "contact",
+        "doc",
+        "faq",
+        "guide",
+        "help",
+        "home",
+        "pricing",
+        "product",
+        "story",
+      ].map(slug => ({
+        slug,
+        fields: [{ name: "title", type: "text" }],
+      })),
+    },
     publicAddresses: { defaultLanguage: async () => "en" },
     services: {
       ownCollections: { listEntries },
@@ -298,6 +317,31 @@ describe("the page's own name", () => {
     expect(nodeOf(brandInTitle.nodes, "WebPage")?.name).toBe(
       "Why we built Rext AI"
     );
+  });
+
+  it("is a Single's route title over the title Nextly keeps for it, or the field the site chooses", async () => {
+    // "blog-index" declares no title: its `title` is its label, Nextly's.
+    const input = (document: Record<string, unknown>): PageMetadataInput => ({
+      ...singleInput("blog-index", { id: "s9", ...document }),
+      code: { title: "Thoughts & Insights | Rext AI" },
+    });
+    const fromRoute = await buildStructuredData(
+      context(),
+      input({ title: "Blog Page" }),
+      answerAt("/blog", "Thoughts & Insights | Rext AI"),
+      rules()
+    );
+    const chosen = await buildStructuredData(
+      context(),
+      input({ title: "Blog Page", hero: { heading: "Field notes" } }),
+      answerAt("/blog", "Thoughts & Insights | Rext AI"),
+      rules({ titleFields: { "single:blog-index": "hero.heading" } })
+    );
+
+    expect(nodeOf(fromRoute.nodes, "WebPage")?.name).toBe(
+      "Thoughts & Insights"
+    );
+    expect(nodeOf(chosen.nodes, "WebPage")?.name).toBe("Field notes");
   });
 
   it("is a page built in code's own name, or else its route's title over one made from its address", async () => {

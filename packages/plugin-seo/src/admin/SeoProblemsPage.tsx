@@ -69,6 +69,17 @@ type Shown = ProblemSeverity | "all";
 /** A link to where a problem is fixed, or the button that copies a note. */
 function FixButton({ problem }: { problem: Problem }): JSX.Element {
   const href = fixHref(problem);
+  // An address on the site itself, such as a page's copy, opens beside the
+  // admin rather than in it.
+  if (problem.fix.place === "site" && href !== undefined) {
+    return (
+      <Button asChild variant="link" size="sm">
+        <a href={href} target="_blank" rel="noreferrer">
+          {problem.action}
+        </a>
+      </Button>
+    );
+  }
   if (href !== undefined) {
     return (
       <Button asChild variant="link" size="sm">

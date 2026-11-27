@@ -328,6 +328,21 @@ export { isLocaleSelector } from "nextly";
 export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
 
 /**
+ * Whether a Single's own name is its author's.
+ * @experimental `ownIdentityFieldNames` answers which of `title` and `slug`
+ *   a Single's author declared as fields of their own, read from its
+ *   definition as `ctx.config.singles` holds it. The others are Nextly's,
+ *   kept beside every Single and filled from its label, so a plugin naming
+ *   the Single's page (the SEO plugin's `{Title}`, its llms.txt titles) does
+ *   not name it "Blog Page" where the page has a name of its own. A Single
+ *   made in the Schema Builder has no definition there, and its identity is
+ *   always Nextly's. The same rule the admin's editor and the save path
+ *   read. Intended to be stable; `plugin-seo` exercises it, and it graduates
+ *   per D55 once that ships in a release.
+ */
+export { ownIdentityFieldNames } from "nextly/config";
+
+/**
  * @experimental A field's key as the admin's screens word it, where the
  * field carries no label of its own: `humanizeFieldName("membersOnly")` is
  * "Members Only". Core's one humaniser, from a module that imports nothing,

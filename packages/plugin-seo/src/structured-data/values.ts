@@ -19,6 +19,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { addressOf, imageOf } from "../resolver/page-levels";
+import { valueAtPath } from "../value-path";
 
 import { DETAIL_GUESSES, type StructuredDataDetail } from "./catalog";
 import type { DetailSource } from "./rules";
@@ -118,19 +119,6 @@ export function numberOf(value: unknown): number | undefined {
 /** A field's name as matched: letters and digits only, any case. */
 const nameKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-/** The value at a dotted path, such as `event.venue`, in the document. */
-function atPath(
-  document: Readonly<Record<string, unknown>>,
-  path: string
-): unknown {
-  let value: unknown = document;
-  for (const part of path.split(".")) {
-    if (!isRecord(value)) return undefined;
-    value = value[part];
-  }
-  return value;
-}
-
 /** Whether a value holds anything: not absent, blank or an empty list. */
 function present(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -157,7 +145,7 @@ export function readDetail(
 ): DetailRead {
   if (isRecord(source)) return { value: source.value };
   if (typeof source === "string") {
-    return { value: atPath(document, source), field: source };
+    return { value: valueAtPath(document, source), field: source };
   }
   const fields = new Map(
     Object.keys(document).map(name => [nameKey(name), name])
@@ -208,7 +196,7 @@ export async function declaredFields(
         {}
       );
       return isRecord(collection)
-        ? atPath(collection, "schemaDefinition.fields")
+        ? valueAtPath(collection, "schemaDefinition.fields")
         : undefined;
     }
     const singles = await ctx.services.singles.list({

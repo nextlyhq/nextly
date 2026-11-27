@@ -10,10 +10,14 @@
  * structure (headings, lists, links, quotes, code, tables, images) and the
  * emphasis and code a reader sees inside a line; a picture field shows its
  * image with its alt text. Every address is made whole against the page's,
- * so a link read away from the site still leads somewhere. What a visitor
- * never reads stays out: the page's SEO, its address, its bookkeeping,
- * fields holding a choice, a number or a date, and other documents read with
- * it, such as an author.
+ * so a link read away from the site still leads somewhere. Text holding
+ * markup is written as the words the markup shows, and a picture drawn in
+ * SVG, which holds no words, is left out. A fact that means nothing without
+ * its name is written beside it: a choice as `Label: option`, a ticked box
+ * as `Label: yes`, an address as `Label: <url>`, another page as
+ * `Label: its title`, and a list of chips as a list under its label. What a
+ * visitor never reads stays out: the page's SEO, its address, its
+ * bookkeeping, code, JSON, numbers and dates.
  *
  * A copy is served beside its page, at the page's address with `.md` added
  * (`index.md` where the address ends in a slash, and `index.html.md` there
@@ -21,6 +25,7 @@
  *
  * @module outputs/plain-copy
  */
+import { humanizeFieldName } from "@nextlyhq/plugin-sdk";
 import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
 
 import { isRecord, textOf } from "../plain-values";
@@ -30,7 +35,29 @@ export interface CopyField {
   name?: string;
   type: string;
   fields?: readonly CopyField[];
+  /** What the admin calls the field, written beside a fact it holds. */
+  label?: unknown;
+  /** A choice field's options, whose labels a copy writes for its values. */
+  options?: unknown;
+  /** The type a relationship field names pages of. */
+  relationTo?: unknown;
 }
+
+/** Another page a relationship field names: its title, and its address where it has one. */
+export interface RelatedPage {
+  name: string;
+  url?: string;
+}
+
+/**
+ * The pages relationship fields name, by {@link relatedKey}, as the caller
+ * read them: a copy is written synchronously, and a page's address is not.
+ */
+export type RelatedPages = ReadonlyMap<string, RelatedPage>;
+
+/** The key a page a relationship field names is found under in {@link RelatedPages}. */
+export const relatedKey = (collection: string, id: unknown): string =>
+  `${collection}\u0000${String(id)}`;
 
 /** What the copy's front matter says of the page. */
 export interface CopyAbout {
@@ -60,6 +87,13 @@ export interface CopySource {
   base?: string;
   /** What the front matter says of the page; none without it. */
   about?: CopyAbout;
+  /**
+   * Top-level fields left out besides the address, SEO and bookkeeping,
+   * such as a Single's own name, which Nextly keeps and the page never shows.
+   */
+  skip?: readonly string[];
+  /** The pages its relationship fields name, as the caller read them. */
+  related?: RelatedPages;
 }
 
 /** Fields that are the page's address, SEO or bookkeeping, never its words. */
@@ -72,6 +106,9 @@ const NOT_CONTENT: ReadonlySet<string> = new Set([
   "updatedAt",
   "_status",
 ]);
+
+/** `text` on one line, its line breaks and runs of space made one space. */
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 /** How deep into nested content a copy goes before it stops. */
 const MAX_DEPTH = 32;
@@ -404,6 +441,10 @@ interface Collecting {
   depth: number;
   /** The top-level field the heading was taken from, said once already. */
   titleField?: string;
+  /** Top-level fields left out besides those never content. */
+  skip?: ReadonlySet<string>;
+  /** The pages relationship fields name. */
+  related?: RelatedPages;
 }
 
 /** Collects the words of a value held by one kind of field. */
@@ -413,14 +454,236 @@ type FieldReader = (field: CopyField, value: unknown, at: Collecting) => void;
 const deeper = (at: Collecting): Collecting => ({
   parts: at.parts,
   depth: at.depth + 1,
+  ...(at.related === undefined ? {} : { related: at.related }),
 });
 
-/** Text or long text: its words, as written; each of them, where it holds several. */
-const wordsField: FieldReader = (_field, value, at) => {
+/** Elements whose content is never words a reader sees: a drawing, code, styles. */
+const WORDLESS_ELEMENTS =
+  /<(svg|script|style|template)\b[^>]*\/>|<(svg|script|style|template)\b[\s\S]*?<\/\2\s*>/gi;
+
+/** A tag, or a comment: what markup is made of. */
+const MARKUP_TAG =
+  /<!--[\s\S]*?-->|<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/g;
+
+/** Where markup breaks a line: a line break, or the end of a block. */
+const MARKUP_BREAK =
+  /<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|blockquote|section|article)\s*>/gi;
+
+/** The characters markup spells as entities, which a reader sees as the character. */
+const ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+/** `text` with its character entities read back as the characters they spell. */
+function decodedEntities(text: string): string {
+  return text.replace(
+    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
+    (whole, name: string) => {
+      if (name.startsWith("#")) {
+        const code =
+          name[1]?.toLowerCase() === "x"
+            ? Number.parseInt(name.slice(2), 16)
+            : Number.parseInt(name.slice(1), 10);
+        return Number.isInteger(code) && code > 0 && code <= 0x10ffff
+          ? String.fromCodePoint(code)
+          : whole;
+      }
+      return ENTITIES[name.toLowerCase()] ?? whole;
+    }
+  );
+}
+
+/**
+ * The words `text` shows: where it holds markup (a site that renders a
+ * field as HTML, to colour a word say), its tags taken out and the words
+ * inside them kept, a drawing or a script inside it dropped whole, and its
+ * entities read as the characters they spell. Text with no markup is
+ * returned as it is, so `a < b` and `&` typed as words stay words.
+ */
+function wordsOfMarkup(text: string): string {
+  if (!/<[a-zA-Z!/]/.test(text)) return text;
+  const stripped = text
+    .replace(WORDLESS_ELEMENTS, "")
+    .replace(MARKUP_BREAK, "\n")
+    .replace(MARKUP_TAG, "");
+  return decodedEntities(stripped);
+}
+
+/** Whether a value is a drawing in SVG, which holds no words. */
+const isSvgMarkup = (text: string): boolean => /^\s*<svg[\s>]/i.test(text);
+
+/**
+ * The title `text` names a page by: the words its markup shows, on one
+ * line; none where nothing is left. The one reading of a title for the
+ * outputs that name pages, so each names a page alike.
+ */
+export function plainTitle(text: string | undefined): string | undefined {
+  if (text === undefined || isSvgMarkup(text)) return undefined;
+  const words = wordsOfMarkup(text).replace(/\s+/g, " ").trim();
+  return words === "" ? undefined : words;
+}
+
+/** What a field is called beside a fact it holds: its label, else its name in words. */
+function labelOf(field: CopyField): string {
+  const label = textOf(field.label);
+  if (label !== undefined) return escapeText(oneLine(label));
+  return escapeText(humanizeFieldName(field.name ?? ""));
+}
+
+/**
+ * An address written as text, a web or mail address, which a copy writes
+ * as a link a reader can follow.
+ */
+const ADDRESS =
+  /^(?:https?:\/\/\S+|mailto:\S+|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/i;
+
+/**
+ * Text or long text: its words, as written; each of them, where it holds
+ * several. Markup in it is written as the words it shows, a value that is
+ * a drawing in SVG is left out, and one that is only an address is written
+ * beside the field's label, as `Label: <url>`.
+ */
+const wordsField: FieldReader = (field, value, at) => {
   for (const each of Array.isArray(value) ? value : [value]) {
-    const words = textOf(each);
-    if (words !== undefined) at.parts.push(escapeText(words.trim()));
+    const raw = textOf(each);
+    if (raw === undefined || isSvgMarkup(raw)) continue;
+    const words = wordsOfMarkup(raw).trim();
+    if (words === "") continue;
+    at.parts.push(
+      ADDRESS.test(words) ? `${labelOf(field)}: <${words}>` : escapeText(words)
+    );
   }
+};
+
+/** The values a field holds: each of a list, or the one value. */
+const valuesOf = (value: unknown): unknown[] =>
+  Array.isArray(value)
+    ? value
+    : value === undefined || value === null
+      ? []
+      : [value];
+
+/** The label a choice field shows for the stored `value`, else the value itself. */
+function optionLabel(field: CopyField, value: unknown): string | undefined {
+  const stored = typeof value === "number" ? String(value) : textOf(value);
+  if (stored === undefined) return undefined;
+  const options = Array.isArray(field.options) ? field.options : [];
+  for (const option of options) {
+    if (option === stored) return stored;
+    if (!isRecord(option)) continue;
+    const optionValue =
+      typeof option.value === "number" ? String(option.value) : option.value;
+    if (optionValue === stored) return textOf(option.label) ?? stored;
+  }
+  return stored;
+}
+
+/** A select or radio: `Label: option label`, the label the page shows, never the stored value. */
+const choiceField: FieldReader = (field, value, at) => {
+  const labels = valuesOf(value)
+    .map(each => optionLabel(field, each))
+    .filter((label): label is string => label !== undefined);
+  if (labels.length === 0) return;
+  at.parts.push(
+    `${labelOf(field)}: ${labels.map(label => escapeText(oneLine(label))).join(", ")}`
+  );
+};
+
+/** A checkbox: `Label: yes` where it is ticked; nothing where it is not. */
+const checkboxField: FieldReader = (field, value, at) => {
+  if (value === true) at.parts.push(`${labelOf(field)}: yes`);
+};
+
+/** Chips: a list of their words under the field's label. */
+const chipsField: FieldReader = (field, value, at) => {
+  const chips = valuesOf(value)
+    .map(each => textOf(each))
+    .filter((chip): chip is string => chip !== undefined)
+    .map(chip => `- ${escapeText(oneLine(wordsOfMarkup(chip)))}`);
+  if (chips.length > 0)
+    at.parts.push(`${labelOf(field)}:\n\n${chips.join("\n")}`);
+};
+
+/**
+ * The page a relationship value names, as read with this page: its type and
+ * stored document, or none where only its id was read.
+ */
+function relatedDocument(
+  field: CopyField,
+  value: unknown
+): { collection: string; document: Record<string, unknown> } | undefined {
+  // A field naming several types stores which one beside the page.
+  if (isRecord(value) && typeof value.relationTo === "string") {
+    return isRecord(value.value)
+      ? { collection: value.relationTo, document: value.value }
+      : undefined;
+  }
+  const collection = textOf(field.relationTo);
+  return collection !== undefined && isRecord(value)
+    ? { collection, document: value }
+    : undefined;
+}
+
+/**
+ * Every page a relationship field of `document` names that was read with
+ * it, at any depth of its groups and repeaters, in the order the copy
+ * writes them: what a caller reads the names and addresses of before the
+ * copy is written ({@link RelatedPages}).
+ */
+export function relatedDocumentsIn(
+  fields: readonly CopyField[],
+  document: Readonly<Record<string, unknown>>,
+  depth = 0
+): { collection: string; document: Record<string, unknown> }[] {
+  if (depth > MAX_DEPTH) return [];
+  return fields.flatMap(field => {
+    if (field.name === undefined || NOT_CONTENT.has(field.name)) return [];
+    const value = document[field.name];
+    if (field.type === "relationship") {
+      return valuesOf(value).flatMap(
+        each => relatedDocument(field, each) ?? []
+      );
+    }
+    const rows =
+      field.type === "group"
+        ? [value]
+        : field.type === "repeater"
+          ? valuesOf(value)
+          : [];
+    return rows.flatMap(row =>
+      isRecord(row)
+        ? relatedDocumentsIn(field.fields ?? [], row, depth + 1)
+        : []
+    );
+  });
+}
+
+/**
+ * A relationship: `Label: title` for each page it names that was read with
+ * this one, linked where that page has an address. A page named by its id
+ * alone, one the public may not read, shows nothing.
+ */
+const relationshipField: FieldReader = (field, value, at) => {
+  const named = valuesOf(value).flatMap(each => {
+    const found = relatedDocument(field, each);
+    if (found === undefined) return [];
+    const page = at.related?.get(
+      relatedKey(found.collection, found.document.id)
+    );
+    if (page === undefined) return [];
+    const name = escapeText(oneLine(page.name));
+    return [
+      page.url === undefined
+        ? name
+        : `[${name}](${linkAddress(wholeAddress(page.url))})`,
+    ];
+  });
+  if (named.length > 0) at.parts.push(`${labelOf(field)}: ${named.join(", ")}`);
 };
 
 /** Rich text: its blocks, as Markdown. */
@@ -450,9 +713,18 @@ const fieldGroupField: FieldReader = (_field, value, at) => {
 };
 
 /**
+ * Whether an image is drawn in SVG, told by its type or else its file's
+ * name: a drawing, such as a logo or an icon, holds no words a copy can say.
+ */
+function isSvgImage(src: string, type: string | undefined): boolean {
+  if (type !== undefined) return type.toLowerCase().startsWith("image/svg");
+  return /\.svgz?(?:[?#]|$)/i.test(src);
+}
+
+/**
  * A picture field: each image it holds, with its alt text, as the page
- * shows it. A file that is not an image, or a media item not read with the
- * page (an id alone), shows nothing.
+ * shows it. A file that is not an image, a drawing in SVG, or a media item
+ * not read with the page (an id alone), shows nothing.
  */
 const uploadField: FieldReader = (_field, value, at) => {
   for (const each of Array.isArray(value) ? value : [value]) {
@@ -461,7 +733,8 @@ const uploadField: FieldReader = (_field, value, at) => {
     const type = textOf(each.mimeType);
     if (
       src === undefined ||
-      (type !== undefined && !type.startsWith("image/"))
+      (type !== undefined && !type.startsWith("image/")) ||
+      isSvgImage(src, type)
     ) {
       continue;
     }
@@ -472,18 +745,24 @@ const uploadField: FieldReader = (_field, value, at) => {
 
 /**
  * The field types whose value a visitor reads, and how each is read. Every
- * other type (a choice, a number, a date, a relation, a file that is not a
- * picture, JSON) shows no words of its own and is left out.
+ * other type (a number, a date, code, JSON, a file that is not a picture)
+ * shows no words of its own and is left out.
  */
 const FIELD_READERS: Readonly<Record<string, FieldReader>> = {
   text: wordsField,
   textarea: wordsField,
+  email: wordsField,
   richText: richTextField,
   upload: uploadField,
   group: groupField,
   repeater: repeaterField,
   fieldGroup: fieldGroupField,
   component: fieldGroupField,
+  select: choiceField,
+  radio: choiceField,
+  checkbox: checkboxField,
+  chips: chipsField,
+  relationship: relationshipField,
 };
 
 /** The words of each of `fields` in `document`, in their order. */
@@ -498,6 +777,7 @@ function fieldsWords(
     if (read === undefined || field.name === undefined) continue;
     if (NOT_CONTENT.has(field.name)) continue;
     if (at.depth === 0 && field.name === at.titleField) continue;
+    if (at.depth === 0 && at.skip?.has(field.name) === true) continue;
     read(field, document[field.name], at);
   }
 }
@@ -520,9 +800,6 @@ function richTextWords(value: unknown, parts: string[], depth: number): void {
     }
   }
 }
-
-/** `text` on one line, its line breaks and runs of space made one space. */
-const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 /** One line of front matter, its text quoted as YAML reads JSON's strings. */
 const quoted = (value: string): string => JSON.stringify(oneLine(value));
@@ -551,12 +828,15 @@ function frontMatterOf(about: CopyAbout): string {
 /** A page's plain-text copy, as Markdown, ending in a newline. */
 export function plainCopyOf(source: CopySource): string {
   const parts: string[] = [];
-  const title = textOf(source.title)?.trim();
+  const title = plainTitle(source.title);
   if (title !== undefined) parts.push(`# ${escapeText(title)}`);
   writtenFor(source.base ?? source.about?.url, () => {
     if (source.fields === undefined) {
       for (const [name, value] of Object.entries(source.document)) {
-        if (!NOT_CONTENT.has(name)) richTextWords(value, parts, 0);
+        if (NOT_CONTENT.has(name) || source.skip?.includes(name) === true) {
+          continue;
+        }
+        richTextWords(value, parts, 0);
       }
     } else {
       fieldsWords(source.fields, source.document, {
@@ -565,6 +845,8 @@ export function plainCopyOf(source: CopySource): string {
         ...(source.titleField === undefined
           ? {}
           : { titleField: source.titleField }),
+        ...(source.skip === undefined ? {} : { skip: new Set(source.skip) }),
+        ...(source.related === undefined ? {} : { related: source.related }),
       });
     }
   });
@@ -572,6 +854,24 @@ export function plainCopyOf(source: CopySource): string {
   return source.about === undefined
     ? body
     : withFrontMatter(source.about, body);
+}
+
+/**
+ * The copy of a page whose words could not be read: its name as the
+ * heading, and its description, what its head tells a reader it holds, so
+ * no copy and no page of llms-full.txt is a bare heading. Ends in a newline.
+ */
+export function descriptionCopyOf(
+  title: string | undefined,
+  description: string | undefined
+): string {
+  const heading = plainTitle(title);
+  const words =
+    description === undefined ? undefined : textOf(oneLine(description));
+  return `${[
+    ...(heading === undefined ? [] : [`# ${escapeText(heading)}`]),
+    ...(words === undefined ? [] : [escapeText(words)]),
+  ].join("\n\n")}\n`;
 }
 
 /** `body`, a copy's Markdown, begun by front matter naming its page. */

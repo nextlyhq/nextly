@@ -29,6 +29,7 @@ export type ProblemKind =
   | "productionAddress"
   | "proxyNotWired"
   | "connection"
+  | "plainCopy"
   | "noAddress"
   | "redirectChain"
   | "datesToday"
@@ -72,6 +73,12 @@ export const KIND_TEXT: Readonly<
     title: "Optional connection not working",
     explain:
       "No page is affected, but the service isn't getting what the site sends it.",
+    siteWide: true,
+  },
+  plainCopy: {
+    title: "Plain-text copy could not be made",
+    explain:
+      "The page didn't render for its copy, so AI tools reading llms-full.txt or its .md copy are given its description instead of its words. Try again once the page loads.",
     siteWide: true,
   },
   redirectChain: {
@@ -211,6 +218,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   noTitle: "error",
   canonical: "error",
   connection: "warning",
+  plainCopy: "warning",
   redirectChain: "warning",
   datesToday: "warning",
   languageCode: "warning",
@@ -276,6 +284,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "noAddress",
   "proxyNotWired",
   "connection",
+  "plainCopy",
   "redirectChain",
   "datesToday",
   "languageCode",
@@ -389,13 +398,16 @@ export type SettingsTab =
  * - `page`: the page's own editor, on its SEO tab or its content, at a field;
  * - `settings`: the SEO settings, on a tab;
  * - `media`: the media library, where an image's alt text is kept;
- * - `developer`: code, so the list hands over a note to copy for a developer.
+ * - `developer`: code, so the list hands over a note to copy for a developer;
+ * - `site`: an address on the site itself, opened in a new tab, where asking
+ *   again is the fix (a plain-text copy made again).
  */
 export type ProblemFix =
   | { place: "page"; tab: "seo" | "content"; field?: string }
   | { place: "settings"; tab: SettingsTab }
   | { place: "media" }
-  | { place: "developer"; note: string };
+  | { place: "developer"; note: string }
+  | { place: "site"; href: string };
 
 /** One problem, as the list draws it. */
 export interface Problem {
@@ -438,6 +450,8 @@ export function fixHref(problem: Problem): string | undefined {
       return "/admin/media";
     case "developer":
       return undefined;
+    case "site":
+      return fix.href;
   }
 }
 

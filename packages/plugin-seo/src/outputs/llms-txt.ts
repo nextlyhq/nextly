@@ -9,7 +9,7 @@
  *
  * @module outputs/llms-txt
  */
-import { linkAddress } from "./plain-copy";
+import { linkAddress, plainTitle } from "./plain-copy";
 
 /** One page, as llms.txt lists it. */
 export interface LlmsEntry {
@@ -85,7 +85,8 @@ export function llmsTxt(file: LlmsFile): string {
   for (const entry of file.entries) {
     const description =
       entry.description === undefined ? "" : oneLine(entry.description);
-    const link = `- [${linkText(entry.title)}](${linkAddress(entry.url)})`;
+    const title = plainTitle(entry.title) ?? entry.url;
+    const link = `- [${linkText(title)}](${linkAddress(entry.url)})`;
     const list = sections.get(entry.section) ?? [];
     list.push(description === "" ? link : `${link}: ${description}`);
     sections.set(entry.section, list);
@@ -116,9 +117,10 @@ export interface LlmsFullFile {
   /**
    * The pages, in order. Any iterable, read one page at a time and no
    * further than the file can hold, so a lazy one builds no page past
-   * where the file stops short.
+   * where the file stops short; an async one, where a page's words are
+   * read as it is built.
    */
-  pages: Iterable<LlmsFullPage>;
+  pages: Iterable<LlmsFullPage> | AsyncIterable<LlmsFullPage>;
   /** Where llms.txt is, named where the file stops short of every page. */
   listUrl?: string;
   /** The most the file may hold, in bytes: 5 MB unless given. */
@@ -134,12 +136,14 @@ const PAGE_BREAK = "\n\n---\n\n";
 const bytes = (text: string): number => new TextEncoder().encode(text).length;
 
 /**
- * One page's part of llms-full.txt: its title as a heading, its address,
- * then its copy without the heading the copy begins with.
+ * One page's part of llms-full.txt: its title as a heading, with no
+ * markup, its address, then its copy without the heading the copy begins
+ * with.
  */
 function fullPage(page: LlmsFullPage): string {
   const body = (page.body ?? "").replace(/^# [^\n]*\n+/, "").trim();
-  const head = `# ${oneLine(page.title)}\n\nSource: ${page.url}`;
+  const title = plainTitle(page.title) ?? page.url;
+  const head = `# ${oneLine(title)}\n\nSource: ${page.url}`;
   return body === "" ? head : `${head}\n\n${body}`;
 }
 
@@ -149,7 +153,7 @@ function fullPage(page: LlmsFullPage): string {
  * that would take the file past its size is left out, with every page after
  * it, and the file ends saying where the rest are listed.
  */
-export function llmsFullTxt(file: LlmsFullFile): string {
+export async function llmsFullTxt(file: LlmsFullFile): Promise<string> {
   const max = file.maxBytes ?? FULL_MAX_BYTES;
   const ending =
     file.listUrl === undefined
@@ -159,7 +163,7 @@ export function llmsFullTxt(file: LlmsFullFile): string {
   // Room is kept for the ending, so a file cut short can still say so.
   const room = max - bytes(`${PAGE_BREAK}${ending}\n`);
   let size = bytes(blocks[0] ?? "");
-  for (const page of file.pages) {
+  for await (const page of file.pages) {
     const block = fullPage(page);
     const grown = size + bytes(`${PAGE_BREAK}${block}`);
     if (grown > room) {

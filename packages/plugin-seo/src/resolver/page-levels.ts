@@ -30,6 +30,7 @@ import { canMakeShareImages } from "../social/share-image";
 import { typedPageLevel } from "../tab/typed";
 
 import type { Levels } from "./order";
+import { ownTitleIn, titleSourcesOf, type TitleFields } from "./own-name";
 
 /**
  * The site's own SEO rules: its name and defaults, the patterns a type uses
@@ -68,6 +69,11 @@ export interface SiteRules {
   llmsFullTxt?: boolean;
   /** What the site tells AI tools in its own words, at the top of llms.txt. */
   llmsIntro?: string;
+  /**
+   * The field each content type's pages are named from, where the site's
+   * options choose one (`titleFields`): what `{Title}` stands for.
+   */
+  titleFields?: TitleFields;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
   /** The site's own robots.txt lines, where stored and passing their rule. */
@@ -83,10 +89,10 @@ export const NO_RULES: SiteRules = { patterns: {} };
 
 /**
  * The fields a page's content offers a value from, in the order they are
- * looked at, until the SEO settings map a type's fields.
+ * looked at, until the SEO settings map a type's fields. Its title is read
+ * from the fields its type names its pages by (`titleSourcesOf`).
  */
 const CONTENT_FIELDS = {
-  title: ["title", "name", "heading"],
   description: ["excerpt", "summary", "description", "subtitle"],
   image: ["coverImage", "cover", "featuredImage", "heroImage", "image"],
 } as const;
@@ -292,14 +298,23 @@ function textFrom(
   return found && { value: String(found.value), field: found.field };
 }
 
-/** What the page's own content offers. */
+/**
+ * What the page's own content offers. Its title is its own name, from the
+ * fields its type names its pages by; a Single's `title` that is Nextly's,
+ * filled from its label, only where none of them holds one.
+ */
 async function contentLevel(
   ctx: PluginContext,
   document: Readonly<Record<string, unknown>>,
-  needImage: boolean
+  needImage: boolean,
+  { key, titleFields }: { key: string; titleFields?: TitleFields }
 ): Promise<Levels["content"]> {
+  const sources = titleSourcesOf(ctx, key, titleFields);
   return defined({
-    title: textFrom(document, CONTENT_FIELDS.title),
+    title: ownTitleIn(document, [
+      ...sources.fields,
+      ...(sources.labelTitle ? ["title"] : []),
+    ]),
     description: textFrom(document, CONTENT_FIELDS.description),
     image: needImage ? await contentImage(ctx, document) : undefined,
   });
@@ -465,7 +480,12 @@ export async function levelsOf(
     hasImage(page.image) ||
     hasImage(input.code.image) ||
     hasImage(input.derived.image);
-  const content = await contentLevel(ctx, document, !higherImage);
+  const content = await contentLevel(ctx, document, !higherImage, {
+    key,
+    ...(rules.titleFields === undefined
+      ? {}
+      : { titleFields: rules.titleFields }),
+  });
   // Only the image that wins is checked against the page's own pictures:
   // the page's own share image is one already, read with its stored size.
   // The site's own origins, which a full address must be on to name one of

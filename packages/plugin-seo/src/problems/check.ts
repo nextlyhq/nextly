@@ -39,6 +39,7 @@ import {
   type HeldLanguages,
 } from "../languages/versions";
 import { originOf } from "../origin";
+import { copyFailures } from "../outputs/copy-failures";
 import {
   listPages,
   type ListedPage,
@@ -85,6 +86,7 @@ import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
   connectionProblems,
+  plainCopyProblems,
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
@@ -1182,6 +1184,8 @@ async function siteProblems(
     // Redirects are site-wide SEO's: their count is told no one else.
     ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
+    // Pages whose copy failed are public pages the sitemap lists, by address.
+    ...plainCopyProblems(await copyFailures(ctx)),
   ];
 }
 

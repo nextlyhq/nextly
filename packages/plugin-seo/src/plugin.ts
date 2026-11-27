@@ -25,6 +25,7 @@ import {
   type PluginRoute,
   type Secret,
 } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
 
 import {
   CATCH_UP_TRANSACTION_BOUNDS,
@@ -128,6 +129,7 @@ import {
 } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
+import type { TitleFields } from "./resolver/own-name";
 import type { SiteRules } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { withSeoOff } from "./resolver/seo-off";
@@ -374,6 +376,27 @@ export interface SeoPluginOptions {
    */
   pagePermissions?: boolean;
   /**
+   * @experimental The field each content type's pages are named from, by
+   * the type's key: a collection's slug, or `"single:<slug>"`. A field's
+   * name, or a dotted path into a group (`"hero.heading"`). The page's own
+   * name is what `{Title}` stands for in a title pattern, what structured
+   * data names the page, and what llms.txt, llms-full.txt and plain-text
+   * copies list it as.
+   *
+   * Without it a type's pages are named from the field its admin names its
+   * entries by (`admin.useAsTitle`), else `title`, `name` or `heading`. A
+   * Single's `title` that Nextly keeps for it, filled from its label ("Blog
+   * Page"), names its page only where nothing else does: the title its
+   * route gives it comes first.
+   *
+   * ```ts
+   * seoPlugin({
+   *   titleFields: { "single:blog": "hero.heading", posts: "headline" },
+   * });
+   * ```
+   */
+  titleFields?: Record<string, string>;
+  /**
    * @experimental Where `next build` writes, relative to the app's
    * directory: `.next` unless the app's `next.config` sets `distDir`. The
    * pages the site's routes render from their own code are read from it,
@@ -541,7 +564,8 @@ function subsetOf(
  */
 function rulesReader(
   options: { hiddenTypes?: readonly string[] },
-  types: Pick<SeoTypes, "keys">
+  types: Pick<SeoTypes, "keys">,
+  titleFields: TitleFields | undefined
 ): ReadRules {
   const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
   return async (ctx, locale) => {
@@ -557,8 +581,37 @@ function rulesReader(
       ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
         ? { hiddenTypes }
         : {}),
+      ...(titleFields === undefined ? {} : { titleFields }),
     };
   };
+}
+
+/** A field's name, or a dotted path into groups: what `titleFields` names. */
+const TITLE_FIELD_PATH = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+
+/** The `titleFields` option, checked when the site starts. */
+const titleFieldsSchema = z.record(
+  z.string().trim().min(1),
+  z.string().regex(TITLE_FIELD_PATH, "a field's name, or a dotted path")
+);
+
+/**
+ * The `titleFields` option, checked, so a misspelled path fails when the
+ * site starts rather than leaving a type named as before in silence.
+ */
+function titleFieldsOf(
+  option: SeoPluginOptions["titleFields"]
+): TitleFields | undefined {
+  if (option === undefined) return undefined;
+  const parsed = titleFieldsSchema.safeParse(option);
+  if (!parsed.success) {
+    throw new Error(
+      `seoPlugin: titleFields must map each content type's key to a field's name or a dotted path (${parsed.error.issues
+        .map(issue => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ")})`
+    );
+  }
+  return parsed.data;
 }
 
 /** What the sitemap lists, for the problem checks; nothing where it is off. */
@@ -833,7 +886,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const types = seoTypesOf(options);
 
   const sitemapSubset = subsetOf(options.sitemap, types);
-  const readRules = rulesReader(options, types);
+  // The field each type's pages are named from, where the site chooses one.
+  const titleFields = titleFieldsOf(options.titleFields);
+  const readRules = rulesReader(options, types, titleFields);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();
@@ -886,7 +941,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
     options.baseUrl,
-    options.structuredData
+    options.structuredData,
+    titleFields
   );
   const readSocialCardRules = socialCardFromSettings(
     socialCardRulesFromOptions(options.baseUrl, options.socialCard)
