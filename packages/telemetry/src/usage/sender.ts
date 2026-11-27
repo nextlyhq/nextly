@@ -8,11 +8,14 @@ import { TRANSPORT_PROPERTIES } from "./catalog.js";
 // `project` mark ("production" or "test"), so a project can change without a
 // release and nothing in the bundle can write to it directly.
 //
-// It never slows or breaks a run. `flush()` takes at most `timeoutMs` (2
-// seconds unless a caller passes less) however the network behaves, never
-// rejects, and writes nothing to standard output or standard error. It is
-// only ever created once a guard has said usage data is on, so a run that is
-// off never reaches `fetch` at all.
+// It never slows or breaks a run. All of one sender's flushes together wait
+// at most `timeoutMs` (2 seconds unless a caller passes less), however often
+// a run flushes and however the network behaves: each flush may only use what
+// earlier flushes left, and once that is spent a flush neither waits nor
+// sends, since the address has already failed to answer in time. A flush
+// never rejects and writes nothing to standard output or standard error. A
+// sender is only ever created once a guard has said usage data is on, so a
+// run that is off never reaches `fetch` at all.
 
 /** One event as PostHog's batch endpoint reads it. */
 export interface WireEvent {
@@ -25,7 +28,7 @@ export interface WireEvent {
 /** Which PostHog project the ingest address forwards to. */
 export type UsageProject = "production" | "test";
 
-/** The longest a flush may take, in milliseconds. */
+/** The longest all of a run's flushes may wait together, in milliseconds. */
 const SEND_BUDGET_MS = 2000;
 
 export interface SenderOptions {
@@ -58,22 +61,25 @@ function batchBody(project: UsageProject, events: WireEvent[]): string {
 
 export function createSender(opts: SenderOptions): Sender {
   const endpoint = opts.endpoint ?? TELEMETRY_ENDPOINT;
-  const budget = Math.min(opts.timeoutMs ?? SEND_BUDGET_MS, SEND_BUDGET_MS);
   const doFetch = opts.fetch ?? globalThis.fetch;
   let queue: WireEvent[] = [];
+  // What is left of the run's waiting time, spent by each flush in turn.
+  let remaining = Math.min(opts.timeoutMs ?? SEND_BUDGET_MS, SEND_BUDGET_MS);
 
   async function flush(): Promise<void> {
     if (queue.length === 0) return;
     const events = queue;
     queue = [];
+    if (remaining <= 0) return;
 
+    const started = performance.now();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outOfTime = new Promise<void>(resolve => {
       timer = setTimeout(() => {
         controller.abort();
         resolve();
-      }, budget);
+      }, remaining);
       // A pending send must never keep the process alive on its own.
       timer.unref?.();
     });
@@ -99,6 +105,7 @@ export function createSender(opts: SenderOptions): Sender {
       await Promise.race([request, outOfTime]);
     } finally {
       clearTimeout(timer);
+      remaining -= performance.now() - started;
     }
   }
 

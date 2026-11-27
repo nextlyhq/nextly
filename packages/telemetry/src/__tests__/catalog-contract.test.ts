@@ -138,7 +138,7 @@ beforeAll(() => {
 
 describe("the catalog's compile-time contract", () => {
   it("finds the directives it is meant to check", () => {
-    expect(expected.length).toBe(12);
+    expect(expected.length).toBe(13);
   });
 
   it("compiles as written, every directive used", () => {

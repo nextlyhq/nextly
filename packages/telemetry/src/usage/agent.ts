@@ -88,8 +88,11 @@ export interface DetectAgentOptions {
 
 /** Decides `run_by` and the agent's name for this run from its environment. */
 export function detectAgent(env: Env, opts: DetectAgentOptions = {}): RunBy {
-  const named = env.AI_AGENT?.trim();
-  if (named) return { run_by: "agent", agent: knownAgent(named) };
+  // Read like any marker: `0`, `false` or nothing means no agent.
+  const named = env.AI_AGENT;
+  if (named !== undefined && isMarkerSet(named)) {
+    return { run_by: "agent", agent: knownAgent(named) };
+  }
 
   for (const marker of AGENT_MARKERS) {
     if (marker.matches(env)) return { run_by: "agent", agent: marker.agent };

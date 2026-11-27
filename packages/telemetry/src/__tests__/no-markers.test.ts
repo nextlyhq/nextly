@@ -18,12 +18,19 @@ import { MACHINE_ID, SITE_ID, recordingFetch } from "./usage-helpers.js";
 // address and error carries a marker string, every builder and every event is
 // run against them, and the marker must appear in no request.
 //
-// One value is out of this test's reach on purpose: the CLI command's name.
-// The catalog allows any short lowercase command name ("schema pull"),
-// because the CLI's operation list, not this package, reduces a generated or
-// third-party command to its generic shape ("content create", "plugin
-// command"). A lowercase marker passed straight in as a command would be sent;
-// the CLI's own tests hold that reduction.
+// Two values are out of this test's reach on purpose, both on `command_run`:
+//
+// - the command's name. The catalog allows any short lowercase command name
+//   ("schema pull"), because the CLI's operation list, not this package,
+//   reduces a generated or third-party command to its generic shape
+//   ("content create", "plugin command"). A lowercase marker passed straight
+//   in as a command would be sent.
+// - its error code. The catalog allows any code shaped like Nextly's stable
+//   ones ("VALIDATION_ERROR"), because the list of those codes belongs to the
+//   CLI, which must send a third-party plugin's own code as a generic one. An
+//   upper-case marker shaped like a code would be sent.
+//
+// The CLI's own tests hold both reductions.
 
 const MARKER = "ZqMrk";
 const has = (text: string) => text.toLowerCase().includes(MARKER.toLowerCase());

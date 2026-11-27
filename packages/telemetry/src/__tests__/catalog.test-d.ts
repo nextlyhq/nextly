@@ -30,7 +30,13 @@ function holds<Fact extends true>(): Fact | undefined {
 }
 
 declare const tools: ToolsUsageSession;
+declare const cli: ToolsUsageSession<"cli">;
 declare const site: SiteUsageSession;
+
+// The CLI's own session takes its event, and not the installer's.
+cli.capture("command_run", { command: "migrate", alias: false, role: "none" });
+// @ts-expect-error TS2345
+cli.capture("install_started", { from: "home", terminal: true });
 
 // Which source may send which event.
 holds<

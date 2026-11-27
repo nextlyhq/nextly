@@ -60,8 +60,10 @@ interface CommonOptions {
   now?: () => Date;
 }
 
-export interface ToolsUsageOptions extends CommonOptions {
-  source: ToolsSource;
+export interface ToolsUsageOptions<S extends ToolsSource = ToolsSource>
+  extends CommonOptions {
+  /** Which tool runs: its session accepts only that tool's events. */
+  source: S;
   /** The machine's random id (`readMachineUsage().anonymousId`). */
   distinctId: string;
   /** The machine's own setting (`readMachineUsage().enabled`). */
@@ -79,10 +81,8 @@ export interface SiteUsageOptions extends CommonOptions {
   switchOn: boolean;
 }
 
-export type ToolsUsageSession = UsageSession<
-  UsageEventFor<ToolsSource>,
-  ToolsDecision
->;
+export type ToolsUsageSession<S extends ToolsSource = ToolsSource> =
+  UsageSession<UsageEventFor<S>, ToolsDecision>;
 export type SiteUsageSession = UsageSession<
   UsageEventFor<"site">,
   SiteDecision
@@ -142,6 +142,8 @@ function liveSession<E extends string, D>(
     decision,
     capture(event, properties) {
       if (!validId) return;
+      // Plain JavaScript can pass anything; only an object has properties.
+      if (typeof properties !== "object" || properties === null) return;
       const own = Object.fromEntries(
         Object.entries(properties).filter(([key]) => !baseKeys.has(key))
       );
@@ -164,7 +166,9 @@ function liveSession<E extends string, D>(
 }
 
 /** Opens the installer's or the CLI's usage data for one run. */
-export function openToolsUsage(opts: ToolsUsageOptions): ToolsUsageSession {
+export function openToolsUsage<S extends ToolsSource>(
+  opts: ToolsUsageOptions<S>
+): ToolsUsageSession<S> {
   const env = opts.env ?? process.env;
   const decision = resolveToolsUsage({
     env,

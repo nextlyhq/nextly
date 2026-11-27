@@ -81,6 +81,15 @@ describe("agent detection", () => {
     });
   });
 
+  it.each(["0", "false", ""])(
+    "does not count AI_AGENT=%j as an agent",
+    value => {
+      expect(detectAgent({ AI_AGENT: value }, noFiles)).toEqual({
+        run_by: "person",
+      });
+    }
+  );
+
   it("does not count a marker set to 0 or false", () => {
     expect(
       detectAgent({ CLAUDECODE: "0", GEMINI_CLI: "false" }, noFiles)

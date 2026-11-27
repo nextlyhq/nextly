@@ -162,16 +162,24 @@ describe("what the sender sends", () => {
 });
 
 describe("the end of a run", () => {
-  let stdout: ReturnType<typeof vi.spyOn>;
-  let stderr: ReturnType<typeof vi.spyOn>;
+  // Every way a message could reach the terminal. Inside a test worker the
+  // console does not write through the two streams, so it is watched too.
+  let outputs: ReturnType<typeof vi.spyOn>[] = [];
   beforeEach(() => {
-    stdout = vi.spyOn(process.stdout, "write");
-    stderr = vi.spyOn(process.stderr, "write");
+    outputs = [
+      vi.spyOn(process.stdout, "write"),
+      vi.spyOn(process.stderr, "write"),
+      ...(["log", "info", "warn", "error", "debug"] as const).map(method =>
+        vi.spyOn(console, method)
+      ),
+    ];
   });
   afterEach(() => {
-    stdout.mockRestore();
-    stderr.mockRestore();
+    for (const spy of outputs) spy.mockRestore();
   });
+  const expectSilence = () => {
+    for (const spy of outputs) expect(spy).not.toHaveBeenCalled();
+  };
 
   it("returns within 2 seconds from a receiver that never answers, saying nothing", async () => {
     const receiver: Receiver = await startReceiver({ silent: true });
@@ -185,12 +193,32 @@ describe("the end of a run", () => {
       expect(receiver.bodies).toHaveLength(1);
       expect(elapsed).toBeGreaterThanOrEqual(1900);
       expect(elapsed).toBeLessThan(2400);
-      expect(stdout).not.toHaveBeenCalled();
-      expect(stderr).not.toHaveBeenCalled();
+      expectSilence();
     } finally {
       await receiver.close();
     }
   }, 10_000);
+
+  it("waits at most 2 seconds across all of a run's flushes", async () => {
+    const receiver: Receiver = await startReceiver({ silent: true });
+    try {
+      const session = cliSession({ endpoint: receiver.endpoint });
+      const started = performance.now();
+      session.capture("command_run", run);
+      await session.flush();
+      session.capture("command_run", { ...run, exit_code: 0 });
+      await session.flush();
+      session.capture("command_run", { ...run, exit_code: 1 });
+      await session.flush();
+      expect(performance.now() - started).toBeLessThan(2400);
+      // The first request reached the address; once it had used the run's
+      // time without an answer, the later flushes sent nothing.
+      expect(receiver.bodies).toHaveLength(1);
+      expectSilence();
+    } finally {
+      await receiver.close();
+    }
+  }, 15_000);
 
   it("caps a longer budget at 2 seconds", async () => {
     const receiver: Receiver = await startReceiver({ silent: true });
@@ -219,8 +247,7 @@ describe("the end of a run", () => {
     const started = performance.now();
     await expect(session.flush()).resolves.toBeUndefined();
     expect(performance.now() - started).toBeLessThan(2000);
-    expect(stdout).not.toHaveBeenCalled();
-    expect(stderr).not.toHaveBeenCalled();
+    expectSilence();
   });
 
   it("returns, saying nothing, with no network at all", async () => {
@@ -231,8 +258,7 @@ describe("the end of a run", () => {
     session.capture("command_run", run);
     await expect(session.flush()).resolves.toBeUndefined();
     expect(offline).toHaveBeenCalledTimes(1);
-    expect(stdout).not.toHaveBeenCalled();
-    expect(stderr).not.toHaveBeenCalled();
+    expectSilence();
   });
 
   it("returns, saying nothing, when fetch throws before it starts", async () => {
@@ -243,6 +269,6 @@ describe("the end of a run", () => {
     session.capture("command_run", run);
     await expect(session.flush()).resolves.toBeUndefined();
     expect(broken).toHaveBeenCalledTimes(1);
-    expect(stderr).not.toHaveBeenCalled();
+    expectSilence();
   });
 });
