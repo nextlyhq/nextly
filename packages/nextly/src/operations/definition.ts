@@ -30,7 +30,14 @@ import type {
  *   it back.
  * - `critical`: undo can't put it back, or it reaches other people.
  */
-export const RISK_LEVELS = ["read", "draft", "change", "critical"] as const;
+// Frozen as well as `as const`, which only the type checker reads: the order
+// is what `levelRank` compares, so nothing may reorder or extend it.
+export const RISK_LEVELS = Object.freeze([
+  "read",
+  "draft",
+  "change",
+  "critical",
+] as const);
 
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
@@ -45,7 +52,12 @@ export type RiskLevel = (typeof RISK_LEVELS)[number];
  * - `site`: the site's command door, reached from the CLI with a saved site.
  * - `chat`: the door chat apps use, for operations also marked `chatExposed`.
  */
-export const DOORS = ["local", "deploy", "site", "chat"] as const;
+export const DOORS = Object.freeze([
+  "local",
+  "deploy",
+  "site",
+  "chat",
+] as const);
 
 export type Door = (typeof DOORS)[number];
 
@@ -115,14 +127,15 @@ export interface OperationExitCode {
  * 2 is shared too (refused until something named is fixed), and an operation
  * may still declare what its own 2 means (a check that found differences).
  */
-export const SHARED_EXIT_CODES: Readonly<Record<number, string>> = {
-  0: "done, or nothing to do",
-  1: "could not run",
-  2: "out of step, or refused until something named is fixed or allowed",
-  4: "stopped by the start-up probe",
-  5: "waiting for a person's approval",
-  130: "interrupted",
-};
+export const SHARED_EXIT_CODES: Readonly<Record<number, string>> =
+  Object.freeze({
+    0: "done, or nothing to do",
+    1: "could not run",
+    2: "out of step, or refused until something named is fixed or allowed",
+    4: "stopped by the start-up probe",
+    5: "waiting for a person's approval",
+    130: "interrupted",
+  });
 
 /** Where an operation comes from: core, or a plugin by its package name. */
 export type OperationSource =

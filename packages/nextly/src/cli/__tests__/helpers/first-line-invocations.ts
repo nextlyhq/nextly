@@ -145,7 +145,8 @@ export function commandPathOf(
 
 /**
  * Why `line`, the first a run of the command `path` names printed, is not the
- * one it declared, or `undefined` when it is: the `Database: …` line, its
+ * one it declared, or `undefined` when it is: the database line (`● local · …`,
+ * `● LIVE database …` or `● no database …`), its
  * start line, or, for a command that prints its own at once, any line but
  * Commander's refusal (the arguments never reached it). A parent that only
  * holds subcommands (`hasAction`) answers with its help.
@@ -166,9 +167,9 @@ export function wrongFirstLine(
   const first = declaredFirstLine(command);
   if (first === undefined) return "declares no first line";
   if (first.kind === "database") {
-    return line.startsWith("Database: ")
+    return /^● (local · |LIVE database |no database )/.test(line)
       ? undefined
-      : `expected the Database line, got: ${line}`;
+      : `expected the database line, got: ${line}`;
   }
   if (first.kind === "start") {
     return line === first.line

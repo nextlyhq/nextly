@@ -8,6 +8,8 @@
 
 import type { ActivityEvent } from "nextly/widget-result";
 
+import type { ActorAttributionWords } from "@admin/components/features/versions/history-story-attribution";
+
 /**
  * Activity type indicating the nature of the action
  */
@@ -60,6 +62,14 @@ export interface Activity {
   id: string;
   /** User who performed the action */
   user: ActivityUser;
+  /**
+   * Who stood behind `user`: an agent acting for them, how the call arrived,
+   * where an approval was given, or a deployment. `user` stays the actor
+   * itself, so a reader that shows only people is unchanged; the Team
+   * activity card says the whole phrase from both. Absent when nothing stood
+   * behind them, and from an older server.
+   */
+  attribution?: ActorAttributionWords;
   /** Type of action performed */
   type: ActivityType;
   /** Human-readable action description (e.g., "created", "updated") */

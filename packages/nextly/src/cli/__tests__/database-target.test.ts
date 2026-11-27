@@ -8,11 +8,14 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { databaseTarget } from "../database-target";
+import { databaseTarget, type DatabaseTarget } from "../database-target";
 
 const FOLDER = resolve("/srv/app");
+/** The dialect and the target, as one phrase, for the checks below. */
+const phrase = ({ dialect, target }: DatabaseTarget) =>
+  dialect === undefined ? target : `${dialect} ${target}`;
 const target = (url: string | undefined, dialect?: string) =>
-  databaseTarget({ url, dialect, folder: FOLDER });
+  phrase(databaseTarget({ url, dialect, folder: FOLDER }));
 
 /** Every secret the URLs below carry: none may reach a line. */
 const SECRETS = ["appuser", "s3cr3t", "hunter2", "sslmode", "password"];
@@ -51,6 +54,10 @@ describe("the database a command names", () => {
     expect(
       target("mysql://root:s3cr3t@localhost/shop?socketPath=/tmp/mysql.sock")
     ).toBe("MySQL /tmp/mysql.sock/shop");
+    // A relative socket is opened from the project folder, as a SQLite file is.
+    expect(
+      target("mysql://root:s3cr3t@localhost/shop?socketPath=./run/mysql.sock")
+    ).toBe(`MySQL ${resolve(FOLDER, "run/mysql.sock")}/shop`);
   });
 
   it("names a SQLite file resolved against the project folder, or :memory:", () => {
@@ -67,23 +74,41 @@ describe("the database a command names", () => {
     expect(target(":memory:", "sqlite")).toBe("SQLite :memory:");
   });
 
-  it("names the dialect the command connects with: the one stated, else the one the URL implies", () => {
+  it("names the dialect the settings check decides: the one stated, else the one the URL implies", () => {
     expect(target("./app.data", "sqlite")).toBe(
       `SQLite ${resolve(FOLDER, "app.data")}`
     );
-    // Stated beside another dialect's URL, the stated one is what connects.
+    // Stated beside another dialect's URL, the stated one is what a checked
+    // command connects with.
     expect(target("postgres://appuser:s3cr3t@db.internal/shop", "mysql")).toBe(
       "MySQL db.internal:3306/shop"
     );
   });
 
-  it("never prints a server's URL as a SQLite path", () => {
-    const line = target(
-      "postgres://appuser:s3cr3t@db.internal:5432/shop?password=hunter2",
-      "sqlite"
-    );
-    expect(line).toBe("SQLite (address not readable)");
-    for (const secret of SECRETS) expect(line).not.toContain(secret);
+  it("never prints a server's URL as a SQLite path, and calls such settings live", () => {
+    const read = databaseTarget({
+      url: "postgres://appuser:s3cr3t@localhost:5432/shop?password=hunter2",
+      dialect: "sqlite",
+      folder: FOLDER,
+    });
+    expect(phrase(read)).toBe("SQLite (address not readable)");
+    // DB_DIALECT and the URL disagree: a command that skips the settings
+    // check would open the URL's own dialect, so neither reading is trusted.
+    expect(read.place).toBe("live");
+    for (const secret of SECRETS) expect(phrase(read)).not.toContain(secret);
+  });
+
+  it("never reads a user name as the host when a password holds # or ?", () => {
+    for (const url of [
+      "postgres://admin:2024#Summer@db.internal/shop",
+      "postgres://admin:2024?Summer@db.internal/shop",
+      "mysql://admin:2024#Summer@db.internal/shop",
+    ]) {
+      const read = databaseTarget({ url, folder: FOLDER });
+      expect(read.target).toBe("(address not readable)");
+      expect(read.place).toBe("live");
+      expect(phrase(read)).not.toContain("admin");
+    }
   });
 
   it("does not name a SQLite file the adapter would not open: a URL with a query part is unreadable", () => {
@@ -96,7 +121,7 @@ describe("the database a command names", () => {
   it("fills what a PostgreSQL URL leaves out from the variables its driver reads", () => {
     const pg = { PGHOST: "pg.internal", PGPORT: "6432", PGDATABASE: "ledger" };
     const withEnv = (url: string) =>
-      databaseTarget({ url, folder: FOLDER, env: pg });
+      phrase(databaseTarget({ url, folder: FOLDER, env: pg }));
     expect(withEnv("postgres://appuser:s3cr3t@db.internal/shop")).toBe(
       "PostgreSQL db.internal:6432/shop"
     );
@@ -168,5 +193,22 @@ describe("the database a command names", () => {
       "(database not recognised)"
     );
     expect(target(undefined)).toBe("none");
+  });
+
+  it("judges the place from the same reading it names, never a second one", () => {
+    const place = (url: string, env = {}) =>
+      databaseTarget({ url, folder: FOLDER, env }).place;
+    // The URL names localhost, the parameter another server: the driver goes there.
+    expect(
+      place("postgres://appuser:s3cr3t@localhost/shop?host=db.internal")
+    ).toBe("live");
+    // No host in the URL: PGHOST decides, a socket here and a server there.
+    expect(place("postgres:///shop", { PGHOST: "/var/run/postgresql" })).toBe(
+      "local"
+    );
+    expect(place("postgres:///shop", { PGHOST: "db.internal" })).toBe("live");
+    // What cannot be named cannot be called local.
+    expect(place("postgres://appuser:s3cr3t@[::bad/shop")).toBe("live");
+    expect(place("file:./data/app.db")).toBe("local");
   });
 });

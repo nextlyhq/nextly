@@ -2850,6 +2850,14 @@ jobs:
             Scaffold build / Scaffold blog-visual
             Scaffold build / Scaffold blog-cache-components
             Scaffold build / Scaffold existing-create-next-app
+            Scaffold build / First deploy (blank, postgresql)
+            Scaffold build / First deploy (blank, mysql)
+            Scaffold build / First deploy (blank, sqlite)
+            Scaffold build / First deploy (blog-code-first, postgresql)
+            Scaffold build / First deploy (blog-code-first, mysql)
+            Scaffold build / First deploy (blog-code-first, sqlite)
+            Scaffold build / First deploy on Windows (blank, sqlite)
+            Scaffold build / First deploy on Windows (blog-code-first, sqlite)
           token: ${{ github.token }}
 
       # Everything is inert but the paths scaffold-build.yml's pull-request

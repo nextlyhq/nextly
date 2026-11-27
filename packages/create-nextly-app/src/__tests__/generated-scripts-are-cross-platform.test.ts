@@ -121,7 +121,7 @@ describe("generated package scripts", () => {
   it("accepts the portable replacement", () => {
     expect(
       offences(
-        "nextly migrate && next build && node scripts/build-search-index.mjs"
+        "nextly migrate --mode production && next build && node scripts/build-search-index.mjs"
       )
     ).toEqual([]);
   });

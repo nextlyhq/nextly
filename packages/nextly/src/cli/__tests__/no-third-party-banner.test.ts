@@ -7,7 +7,7 @@
  * streams may hold such a line. The first lines of three commands are also
  * held to what the CLI itself says.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -91,7 +91,8 @@ describe("no line from a third-party library", () => {
       const each = await run(args);
       const first = each.stderr.split("\n").find(line => line.trim() !== "");
       expect(first, `${each.stdout}\n${each.stderr}`).toBe(
-        `Database: SQLite ${join(project, "data.db")} (development; DATABASE_URL from .env)`
+        // The file as the CLI resolves it, through any link in the temporary folder.
+        `● local · ${join(realpathSync(project), "data.db")} · SQLite (development; DATABASE_URL from .env)`
       );
     },
     NEXTLY_RUN_TIMEOUT

@@ -37,6 +37,7 @@ import type {
 } from "nextly/widget-result";
 import type React from "react";
 
+import { actorSubject } from "@admin/components/features/versions/history-story-attribution";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
@@ -108,7 +109,7 @@ function activitySpoken({
   const repeat = repeatText(activity);
   if (repeat === "") return undefined;
   const subject = activitySubject(activity, settings);
-  return `${activity.user.name} ${activity.action} ${subject}, ${repeat.slice(3)}`;
+  return `${actorSubject(activity.user.name, activity.attribution ?? {})} ${activity.action} ${subject}, ${repeat.slice(3)}`;
 }
 
 /**
@@ -136,7 +137,9 @@ function activitySubject(activity: Activity, settings: boolean): string {
 /** What a row's title says: who did what to which document, and how many times. */
 function activityTitle({ activity, settings }: ActivityRow): string {
   const subject = activitySubject(activity, settings);
-  return `${activity.user.name} ${activity.action} ${subject}${repeatText(activity)}`;
+  // The actor with who stood behind them ("Claude Code, for Ana, approved on
+  // phone,"), as the sentence's subject.
+  return `${actorSubject(activity.user.name, activity.attribution ?? {})} ${activity.action} ${subject}${repeatText(activity)}`;
 }
 
 /**

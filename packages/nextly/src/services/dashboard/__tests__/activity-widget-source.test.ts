@@ -136,6 +136,68 @@ describe("what it asks the feed", () => {
     expect(row).not.toHaveProperty("metadata");
   });
 
+  it("publishes exactly the fields the card draws, the agent behind a row among them", async () => {
+    // 🔴 The list is published to every reader of the source, so a field is
+    // added on purpose or not at all: pinned whole, so a later addition fails
+    // here until someone decides a card draws it.
+    getRecentActivity.mockResolvedValue({
+      activities: [
+        {
+          ...entry,
+          agentName: "Claude Code",
+          door: "command",
+          approvedVia: "phone",
+          deploymentHost: null,
+          deploymentCommit: null,
+          // Kept by the trail and handed to no card: never published.
+          agentSessionId: "s1",
+          credentialId: "pass-1",
+          approvalRequestId: "req-1",
+          approvedByUserId: "user-9",
+          grantId: "grant-1",
+          undoesSessionId: "s0",
+        },
+      ],
+      hasMore: false,
+    });
+    const answer = await executeWidgetQuery(
+      { source: ACTIVITY_SOURCE_ID, op: "list" },
+      caller
+    );
+
+    const [row] = (answer as { items: Record<string, unknown>[] }).items;
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "id",
+        "actorType",
+        "userId",
+        "userName",
+        "userEmail",
+        "identityErasedAt",
+        "action",
+        "event",
+        "collection",
+        "entryId",
+        "entryTitle",
+        "subjectKind",
+        "createdAt",
+        "firstCreatedAt",
+        "count",
+        "countAtLeast",
+        "agentName",
+        "door",
+        "approvedVia",
+        "deploymentHost",
+        "deploymentCommit",
+      ].sort()
+    );
+    expect(row).toMatchObject({
+      agentName: "Claude Code",
+      door: "command",
+      approvedVia: "phone",
+    });
+  });
+
   it("answers only the fields a query selected, and heads them", async () => {
     const answer = await executeWidgetQuery(
       {
