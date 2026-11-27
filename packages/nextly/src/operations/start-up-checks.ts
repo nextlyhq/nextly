@@ -20,7 +20,7 @@ import {
   type OperationDefinition,
   type OperationEffects,
   type OperationExitCode,
-  type OperationRaise,
+  type RiskLevel,
   type OperationSource,
 } from "./definition";
 import { levelRank } from "./levels";
@@ -224,45 +224,72 @@ const levelProblems: DefinitionCheck = op => {
   return [];
 };
 
-function raiseRuleProblems(
+/** A raise rule as plain JavaScript may hand it over: any value in any field. */
+type UncheckedRule = Readonly<
+  Partial<Record<"when" | "level" | "alwaysAllow" | "applies", unknown>>
+>;
+
+function isRiskLevel(value: unknown): value is RiskLevel {
+  return RISK_LEVELS.some(level => level === value);
+}
+
+/** Where a rule's level sits against the operation's: known, and not lower. */
+function raiseLevelProblems(
   op: OperationDefinition,
-  rule: OperationRaise<unknown>
+  rule: UncheckedRule,
+  when: string
 ): string[] {
-  const problems: string[] = [];
-  if (!isNonEmptyText(rule.when)) {
-    problems.push("a raise rule does not say when it applies");
+  if (!isRiskLevel(rule.level)) {
+    return [
+      `a raise rule's level ${quoted(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`,
+    ];
   }
-  if (!RISK_LEVELS.includes(rule.level)) {
-    problems.push(
-      `a raise rule's level ${quoted(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`
-    );
-  } else if (
-    RISK_LEVELS.includes(op.level) &&
-    levelRank(rule.level) < levelRank(op.level)
-  ) {
-    problems.push(
-      `its raise rule "${rule.when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`
-    );
+  if (isRiskLevel(op.level) && levelRank(rule.level) < levelRank(op.level)) {
+    return [
+      `its raise rule "${when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`,
+    ];
   }
   if (!isAbsentOrFalse(rule.alwaysAllow)) {
-    problems.push(
-      `its raise rule "${rule.when}" has the "Always allow" mark ${quoted(rule.alwaysAllow)}; it may only be false, or left out`
-    );
-  } else if (rule.alwaysAllow === false && rule.level !== "critical") {
-    problems.push(
-      `its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`
-    );
+    return [
+      `its raise rule "${when}" has the "Always allow" mark ${quoted(rule.alwaysAllow)}; it may only be false, or left out`,
+    ];
   }
-  if (typeof rule.applies !== "function") {
-    problems.push(`its raise rule "${rule.when}" has no applies()`);
-  } else if (
-    Object.prototype.toString.call(rule.applies) === "[object AsyncFunction]"
-  ) {
-    problems.push(
-      `its raise rule "${rule.when}" answers later; applies() must answer yes or no at once`
-    );
+  if (rule.alwaysAllow === false && rule.level !== "critical") {
+    return [
+      `its raise rule "${when}" refuses "Always allow" at ${rule.level}, not critical`,
+    ];
   }
-  return problems;
+  return [];
+}
+
+/**
+ * Its applies(): a function that answers at once. One written to answer
+ * later hands back a promise, which is not a yes or a no.
+ */
+function appliesProblems(applies: unknown, when: string): string[] {
+  if (typeof applies !== "function") {
+    return [`its raise rule "${when}" has no applies()`];
+  }
+  if (Object.prototype.toString.call(applies) === "[object AsyncFunction]") {
+    return [
+      `its raise rule "${when}" answers later; applies() must answer yes or no at once`,
+    ];
+  }
+  return [];
+}
+
+function raiseRuleProblems(
+  op: OperationDefinition,
+  rule: UncheckedRule
+): string[] {
+  const when = isNonEmptyText(rule.when) ? rule.when : quoted(rule.when);
+  const problems = isNonEmptyText(rule.when)
+    ? []
+    : ["a raise rule does not say when it applies"];
+  return problems.concat(
+    raiseLevelProblems(op, rule, when),
+    appliesProblems(rule.applies, when)
+  );
 }
 
 /**
@@ -274,7 +301,7 @@ const raiseProblems: DefinitionCheck = op => {
   if (!Array.isArray(rules)) return ["its raise rules are not a list"];
   return rules.flatMap((rule: unknown) =>
     isObject(rule)
-      ? raiseRuleProblems(op, rule as OperationRaise<unknown>)
+      ? raiseRuleProblems(op, rule)
       : ["a raise rule is not an object"]
   );
 };

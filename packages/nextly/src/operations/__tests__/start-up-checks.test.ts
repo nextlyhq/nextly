@@ -730,3 +730,26 @@ describe("a raise rule that answers later", () => {
     ]);
   });
 });
+
+describe('a raise rule that refuses "Always allow"', () => {
+  it("is refused below critical", async () => {
+    const problems = await refusal({
+      core: [
+        writeOperation({
+          level: "draft",
+          raise: [
+            {
+              when: "many",
+              level: "change",
+              alwaysAllow: false,
+              applies: () => true,
+            },
+          ],
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.publish" from core: its raise rule "many" refuses "Always allow" at change, not critical',
+    ]);
+  });
+});

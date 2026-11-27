@@ -167,7 +167,7 @@ describe("a rule whose answer is not a plain yes or no", () => {
         {
           when: "odd",
           level: "change" as const,
-          applies: applies as () => boolean,
+          applies: applies as unknown as () => boolean,
         },
       ],
     };
