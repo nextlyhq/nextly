@@ -39,6 +39,17 @@ vi.mock("@clack/prompts", async () =>
 vi.mock("@nextlyhq/telemetry", async () =>
   (await import("./clack-recorder")).telemetry()
 );
+// These runs are about other things than the connection: the server they
+// name is not there, so the test before writing answers "connected". What it
+// does with a real or an unreachable server is connection-test*.test.ts's.
+vi.mock("../connection-test", async importOriginal => ({
+  ...(await importOriginal<typeof import("../connection-test")>()),
+  testConnection: async () => ({
+    ok: true,
+    server: "PostgreSQL 17.2",
+    database: "app",
+  }),
+}));
 
 const USER = "scaffold_user";
 const PASSWORD = "S3cr3t-Pa55";

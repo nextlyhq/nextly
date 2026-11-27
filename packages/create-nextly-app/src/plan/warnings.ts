@@ -54,13 +54,7 @@ export function planWarnings(
     });
   }
   if (findings.existingTables) {
-    warnings.push({
-      code: "database-has-tables",
-      message:
-        findings.existingTables === "nextly"
-          ? "This database already holds a Nextly site's tables."
-          : "This database already holds tables that don't look like a Nextly site.",
-    });
+    warnings.push(existingTablesWarning(findings.existingTables));
   }
   if (plan.host === "vercel" && plan.images === "local") {
     warnings.push({
@@ -70,6 +64,25 @@ export function planWarnings(
     });
   }
   return warnings;
+}
+
+/**
+ * The warning for a database that already holds tables, saying whether they
+ * look like a Nextly site. The review screen shows it with the plan's other
+ * warnings; a run without a terminal prints it once the connection is tested.
+ *
+ * @experimental
+ */
+export function existingTablesWarning(
+  existingTables: NonNullable<PlanFindings["existingTables"]>
+): PlanWarning {
+  return {
+    code: "database-has-tables",
+    message:
+      existingTables === "nextly"
+        ? "This database already holds a Nextly site's tables."
+        : "This database already holds tables that don't look like a Nextly site.",
+  };
 }
 
 /**
