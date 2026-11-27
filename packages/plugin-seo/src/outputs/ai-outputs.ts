@@ -469,7 +469,10 @@ async function codeBodyOf(
   page: ListedPage
 ): Promise<string | undefined> {
   const stated = await statedMarkdownAt(writing.ctx, writing.config, page.path);
-  return stated ?? (await renderedBodyOf(writing, page));
+  if (stated === null) return renderedBodyOf(writing, page);
+  // Its words are had: a failure noted for it before is settled.
+  writing.results.made.push(page.loc);
+  return stated;
 }
 
 /**
@@ -485,7 +488,11 @@ async function documentBodyOf(
     fields: writing.fields.get(page.holder.collection),
     titleFields: writing.titleFields,
   });
-  if (holdsWords(stored)) return stored;
+  if (holdsWords(stored)) {
+    // Its words are had: a failure noted for it before is settled.
+    writing.results.made.push(page.loc);
+    return stored;
+  }
   return renderedBodyOf(writing, page);
 }
 
@@ -905,6 +912,20 @@ async function renderedCopyFor(
 }
 
 /**
+ * `copy`, a page's copy made with its words, once a failure noted for the
+ * page before is settled: the copy is had now, whether stored, given in the
+ * options or rendered, so the problem list no longer names it.
+ */
+async function madeCopy(
+  ctx: PluginContext,
+  page: ListedPage,
+  copy: string
+): Promise<string> {
+  await noteCopyResults(ctx, [], [page.loc]);
+  return copy;
+}
+
+/**
  * The copy of a page whose words could not be had: its front matter from
  * `head`, its name as the heading and its description beneath.
  */
@@ -1001,7 +1022,7 @@ async function copyOf(
   const { readRules } = config;
   if (page.holder.collection === codePagesSlug(ctx)) {
     const stated = await statedCopyFor(ctx, page, config);
-    if (stated !== null) return stated;
+    if (stated !== null) return madeCopy(ctx, page, stated);
     if (!render) return null;
     const heads = await codeHeadsOf(ctx, config, readRules, page.path);
     const head = heads.get(page.path) ?? {};
@@ -1021,7 +1042,9 @@ async function copyOf(
     fields: await fieldsOf(ctx, page.holder.collection),
     titleFields: (await readRules(ctx, page.language)).titleFields,
   });
-  if (holdsWords(stored)) return withFrontMatter(aboutOf(page, head), stored);
+  if (holdsWords(stored)) {
+    return madeCopy(ctx, page, withFrontMatter(aboutOf(page, head), stored));
+  }
   if (render) {
     const rendered = await renderedCopyFor(ctx, page, head);
     if (rendered !== null) return rendered;

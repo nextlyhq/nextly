@@ -469,31 +469,42 @@ const MARKUP_TAG =
 const MARKUP_BREAK =
   /<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|blockquote|section|article)\s*>/gi;
 
-/** The characters markup spells as entities, which a reader sees as the character. */
-const ENTITIES: Readonly<Record<string, string>> = {
+/** The character references a page's text commonly carries, by name. */
+const NAMED: Readonly<Record<string, string>> = {
   amp: "&",
   lt: "<",
   gt: ">",
   quot: '"',
   apos: "'",
   nbsp: " ",
+  hellip: "…",
+  mdash: "—",
+  ndash: "–",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  copy: "©",
+  middot: "·",
 };
 
-/** `text` with its character entities read back as the characters they spell. */
-function decodedEntities(text: string): string {
+/**
+ * `text` with its character references read as the characters they name:
+ * the one reading of them for a stored value holding markup and for a
+ * rendered page alike, so both give the same words for the same HTML.
+ */
+export function decodedEntities(text: string): string {
   return text.replace(
-    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
-    (whole, name: string) => {
-      if (name.startsWith("#")) {
-        const code =
-          name[1]?.toLowerCase() === "x"
-            ? Number.parseInt(name.slice(2), 16)
-            : Number.parseInt(name.slice(1), 10);
-        return Number.isInteger(code) && code > 0 && code <= 0x10ffff
-          ? String.fromCodePoint(code)
-          : whole;
-      }
-      return ENTITIES[name.toLowerCase()] ?? whole;
+    /&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi,
+    (whole, ref: string) => {
+      if (!ref.startsWith("#")) return NAMED[ref.toLowerCase()] ?? whole;
+      const point =
+        ref[1]?.toLowerCase() === "x"
+          ? Number.parseInt(ref.slice(2), 16)
+          : Number.parseInt(ref.slice(1), 10);
+      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
+        ? String.fromCodePoint(point)
+        : whole;
     }
   );
 }

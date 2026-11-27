@@ -439,6 +439,15 @@ describe("a page's plain-text copy", () => {
     expect(copy).not.toMatch(/span|strong|script|track/);
   });
 
+  it("reads the characters markup spells by name, as the rendered page does", () => {
+    const copy = plainCopyOf({
+      title: "Don&rsquo;t <em>stop</em>",
+      fields: [textarea({ name: "intro" })],
+      document: { intro: "<p>Don&rsquo;t &mdash; stop&hellip;</p>" },
+    });
+    expect(copy).toBe("# Don’t stop\n\nDon’t — stop…\n");
+  });
+
   it("leaves out a drawing in SVG, as a value or as a picture", () => {
     const copy = plainCopyOf({
       title: "T",

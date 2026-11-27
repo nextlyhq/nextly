@@ -391,6 +391,46 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("takes a page off the problem list once its copy is made from its own words, at its copy or in llms-full.txt", async () => {
+      const t = await boot(dialect);
+      const note = async (slug: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: "notes",
+              data: { title: slug, slug, status: "published" },
+            })
+          ).item.id
+        );
+      const first = await note("first");
+      const second = await note("second");
+      // Neither holds words yet, and neither renders: both are noted.
+      renderedSite({});
+      await ask("/notes/first.md");
+      await ask("/notes/second.md");
+      expect(
+        (await copyFailures(seoCtx())).map(each => each.url).sort()
+      ).toEqual([`${SITE}/notes/first`, `${SITE}/notes/second`]);
+
+      // Each gains words of its own: its copy is made from them, never
+      // rendered, and that settles it.
+      for (const id of [first, second]) {
+        await t.nextly.update({
+          collection: "notes",
+          id,
+          data: { body: "We launched.", _overwrite: true },
+        });
+      }
+      expect((await ask("/notes/first.md")).body).toContain("We launched.");
+      expect((await copyFailures(seoCtx())).map(each => each.url)).toEqual([
+        `${SITE}/notes/second`,
+      ]);
+      expect(await rootFile("llms-full.txt")).toContain(
+        `Source: ${SITE}/notes/second\n\nWe launched.`
+      );
+      expect(await copyFailures(seoCtx())).toEqual([]);
+    });
+
     it("writes a page built in code into llms-full.txt with its rendered words, or its description where it does not render", async () => {
       await boot(dialect);
       await seoMetadata("/pricing", {
