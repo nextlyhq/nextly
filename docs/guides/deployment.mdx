@@ -51,7 +51,7 @@ A scaffolded Nextly project ships this `build` script in `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
@@ -163,7 +163,7 @@ pnpm build
 pnpm start
 ```
 
-The scaffolded `build` script runs `nextly migrate && next build`, and `pnpm start` is `next start`. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate` from `build` and run it via your CI pipeline before promoting the new release.
+The scaffolded `build` script runs `nextly migrate --mode production && next build`, and `pnpm start` is `next start`. `--mode production` makes `nextly migrate` read `.env.production` as `next build` does, even when the host builds with `NODE_ENV` unset. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate --mode production` from `build` and run it via your CI pipeline before promoting the new release.
 
 ### Environment variables
 

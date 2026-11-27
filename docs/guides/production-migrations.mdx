@@ -454,10 +454,21 @@ The default scaffold ships this `build` script in `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
+
+Every `nextly` step in the script carries `--mode production`, so it reads the same environment
+files as the `next build` after it. A project whose config registers plugins also has a
+`nextly plugins install <package> --mode production` step before `next build`.
+
+**Upgrading a project made before the flag:** its script reads `nextly migrate && next build`. Where
+the build takes `DATABASE_URL` from a file and runs with `NODE_ENV` unset, that `nextly migrate`
+runs in development mode and reads `.env.development`, so the deploy migrates the development
+database while `next build` reads `.env.production`. Add ` --mode production` to the end of every
+`nextly` step in `build`, as above. A `DATABASE_URL` set in the host's own environment is read the
+same in either mode.
 
 Configure `DATABASE_URL` as a Vercel environment variable (available at build time). Every Vercel deploy applies pending migrations before compiling Next.js.
 
@@ -770,7 +781,7 @@ only through `nextly migrate` (step 8 above, and its registry phase) and a plugi
 uninstall, all under the migrate lock.
 
 So **run `nextly migrate` before serving a new build**. The scaffolded `build` script already runs
-`nextly migrate && next build`. A deployment that relied on its start to bring a new field,
+`nextly migrate --mode production && next build`. A deployment that relied on its start to bring a new field,
 collection or permission into the database must run `nextly migrate` first. Until it does, the
 start keeps serving the registry as it is: a declared field the database has not been migrated
 for is not served, and a read or write that reaches it answers `ENTITY_NOT_MIGRATED` (HTTP 409),
