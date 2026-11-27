@@ -195,13 +195,23 @@ export function ReleaseTitleCell({
       <span className="text-sm font-medium text-foreground">
         {release.title}
       </span>
+      {/* The spaces are for the row link's name: without them a screen
+          reader runs the title, the mark and the description together. The
+          mark's margin is narrowed by the space's width, so the gap a
+          sighted reader sees stays as it was. */}
       {release.kind === "single" ? (
-        <SingleDocumentMark className="ml-2" />
+        <>
+          {" "}
+          <SingleDocumentMark className="ml-1" />
+        </>
       ) : null}
       {release.description ? (
-        <span className="mt-0.5 inline-block w-full truncate text-xs font-normal text-muted-foreground">
-          {release.description}
-        </span>
+        <>
+          {" "}
+          <span className="mt-0.5 inline-block w-full truncate text-xs font-normal text-muted-foreground">
+            {release.description}
+          </span>
+        </>
       ) : null}
     </span>
   );

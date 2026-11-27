@@ -354,14 +354,26 @@ function DayListRow({
         {releaseTimeOfDay(instant, zone) ?? "—"}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
+        {/* The link holds the title and the single-document mark, as the
+            list's row does, so a screen reader hears the same name for the
+            same release in both places. Only the title underlines on hover.
+            The space is for the link's name: without it a screen reader runs
+            the title and the mark together as one word. */}
         <Link
           href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-          className="truncate text-sm font-medium text-foreground hover:underline"
+          className="group flex min-w-0 items-center gap-2"
         >
-          {release.title}
+          <span className="truncate text-sm font-medium text-foreground group-hover:underline">
+            {release.title}
+          </span>
+          {release.kind === "single" ? (
+            <>
+              {" "}
+              <SingleDocumentMark />
+            </>
+          ) : null}
         </Link>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          {release.kind === "single" ? <SingleDocumentMark /> : null}
           {status ? <ReleaseStatusMark status={status} /> : null}
           {scheduled ? (
             <span className="flex items-center gap-1 text-muted-foreground">

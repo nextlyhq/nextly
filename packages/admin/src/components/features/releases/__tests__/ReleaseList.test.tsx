@@ -294,6 +294,11 @@ describe("a release's row", () => {
     );
     render(<ListOnPage />);
     expect(table().getByText("Single document")).toBeTruthy();
+    // The row's link holds the title and the mark; a screen reader must
+    // hear them as two words, not one run together.
+    expect(
+      table().getByRole("link", { name: /^Pricing page Single document\b/ })
+    ).toBeTruthy();
   });
 
   it("sends the reader to a release the page's read left unchecked", () => {
