@@ -771,7 +771,7 @@ test.describe("chrome drawn over the frame stays on the block", () => {
     })
   );
 
-  test("the toolbar takes the pointer on its buttons only, and fades over another block", async ({
+  test("the toolbar takes the pointer while shown, fades over another block, and is reached from its own", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -782,7 +782,8 @@ test.describe("chrome drawn over the frame stays on the block", () => {
     await expect(buttons.nth(1)).toBeVisible();
 
     // Between the first two buttons, and on one: what the page answers for a
-    // pointer there. The gap is the bar's, so it reaches what is under it.
+    // pointer there. While the bar is shown, all of it is the bar's, its gaps
+    // included, so a pointer coming up from the selected block reaches it.
     const first = await box(buttons.nth(0));
     const second = await box(buttons.nth(1));
     const at = (x: number, y: number) =>
@@ -794,16 +795,24 @@ test.describe("chrome drawn over the frame stays on the block", () => {
       );
     const gapX = (first.x + first.width + second.x) / 2;
     const midY = first.y + first.height / 2;
-    expect(await at(gapX, midY), "the gap between two buttons").toBe(false);
+    expect(await at(gapX, midY), "the gap between two buttons").toBe(true);
     expect(await at(first.x + first.width / 2, midY), "a button's middle").toBe(
       true
     );
 
-    // Over another block the bar fades; on a button it is back.
+    // Over another block the bar fades. (That a press over a block the bar
+    // covers reaches the block is held by the badge case in
+    // `toolbar-inside-and-unlock.spec.ts`; here hovering block-0 scrolls the
+    // frame, which moves the bar off the points measured above.)
     const opacity = () =>
       toolbar.evaluate(element => getComputedStyle(element).opacity);
     await canvasBlock(page, "block-0").hover();
     await expect.poll(opacity).toBe("0");
+
+    // Back on the selected block the bar returns, and from there its buttons
+    // are reached.
+    await canvasBlock(page, "block-2").hover();
+    await expect.poll(opacity).toBe("1");
     await buttons.nth(0).hover();
     await expect.poll(opacity).toBe("1");
   });

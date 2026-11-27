@@ -145,6 +145,43 @@ export function ReleaseStatusMark({
 }
 
 /**
+ * What a view of releases says when it holds nothing while "Hide single
+ * documents" is on: the List's tab, a Board column or a calendar day's list.
+ * True whether or not a single-document release was left out, so it needs no
+ * second read to know.
+ */
+export const SINGLES_HIDDEN_EMPTY =
+  "Single-document releases are hidden, and there is nothing else here.";
+
+/**
+ * The mark of a release that holds one document, drawn the same wherever a
+ * release is listed: the list's row, a calendar chip, a day's list and a
+ * board tile. Its words are read out as part of what holds it, so a screen
+ * reader hears the same mark a sighted reader sees. Where it sits (its
+ * margin) is left to the caller, and so is a width cap: where the mark may
+ * not fit (a narrow calendar day), the caller caps it with `max-w-full` and
+ * its words end in an ellipsis rather than being cut off mid-word. A screen
+ * reader still hears them whole.
+ */
+export function SingleDocumentMark({
+  className,
+}: {
+  className?: string;
+}): JSX.Element {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-sm border border-border px-1.5 py-px align-[1px] text-[11px] font-normal leading-4 text-muted-foreground",
+        className
+      )}
+    >
+      <FileText className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">Single document</span>
+    </span>
+  );
+}
+
+/**
  * The release's title, its description, and the single-document mark.
  *
  * The table wraps this cell in the row's link, and a link underlines what it
@@ -161,16 +198,23 @@ export function ReleaseTitleCell({
       <span className="text-sm font-medium text-foreground">
         {release.title}
       </span>
+      {/* The spaces are for the row link's name: without them a screen
+          reader runs the title, the mark and the description together. The
+          mark's margin is narrowed by the space's width, so the gap a
+          sighted reader sees stays as it was. */}
       {release.kind === "single" ? (
-        <span className="ml-2 inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-px align-[1px] text-[11px] font-normal leading-4 text-muted-foreground">
-          <FileText className="size-3" aria-hidden />
-          Single document
-        </span>
+        <>
+          {" "}
+          <SingleDocumentMark className="ml-1" />
+        </>
       ) : null}
       {release.description ? (
-        <span className="mt-0.5 inline-block w-full truncate text-xs font-normal text-muted-foreground">
-          {release.description}
-        </span>
+        <>
+          {" "}
+          <span className="mt-0.5 inline-block w-full truncate text-xs font-normal text-muted-foreground">
+            {release.description}
+          </span>
+        </>
       ) : null}
     </span>
   );

@@ -8,10 +8,22 @@
  */
 import type {
   Release,
+  ReleaseKind,
   ReleaseListTab,
   ReleaseMemberCounts,
   ReleaseReadiness,
 } from "@admin/types/releases";
+
+/**
+ * Which releases the Releases page shows while "Hide single documents" is on
+ * or off: ordinary ones only (`release`), or every kind (`undefined`). The
+ * one rule the List, the Calendar and the Board all read the switch by.
+ */
+export function releaseKindShown(
+  hideSingles: boolean
+): ReleaseKind | undefined {
+  return hideSingles ? "release" : undefined;
+}
 
 /** Each tab's name, in the reader's words. */
 export const RELEASE_TAB_LABEL: Record<ReleaseListTab, string> = {

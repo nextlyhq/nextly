@@ -96,7 +96,7 @@ describe("a blog scaffold", () => {
     );
 
     expect(pkg.scripts.build).toBe(
-      "nextly migrate && next build && node scripts/build-search-index.mjs"
+      "nextly migrate --mode production && next build && node scripts/build-search-index.mjs"
     );
     expect(pkg.scripts["search:index"]).toBe(
       "node scripts/build-search-index.mjs"
@@ -112,7 +112,9 @@ describe("a blank scaffold", () => {
     const { target, pkg } = await scaffold("blank");
 
     await expect(projectHasSearchIndexScript(target)).resolves.toBe(false);
-    expect(pkg.scripts.build).toBe("nextly migrate && next build");
+    expect(pkg.scripts.build).toBe(
+      "nextly migrate --mode production && next build"
+    );
     // A script pointing at a file that does not exist reads as a supported command.
     expect(pkg.scripts["search:index"]).toBeUndefined();
     expect(pkg.devDependencies.pagefind).toBeUndefined();

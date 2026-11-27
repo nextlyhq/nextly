@@ -26,3 +26,24 @@ export const AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH = 191;
  * Widening it widens the column and loosens the refusal with it.
  */
 export const AUDIT_TARGET_PRINCIPAL_KIND_LENGTH = 191;
+
+/**
+ * An agent's name, and a deployment's host or machine, on the activity and
+ * audit rows: varchar on PostgreSQL and MySQL. Widening it widens the columns
+ * and loosens the refusal with it.
+ */
+export const ATTRIBUTION_NAME_LENGTH = 191;
+
+/**
+ * An attribution id on the activity and audit rows (session, credential,
+ * approval request, approver, grant): varchar on PostgreSQL and MySQL. A uuid
+ * and a key's own id both fit. What may be stored is narrower than the width:
+ * `domains/audit/attribution` refuses anything shaped like a secret.
+ */
+export const ATTRIBUTION_ID_LENGTH = 64;
+
+/** A door or an approval place on the activity and audit rows. */
+export const ATTRIBUTION_WORD_LENGTH = 16;
+
+/** A deployment's commit: a full SHA-1 hash at most. */
+export const ATTRIBUTION_COMMIT_LENGTH = 40;

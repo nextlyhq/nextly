@@ -259,7 +259,12 @@ async function recordActivity(
       // The same component rows the event's own diff passes over, so the trail
       // and the event name the same fields changed.
       componentRows: componentRowPaths(args.fields),
-      actor: webhookActorOf(args.actor),
+      // The request's own actor, not the webhook envelope's copy: the trail
+      // records who stands behind the actor (an agent acting for them, the
+      // door, an approval), which the envelope deliberately leaves out. The
+      // recorder skips a plugin-defined person, who carries no id, as it
+      // skips the system actor the envelope would have made of them.
+      actor: args.actor,
       ...(args.publication !== undefined
         ? { publication: args.publication }
         : {}),

@@ -546,6 +546,19 @@ export const nextlyTables: TableDefinition[] = [
       { name: "actor_principal_id", type: "varchar(191)" },
       { name: "target_principal_kind", type: "varchar(191)" },
       { name: "target_principal_id", type: "varchar(191)" },
+      // Who stands behind the actor: an agent, the door, the credential, the
+      // session, an approval, a grant, an undo, or a deployment.
+      { name: "agent_name", type: "varchar(191)" },
+      { name: "agent_session_id", type: "varchar(64)" },
+      { name: "door", type: "varchar(16)" },
+      { name: "credential_id", type: "varchar(64)" },
+      { name: "approval_request_id", type: "varchar(64)" },
+      { name: "approved_by_user_id", type: "varchar(64)" },
+      { name: "approved_via", type: "varchar(16)" },
+      { name: "grant_id", type: "varchar(64)" },
+      { name: "undoes_session_id", type: "varchar(64)" },
+      { name: "deployment_host", type: "varchar(191)" },
+      { name: "deployment_commit", type: "varchar(40)" },
     ],
     indexes: [
       { name: "audit_log_kind_idx", columns: ["kind"] },
