@@ -33,7 +33,9 @@ import { NEXTLY_RUN_TIMEOUT, runNextly } from "./helpers/run-nextly";
  */
 const OUTSIDE_A_PIPELINE = Object.fromEntries(
   Object.keys(process.env)
-    .filter(name => detectIsCi({ [name]: process.env[name] }))
+    // Asked one variable at a time; `NODE_ENV` is no marker, and is required
+    // by the environment's type.
+    .filter(name => detectIsCi({ NODE_ENV: "test", [name]: process.env[name] }))
     .map(name => [name, undefined])
 );
 
