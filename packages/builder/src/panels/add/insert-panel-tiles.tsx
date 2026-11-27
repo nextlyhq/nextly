@@ -39,6 +39,28 @@ import {
 } from "./inserter";
 
 /**
+ * How many tiles sit in a row: two, each a mark in a soft square beside a
+ * name the tile is wide enough to read without breaking a word.
+ *
+ * A CONSTANT rather than a count derived from the panel's measured width:
+ * measuring would need the layout to have happened before anything could read
+ * it, and a count that followed the width would REFLOW the grid while the
+ * author drags the panel's edge, moving a tile out from under the cursor.
+ *
+ * LAYOUT ONLY. No keyboard behaviour derives from it, and that is deliberate
+ * rather than an omission: arrow keys stepping by a row would contradict the
+ * listbox semantics the palette announces.
+ */
+export const GRID_COLUMNS = 2;
+
+/**
+ * How many tiles sit in a row where each draws a picture of its saved
+ * section: two, so a picture is wide enough to read at the panel's default
+ * width. Fixed per tab for the reason {@link GRID_COLUMNS} is.
+ */
+export const PICTURE_COLUMNS = 2;
+
+/**
  * What a press does, for the pointer that has no other way to ask.
  *
  * A press moves the highlight, so the popover beside the panel describes the

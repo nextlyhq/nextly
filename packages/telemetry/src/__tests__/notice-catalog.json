@@ -1,0 +1,128 @@
+{
+  "tools": {
+    "2": {
+      "install_started": [
+        "agent",
+        "arch",
+        "catalog_version",
+        "from",
+        "install_id",
+        "nextly_version",
+        "node_major",
+        "os",
+        "package_manager",
+        "run_by",
+        "source",
+        "terminal"
+      ],
+      "install_step": [
+        "agent",
+        "arch",
+        "catalog_version",
+        "coding_tools",
+        "database",
+        "features",
+        "host",
+        "install_id",
+        "nextly_version",
+        "node_major",
+        "os",
+        "package_manager",
+        "run_by",
+        "section",
+        "source",
+        "start"
+      ],
+      "install_completed": [
+        "agent",
+        "arch",
+        "catalog_version",
+        "coding_tools",
+        "database",
+        "duration_ms",
+        "features",
+        "host",
+        "install_id",
+        "nextly_version",
+        "node_major",
+        "os",
+        "package_manager",
+        "run_by",
+        "source",
+        "start"
+      ],
+      "install_failed": [
+        "agent",
+        "arch",
+        "catalog_version",
+        "duration_ms",
+        "error_code",
+        "install_id",
+        "nextly_version",
+        "node_major",
+        "os",
+        "package_manager",
+        "run_by",
+        "source",
+        "step"
+      ],
+      "command_run": [
+        "agent",
+        "alias",
+        "arch",
+        "catalog_version",
+        "command",
+        "duration_ms",
+        "error_code",
+        "exit_code",
+        "nextly_version",
+        "node_major",
+        "os",
+        "package_manager",
+        "role",
+        "run_by",
+        "source"
+      ]
+    }
+  },
+  "site": {
+    "1": {
+      "admin_first_opened": [
+        "agent",
+        "catalog_version",
+        "heard_from",
+        "install_id",
+        "nextly_version",
+        "role",
+        "run_by",
+        "source"
+      ],
+      "first_collection_created": [
+        "catalog_version",
+        "install_id",
+        "nextly_version",
+        "role",
+        "source"
+      ],
+      "first_page_published": [
+        "catalog_version",
+        "install_id",
+        "nextly_version",
+        "role",
+        "source"
+      ],
+      "daily_summary": [
+        "catalog_version",
+        "collections",
+        "database",
+        "nextly_version",
+        "plugins_official",
+        "plugins_other",
+        "published_documents",
+        "role",
+        "singles",
+        "source"
+      ]
+    }
+  }
+}

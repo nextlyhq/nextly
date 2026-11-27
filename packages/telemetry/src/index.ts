@@ -23,6 +23,15 @@ export type { ClassifyScope } from "./classify-error.js";
 export { classifyError } from "./classify-error.js";
 export type { DisabledResult, DisabledReason } from "./is-disabled.js";
 
+/**
+ * The usage-data catalog, guards, agent detection and sender that the
+ * installer, the CLI and sites move onto. Added beside the exports above,
+ * which keep working unchanged until both CLIs have moved.
+ *
+ * @experimental
+ */
+export * from "./usage/index.js";
+
 interface InitOptions {
   cliName: CliName;
   cliVersion: string;

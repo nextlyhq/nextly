@@ -62,6 +62,14 @@ interface ActivityLogEntry {
   countAtLeast?: boolean;
   /** When this row's identity was erased; null while the actor exists. */
   identityErasedAt: string | null;
+  // Who stood behind the actor: the agent acting for them, how the call
+  // arrived, where an approval was given, or the deployment. Optional and
+  // nullable: an older server sends none, and most rows hold none.
+  agentName?: string | null;
+  door?: string | null;
+  approvedVia?: string | null;
+  deploymentHost?: string | null;
+  deploymentCommit?: string | null;
 }
 
 interface ActivityLogApiResponse {
@@ -119,6 +127,25 @@ function mapEntry(entry: ActivityLogEntry): Activity {
   };
 }
 
+/**
+ * Who stood behind the row's actor, as the Team activity card words it, or
+ * nothing when the row says no one did (and from an older server). Kept apart
+ * from `user`, which stays the actor itself for every reader of this hook.
+ */
+function attributionOf(
+  entry: ActivityLogEntry
+): Activity["attribution"] | undefined {
+  const words = {
+    agentName: entry.agentName ?? null,
+    door: entry.door ?? null,
+    approvedVia: entry.approvedVia ?? null,
+    deploymentHost: entry.deploymentHost ?? null,
+    deploymentCommit: entry.deploymentCommit ?? null,
+  };
+  if (Object.values(words).every(value => value === null)) return undefined;
+  return { ...words, actorIsKey: entry.actorType === "apiKey" };
+}
+
 /** What every row carries whatever it is about: who, what they did, when. */
 function shared(
   entry: ActivityLogEntry
@@ -130,6 +157,10 @@ function shared(
     // second surface deriving those rules independently is how two views of
     // the same deleted actor start disagreeing. One helper owns them.
     user: describeActivityActor(entry),
+    ...(() => {
+      const attribution = attributionOf(entry);
+      return attribution ? { attribution } : {};
+    })(),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
     ...(entry.event === undefined ? {} : { event: entry.event }),
@@ -229,6 +260,11 @@ export function activityFromRow(
     subjectKind: subjectKind ?? null,
     metadata: null,
     identityErasedAt: textOrNull(row.identityErasedAt),
+    agentName: textOrNull(row.agentName),
+    door: textOrNull(row.door),
+    approvedVia: textOrNull(row.approvedVia),
+    deploymentHost: textOrNull(row.deploymentHost),
+    deploymentCommit: textOrNull(row.deploymentCommit),
     ...(typeof row.count === "number" ? { count: row.count } : {}),
     ...(typeof row.countAtLeast === "boolean"
       ? { countAtLeast: row.countAtLeast }
