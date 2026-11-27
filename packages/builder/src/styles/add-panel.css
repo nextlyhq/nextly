@@ -510,6 +510,17 @@
   background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
 }
 
+/*
+ * A component's mark in the component colour, as Layers and the canvas draw
+ * it; a refused one stays grayed like any refused tile.
+ */
+.nx-insert-panel
+  [cmdk-item][data-kind="component"]:not([data-refused="true"])
+  > .nx-block-icon {
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 12%, transparent);
+}
+
 .nx-insert-panel [cmdk-item] > .nx-block-icon svg {
   width: 0.875rem;
   height: 0.875rem;

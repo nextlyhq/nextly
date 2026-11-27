@@ -377,6 +377,10 @@ export function InsertPanel({
                   // not — two plugins may both label a block "Card".
                   key={entry.id}
                   value={token}
+                  // What the tile adds: a component's is drawn in the
+                  // component colour, as its mark on the canvas and its row
+                  // in Layers are.
+                  data-kind={entry.kind}
                   onSelect={() => insert(offer)}
                   /*
                    * NAMED by the block and DESCRIBED by its sentence, rather

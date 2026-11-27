@@ -2032,6 +2032,10 @@ describe("the component tier", () => {
     const header = tile("Header");
     expect(header.querySelector(".nx-block-icon svg")).not.toBeNull();
     expect(header.querySelector(".nx-insert-panel__tier")).toBeNull();
+    // Marked as a component, which the stylesheet draws in the component
+    // colour; a block's tile is not.
+    expect(header.getAttribute("data-kind")).toBe("component");
+    expect(tile("Box").getAttribute("data-kind")).toBe("block");
     expect(describedBy(header)).toBe(
       "Goes at the end of the page. The site header."
     );
