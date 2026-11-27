@@ -11,8 +11,8 @@
  * adds or edits a changeset (`.changeset/*.md`, not its README) whose
  * frontmatter lists `@nextlyhq/mcp`.
  *
- * In CI it reads the pull request against its base branch, or the commits the
- * merge queue would land, from the checkout it is run in, and imports nothing
+ * In CI it reads the branch's commits against its base branch, or the commits
+ * the merge queue would land, from the checkout it is run in, and imports nothing
  * but Node's own modules, so the change it judges can't alter it.
  *
  * Usage: node scripts/check-tool-snapshot-changeset.mjs [<base> <head>]
@@ -92,7 +92,7 @@ function main() {
   const judged = range(process.argv.slice(2), process.env);
   if (!judged) {
     console.log(
-      "::error title=Tool-list snapshot::no range to judge; pass <base> <head>, or run it for a pull request or the merge queue"
+      "::error title=Tool-list snapshot::no range to judge; pass <base> <head>, or run it on a pull_request_target or merge_group event"
     );
     process.exit(1);
   }

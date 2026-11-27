@@ -4,9 +4,9 @@
  * answers to.
  *
  * A name is lower-case letters, digits and underscores, at most 64
- * characters, verb first (the action, then what it acts on). The Claude API
- * and OpenAI both refuse dots in tool names, and the directories that list
- * agent servers ask for 64 characters or fewer.
+ * characters, verb first (the action, then what it acts on). Widely used
+ * model APIs refuse dots in tool names, and the directories that list agent
+ * servers ask for 64 characters or fewer.
  *
  * The operation list derives each operation's name; the table here is the
  * reviewed record of which names a door may serve and which operation each

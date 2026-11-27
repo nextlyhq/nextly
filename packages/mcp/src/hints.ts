@@ -1,7 +1,7 @@
 /**
  * A tool's four hints, set from its operation's risk level and effects.
  *
- * Clients act on these without asking: ChatGPT and Codex run a tool marked
+ * Clients act on these without asking: some chat apps run a tool marked
  * read-only with no confirmation, so a wrong read-only hint is a security
  * bug, not a cosmetic one. Every hint is therefore set explicitly, never left
  * to the protocol's defaults (which assume the worst for some and the best for
