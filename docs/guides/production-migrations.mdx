@@ -416,7 +416,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Verify migration integrity
-        run: pnpm exec nextly migrate:check
+        run: pnpm exec nextly migrate:check --mode production
 
       - name: Apply pending migrations
         env:
