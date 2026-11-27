@@ -107,10 +107,30 @@ default rather than adding to it, so localhost is not silently kept.
 
 ## Protocol revisions
 
-Clients speaking the 2025 revisions (`2025-03-26` through `2025-11-25`) are
-served statelessly, which is every shipping client today. `GET` and `DELETE` on
-the endpoint answer `405`: they were the session operations, and the `2026-07-28`
-revision removed them.
+The endpoint serves three revisions of the protocol at the one address:
+`2026-07-28`, `2025-11-25` and `2025-06-18`.
+
+- A `2026-07-28` client finds the endpoint through `server/discover`, which
+  answers with that revision, the server's capabilities and its name.
+- A 2025 client opens with `initialize`. One that offers an older revision
+  (`2025-03-26`, `2024-11-05`) is offered `2025-11-25` instead, as the protocol
+  says.
+- A request that names a revision the endpoint does not serve is refused with
+  the protocol's unsupported-version error, which lists the ones it does.
+
+Every revision is served statelessly: the endpoint keeps no session between
+requests. `GET` and `DELETE` answer `405`: they were the session operations, and
+the `2026-07-28` revision removed them.
+
+Discovery and tool-list answers say they are private to the caller: each caller
+is shown what their own credential may use, so no answer is shared or reused.
+
+## Limits
+
+| Limit                                                                                           | Value                   | Over it                                                                    |
+| ----------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
+| Request body                                                                                    | 4 MiB (4,194,304 bytes) | `413`, with a message naming the size                                      |
+| Array elements and object members in one tool call's arguments, counted together at every depth | 10,000                  | refused before the arguments are checked, with a message naming the number |
 
 ## Status
 

@@ -26,6 +26,12 @@ import { registerWorkflowTools } from "../tools/workflows";
 
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
+import {
+  MAX_REQUEST_BYTES,
+  MAX_TOOL_INPUT_ELEMENTS,
+  PRIVATE_ANSWER,
+  SERVED_REVISIONS,
+} from "./limits";
 
 /**
  * What the endpoint needs to know about itself.
@@ -69,7 +75,21 @@ const SERVER_NAME = "nextly";
  */
 export function buildServer(options: EndpointOptions): McpServer {
   const ctx = callerNow();
-  const server = new McpServer({ name: SERVER_NAME, version: options.version });
+  const server = new McpServer(
+    { name: SERVER_NAME, version: options.version },
+    {
+      // Each stated here rather than left to the library's defaults, which a
+      // library release could change under an unchanged door: the revisions
+      // served, the most a call's arguments may hold, and that discovery and
+      // the tool list are private to this caller and never reused.
+      supportedProtocolVersions: [...SERVED_REVISIONS],
+      maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
+      cacheHints: {
+        "server/discover": PRIVATE_ANSWER,
+        "tools/list": PRIVATE_ANSWER,
+      },
+    }
+  );
   // Registered per request, with THIS caller closed over. A tool reading the
   // ambient scope instead would run when the callback fires rather than when
   // the server was built, and the two are not the same request.
@@ -138,7 +158,11 @@ export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
     const refused = refuseUnlessAddressedHere(request, options.allowedHosts);
     if (refused) return refused;
 
-    const serving = (handler ??= createMcpHandler(() => buildServer(options)));
+    // The body bound is the library's to apply, since it reads the body; it is
+    // stated here so a larger request is refused at a size this door chose.
+    const serving = (handler ??= createMcpHandler(() => buildServer(options), {
+      maxRequestBodySize: MAX_REQUEST_BYTES,
+    }));
     // The context reaches the protocol layer as itself. Declaring only
     // `request` was enough while the endpoint exposed nothing, and it discards
     // the services facade and the user that every tool will read.
