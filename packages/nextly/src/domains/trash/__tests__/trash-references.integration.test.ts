@@ -186,6 +186,9 @@ async function delivered(t: TestNextly): Promise<WebhookEvent[]> {
         return new Response("ok", { status: 200 });
       },
       decryptSecret: ciphertext => ciphertext,
+      // A moment ahead: MySQL keeps a delivery's due time to the second,
+      // rounding it up, so a delivery made this second is due by the next.
+      now: () => new Date(Date.now() + 2000),
     }
   );
   return bodies;
