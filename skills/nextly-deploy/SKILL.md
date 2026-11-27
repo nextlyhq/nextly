@@ -76,7 +76,7 @@ In `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
@@ -87,8 +87,8 @@ database in `DATABASE_URL`. On an empty database this is all that is needed
 before the first start.
 
 With several developers or preview deploys pointing at one database, run
-`npx nextly migrate` as its own CI step before the deploy instead, and keep
-`build` as `next build`.
+`npx nextly migrate --mode production` as its own CI step before the deploy
+instead, and keep `build` as `next build`.
 
 ## 4. Environment variables
 
