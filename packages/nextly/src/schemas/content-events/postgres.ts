@@ -25,6 +25,8 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
+import { ATTRIBUTION_NAME_LENGTH } from "../audit/widths";
+
 import type { ContentEventActorKind, ContentEventSubjectKind } from "./types";
 import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "./widths";
 
@@ -65,6 +67,13 @@ export const nextlyContentEventsPg = pgTable(
       length: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
     }),
     actorName: text("actor_name"),
+    // The agent that acted for this actor ("Claude Code"), beside the person
+    // it acted for, who stays the actor above: erasing that person blanks
+    // their name and keeps this one, which names software, not a person.
+    // NULL when no agent acted, and on every event before it existed.
+    actorAgentName: varchar("actor_agent_name", {
+      length: ATTRIBUTION_NAME_LENGTH,
+    }),
 
     occurredAt: timestamp("occurred_at", {
       withTimezone: true,

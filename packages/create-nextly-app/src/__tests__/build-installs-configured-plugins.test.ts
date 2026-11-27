@@ -120,16 +120,16 @@ describe("a scaffold's build installs the plugins its config registers", () => {
 
       if (registersOwnPlugin(text)) {
         expect(installs, relative(file)).toEqual([
-          "nextly plugins install --all",
+          "nextly plugins install --all --mode production",
         ]);
       } else {
         expect(installs, relative(file)).toEqual(
-          wanted.map(pkg => `nextly plugins install ${pkg}`)
+          wanted.map(pkg => `nextly plugins install ${pkg} --mode production`)
         );
       }
       for (const install of installs) {
         expect(steps.indexOf(install)).toBeGreaterThan(
-          steps.indexOf("nextly migrate")
+          steps.indexOf("nextly migrate --mode production")
         );
         expect(steps.indexOf(install)).toBeLessThan(
           steps.indexOf("next build")
@@ -152,13 +152,12 @@ describe("a scaffold's build installs the plugins its config registers", () => {
       "utf8"
     );
     const steps = (await buildScript("blog", text)).split(" && ");
-    expect(steps).toContain("nextly plugins install --all");
-    expect(steps.indexOf("nextly plugins install --all")).toBeGreaterThan(
-      steps.indexOf("nextly migrate")
+    const install = "nextly plugins install --all --mode production";
+    expect(steps).toContain(install);
+    expect(steps.indexOf(install)).toBeGreaterThan(
+      steps.indexOf("nextly migrate --mode production")
     );
-    expect(steps.indexOf("nextly plugins install --all")).toBeLessThan(
-      steps.indexOf("next build")
-    );
+    expect(steps.indexOf(install)).toBeLessThan(steps.indexOf("next build"));
   });
 
   it("installs nothing for a config with no plugins", async () => {
@@ -168,6 +167,50 @@ describe("a scaffold's build installs the plugins its config registers", () => {
         "export default defineConfig({ plugins: [] });"
       )
     ).not.toContain("plugins install");
+  });
+});
+
+/** The steps that run the Nextly CLI, however the script spells them. */
+const cliSteps = (steps: string[]) =>
+  steps.filter(step => /^(?:\S+\s+)*nextly\s/.test(step));
+
+// A deploy often builds with NODE_ENV unset. The CLI takes its environment
+// files from `--mode`, else from NODE_ENV, so a step without the flag would
+// read `.env.development` and migrate the development database while the
+// `next build` after it reads `.env.production`. Checked over the same configs
+// as the installs above, so a config the one check reads the other reads too.
+describe("a scaffold's build runs every CLI step in production mode", () => {
+  it("gives each CLI step of every template config's build --mode production, plugin installs included", async () => {
+    const mode = "--mode production";
+    const configs = await templateConfigs();
+    expect(configs.length).toBeGreaterThan(1);
+
+    let pluginSteps = 0;
+    for (const { template, file } of configs) {
+      const steps = (
+        await buildScript(template, await readFile(file, "utf8"))
+      ).split(" && ");
+      const cli = cliSteps(steps);
+      // Every build migrates, so there is always at least one step to check.
+      expect(cli[0], relative(file)).toBe(`nextly migrate ${mode}`);
+      for (const step of cli) {
+        expect(step.endsWith(` ${mode}`), `${relative(file)}: ${step}`).toBe(
+          true
+        );
+        // Once each: a mode given twice is refused by the CLI's parser.
+        expect(step.split(mode).length - 1, `${relative(file)}: ${step}`).toBe(
+          1
+        );
+      }
+      pluginSteps += cli.filter(step => step.includes(" plugins ")).length;
+      // The app is built after the CLI has prepared its database.
+      expect(steps.indexOf("next build"), relative(file)).toBeGreaterThan(
+        steps.indexOf(cli.at(-1) ?? "")
+      );
+    }
+    // A template that registers a plugin exists, so the install step's flag
+    // was checked, not only the migration's.
+    expect(pluginSteps).toBeGreaterThan(0);
   });
 });
 

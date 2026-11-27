@@ -79,6 +79,16 @@ export const ACTIVITY_LOG_INDEXES = [
   { name: "idx_activity_log_created_at", columns: ["createdAt"] },
   { name: "idx_activity_log_collection", columns: ["collection", "createdAt"] },
   { name: "idx_activity_log_user_id", columns: ["userId", "createdAt"] },
+  // The two filters the activity read takes for agents: one agent's rows, and
+  // one agent session's, each newest first as the feed pages.
+  {
+    name: "idx_activity_log_agent_name",
+    columns: ["agentName", "createdAt"],
+  },
+  {
+    name: "idx_activity_log_agent_session",
+    columns: ["agentSessionId", "createdAt"],
+  },
 ] as const satisfies readonly CoreIndex<string>[];
 
 export const NOTICES_INDEXES = [
