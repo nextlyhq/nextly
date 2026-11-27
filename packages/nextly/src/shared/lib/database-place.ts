@@ -54,8 +54,9 @@ export interface ServerParts {
  *   where any part is not what it should be.
  *
  * `disagrees` is set where `DB_DIALECT` names a dialect other than the one
- * the URL's scheme names. The CLI connects with the scheme's and a site
- * reads `DB_DIALECT` first, so such settings may reach either database.
+ * the URL's scheme names. Most commands connect with `DB_DIALECT`'s, but a
+ * command that connects without the settings check reads the scheme's, so
+ * such settings may reach either database.
  */
 export type DatabaseAddress =
   | { kind: "none" }
@@ -83,9 +84,11 @@ export interface DatabaseAddressInput {
 const DEFAULT_PORTS = { postgresql: "5432", mysql: "3306" } as const;
 
 /**
- * The dialect a CLI command connects with: the one the URL's scheme implies,
- * else the one stated (`DB_DIALECT`); and whether the two name different
- * dialects.
+ * The dialect the settings name, read as the CLI's settings check and the
+ * site's own settings read it (`statedDialect`): `DB_DIALECT` when it names
+ * one, else the one the URL's scheme implies; and whether the two name
+ * different dialects. No default stands in where neither names one: an
+ * address of no known dialect is not read as one.
  */
 function dialectOf(
   url: string,
@@ -96,7 +99,7 @@ function dialectOf(
     : undefined;
   const implied = dialectFromUrl(url);
   return {
-    dialect: implied ?? named,
+    dialect: named ?? implied,
     disagrees:
       implied !== undefined && named !== undefined && implied !== named,
   };

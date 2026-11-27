@@ -70,13 +70,14 @@ describe("the database a command names", () => {
     expect(target(":memory:", "sqlite")).toBe("SQLite :memory:");
   });
 
-  it("names the dialect the command connects with: the one the URL implies, else the one stated", () => {
+  it("names the dialect the settings check decides: the one stated, else the one the URL implies", () => {
     expect(target("./app.data", "sqlite")).toBe(
       `SQLite ${resolve(FOLDER, "app.data")}`
     );
-    // The CLI's connection reads the URL's scheme before DB_DIALECT.
+    // Stated beside another dialect's URL, the stated one is what a checked
+    // command connects with.
     expect(target("postgres://appuser:s3cr3t@db.internal/shop", "mysql")).toBe(
-      "PostgreSQL db.internal:5432/shop"
+      "MySQL db.internal:3306/shop"
     );
   });
 
@@ -86,8 +87,9 @@ describe("the database a command names", () => {
       dialect: "sqlite",
       folder: FOLDER,
     });
-    expect(phrase(read)).toBe("PostgreSQL localhost:5432/shop");
-    // DB_DIALECT and the URL disagree: a site reads one, the CLI the other.
+    expect(phrase(read)).toBe("SQLite (address not readable)");
+    // DB_DIALECT and the URL disagree: a command that skips the settings
+    // check would open the URL's own dialect, so neither reading is trusted.
     expect(read.place).toBe("live");
     for (const secret of SECRETS) expect(phrase(read)).not.toContain(secret);
   });
