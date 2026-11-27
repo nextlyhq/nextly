@@ -215,7 +215,10 @@ async function trashed(t: TestNextly, id: string) {
 
 /** An enabled endpoint taking every entry event, its secret kept as given. */
 async function endpoint(t: TestNextly): Promise<void> {
-  const now = new Date();
+  // Made a moment before the events it is sent: an endpoint receives only
+  // events from after it was made, and MySQL rounds the time it stores up to
+  // the second, past an event made in the same second.
+  const now = new Date(Date.now() - 5000);
   await t.adapter.insert("nextly_webhooks", {
     id: "trashref-hook",
     name: "trashref-hook",
@@ -249,9 +252,12 @@ async function delivered(t: TestNextly): Promise<WebhookEvent[]> {
         return new Response("ok", { status: 200 });
       },
       decryptSecret: ciphertext => ciphertext,
-      // A moment ahead: MySQL keeps a delivery's due time to the second,
-      // rounding it up, so a delivery made this second is due by the next.
-      now: () => new Date(Date.now() + 2000),
+      // A whole second, a moment ahead: MySQL keeps a time to the second,
+      // rounding it up, so a due time the drain writes from a clock with
+      // milliseconds lands after that clock and is not due on this pass. A
+      // whole-second clock is stored as it is, and two seconds ahead covers
+      // an event's time rounded up at its write.
+      now: () => new Date(Math.floor(Date.now() / 1000) * 1000 + 2000),
     }
   );
   return bodies;
