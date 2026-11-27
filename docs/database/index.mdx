@@ -1,6 +1,6 @@
 ---
 title: Database
-description: Choose and configure a database for your Nextly application. PostgreSQL is the recommended production database; MySQL is supported; SQLite is for local demos only.
+description: Choose and configure a database for your Nextly application. PostgreSQL is the recommended production database; MySQL is supported; SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
@@ -13,13 +13,13 @@ Nextly stores data through a small set of dialect-specific adapter packages buil
 |----------|---------|--------|------------|
 | [PostgreSQL](/docs/database/postgres) | `@nextlyhq/adapter-postgres` | `pg` | **Recommended for production.** Full feature set: JSONB, arrays, full-text search, ILIKE, savepoints, RETURNING. |
 | [MySQL](/docs/database/mysql) | `@nextlyhq/adapter-mysql` | `mysql2` | Supported. Use it when you already run MySQL or a MySQL-compatible cloud database. Some features are emulated -- see the page. |
-| [SQLite](/docs/database/sqlite) | `@nextlyhq/adapter-sqlite` | `better-sqlite3` | **Local demos only.** Single-writer, file-based, no SSL. Not recommended for serious local development -- run Postgres in Docker instead. |
+| [SQLite](/docs/database/sqlite) | `@nextlyhq/adapter-sqlite` | `better-sqlite3` | **Great on your own machine and on a single server; on Vercel, choose PostgreSQL.** One file beside your app: one writer at a time, no SSL, no network access. |
 
 For minimum versions, cloud-provider compatibility, and the policy on MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess), see [database support](/docs/database/support).
 
 ## Quick recommendation
 
-> **Use PostgreSQL.** It is the recommended production database, the only adapter with the full feature set, and the easiest to run locally with Docker (see [Local development with Docker](/docs/database/postgres#local-development-with-docker)). Pick MySQL only if you already run it. Pick SQLite only for one-off local demos.
+> **Use PostgreSQL.** It is the recommended production database, the only adapter with the full feature set, and the easiest to run locally with Docker (see [Local development with Docker](/docs/database/postgres#local-development-with-docker)). Pick MySQL only if you already run it. SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.
 
 ## Installation
 
@@ -35,7 +35,7 @@ pnpm add @nextlyhq/adapter-postgres pg
 # MySQL
 pnpm add @nextlyhq/adapter-mysql mysql2
 
-# SQLite (local demos only)
+# SQLite (your own machine or a single server)
 pnpm add @nextlyhq/adapter-sqlite better-sqlite3
 ```
 
@@ -49,7 +49,7 @@ npm install @nextlyhq/adapter-postgres pg
 # MySQL
 npm install @nextlyhq/adapter-mysql mysql2
 
-# SQLite (local demos only)
+# SQLite (your own machine or a single server)
 npm install @nextlyhq/adapter-sqlite better-sqlite3
 ```
 
@@ -63,7 +63,7 @@ yarn add @nextlyhq/adapter-postgres pg
 # MySQL
 yarn add @nextlyhq/adapter-mysql mysql2
 
-# SQLite (local demos only)
+# SQLite (your own machine or a single server)
 yarn add @nextlyhq/adapter-sqlite better-sqlite3
 ```
 
@@ -77,7 +77,7 @@ bun add @nextlyhq/adapter-postgres pg
 # MySQL
 bun add @nextlyhq/adapter-mysql mysql2
 
-# SQLite (local demos only)
+# SQLite (your own machine or a single server)
 bun add @nextlyhq/adapter-sqlite better-sqlite3
 ```
 
@@ -104,7 +104,7 @@ DB_DIALECT=mysql
 DATABASE_URL=mysql://nextly:nextly@localhost:3306/nextly_dev
 ```
 
-```bash title=".env (SQLite, local demo only)"
+```bash title=".env (SQLite)"
 DB_DIALECT=sqlite
 DATABASE_URL=file:./data/nextly.db
 ```
@@ -161,7 +161,7 @@ All four are for text columns. Matching through `LOWER()` cannot use an ordinary
 
 - [PostgreSQL setup](/docs/database/postgres) -- recommended for production
 - [MySQL setup](/docs/database/mysql) -- supported with caveats
-- [SQLite setup](/docs/database/sqlite) -- local demos only
+- [SQLite setup](/docs/database/sqlite) -- great on your own machine and on a single server; on Vercel, choose PostgreSQL
 - [Database support](/docs/database/support) -- minimum versions, cloud providers, MySQL variant policy
 - [Repair old columns](/docs/database/repair-columns) -- columns an earlier release made with another type
 - [Environment variables](/docs/configuration/environment) -- canonical env var reference
