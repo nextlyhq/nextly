@@ -180,7 +180,7 @@ budget, the overrides and each operating system's caveats: the
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-accounts`, `plugin-commerce`, `plugin-form-builder`, `plugin-mcp`, `plugin-page-builder`,
   `plugin-seo`,
-  `plugin-sdk`,
+  `plugin-sdk`, `mcp`,
   `blocks-engine`, `blocks-react`, `builder`,
   `create-nextly-app`, `eslint-config`, `eslint-plugin`, `module-specifiers`,
   `prettier-config`, `tsconfig`,

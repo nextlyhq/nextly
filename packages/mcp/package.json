@@ -1,0 +1,72 @@
+{
+  "name": "@nextlyhq/mcp",
+  "version": "0.0.2-alpha.81",
+  "private": true,
+  "description": "Experimental: turns the Nextly operations marked for agents into Model Context Protocol tools, with readable answers, hints from each operation's risk level and a checked tool list",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0"
+  },
+  "peerDependencies": {
+    "nextly": "0.0.2-alpha.81"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "@types/node": "^22.20.5",
+    "nextly": "workspace:*",
+    "tsdown": "^0.23.1",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.5",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": "^22.12.0 || >=24.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "cms",
+    "headless-cms"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/mcp"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "homepage": "https://nextlyhq.com",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "author": "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)"
+}

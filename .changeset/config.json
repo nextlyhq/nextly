@@ -27,6 +27,7 @@
       "@nextlyhq/plugin-commerce",
       "@nextlyhq/plugin-form-builder",
       "@nextlyhq/plugin-mcp",
+      "@nextlyhq/mcp",
       "@nextlyhq/plugin-page-builder",
       "@nextlyhq/plugin-seo",
       "@nextlyhq/plugin-sdk",
