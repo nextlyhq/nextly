@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { ComponentType, JSX } from "react";
 
 import {
   Discord,
@@ -72,7 +72,10 @@ interface UserProfileDropdownProps {
  * the ids a plugin hides them by) are the admin's one list, which the command
  * palette reads too.
  */
-const HELP_LINK_ICONS: Record<HelpLink["id"], typeof HelpCircle> = {
+const HELP_LINK_ICONS: Record<
+  HelpLink["id"],
+  ComponentType<{ className?: string; "aria-hidden"?: "true" }>
+> = {
   docs: HelpCircle,
   github: Github,
   discord: Discord,
