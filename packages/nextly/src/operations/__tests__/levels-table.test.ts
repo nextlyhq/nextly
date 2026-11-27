@@ -190,7 +190,8 @@ describe("the levels table on operations whose risk depends on the run", () => {
   });
 
   it('reports a security setting whose rule lost its refusal of "Always allow"', async () => {
-    const [rule] = settingsSetLike.raise;
+    const rule = settingsSetLike.raise?.[0];
+    if (!rule) throw new Error("the settings fixture has no raise rule");
     const list = await assembleOperationList({
       core: [
         { ...settingsSetLike, raise: [{ ...rule, alwaysAllow: undefined }] },
