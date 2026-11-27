@@ -29,6 +29,16 @@
  * The fingerprint is stored last, so a start interrupted part-way runs the
  * whole catch-up again.
  *
+ * A run may be stopped part-way, between one page and the next, and resumed
+ * by the next: each page's change commits on a transaction of its own, so
+ * what a stopped run did stands in the record, and the next run, reading the
+ * record afresh, finds those pages already where they belong and moves only
+ * the rest. A request that cannot answer without the record runs the catch-up
+ * itself, awaited and stopped by its own deadline
+ * (`addressRecordReadyWithin`): on a serverless platform a function is frozen
+ * once it has answered, and work it did not wait for is frozen with it, a
+ * transaction open at that moment ended by the database before it runs again.
+ *
  * Saves go on while it runs, so what it read can be overtaken. Each page's
  * record is changed only where it still says what the catch-up read, checked
  * under the page's own lock on the transaction that changes it: a save that
@@ -85,6 +95,11 @@ export interface LostAddress {
 export interface CatchUpReport {
   /** Whether it ran, rather than finding the record current. */
   ran: boolean;
+  /**
+   * Whether the record is up to date once it is done: false where it failed,
+   * or stopped part-way for the next run to go on with.
+   */
+  finished: boolean;
   /** How many pages claimed addresses they newly hold. */
   recorded: number;
   lost: LostAddress[];
@@ -102,7 +117,21 @@ const SITE_TYPES_KEY = noteKey("site-types");
 /** How many rows or pages one read takes. */
 const PAGE = 200;
 
-const NOTHING: CatchUpReport = { ran: false, recorded: 0, lost: [] };
+/** A run that found the record current. */
+const NOTHING: CatchUpReport = {
+  ran: false,
+  finished: true,
+  recorded: 0,
+  lost: [],
+};
+
+/** A run that failed. */
+const FAILED: CatchUpReport = {
+  ran: false,
+  finished: false,
+  recorded: 0,
+  lost: [],
+};
 
 /**
  * The bounds each transaction a catch-up opens is given
@@ -118,56 +147,92 @@ export const CATCH_UP_TRANSACTION_BOUNDS: Readonly<PluginTransactionBounds> = {
 };
 
 /**
- * How old the last failure must be before a request tries the catch-up
- * again (`retryFailedCatchUp`).
+ * How old a failed catch-up's start must be before a request tries the
+ * catch-up again (`addressRecordReadyWithin`). Counted from its start, not
+ * its failure: a run frozen with a transaction open fails only once its
+ * function runs again, long after it started, and is tried again at once;
+ * one failing at its first statement, as on a database that is down, is not
+ * tried again by every request that comes meanwhile.
  */
 export const RETRY_FAILED_AFTER_MS = 10_000;
 
-/** The last catch-up started, and the context it ran with. */
-let started: { ctx: PluginContext; run: Promise<CatchUpReport> } | undefined;
+/**
+ * How long a request that cannot answer without the record waits for it
+ * (`addressRecordReadyWithin`), running the catch-up itself where it is
+ * behind. A server just started finds the stored fingerprint current in a
+ * read or two; a real catch-up still going past this is answered "come
+ * back", or from a copy kept before.
+ */
+export const RECORD_WAIT_MS = 5000;
+
+/** A catch-up started, the context it runs with, and how it is going. */
+interface StartedRun {
+  ctx: PluginContext;
+  run: Promise<CatchUpReport>;
+  /** When it started, by the clock. */
+  at: number;
+  /**
+   * When it stops, part-way, at the next page: a request's deadline for the
+   * run that request runs; never for one started at a start.
+   */
+  stopAt: number;
+  /** Whether it has settled. */
+  settled: boolean;
+}
+
+/** The last catch-up started. */
+let started: StartedRun | undefined;
+
+/** Start a catch-up as `startCatchUp` and `catchUp` do. */
+function begin(
+  ctx: PluginContext,
+  options: CatchUpOptions = {},
+  stopAt = Number.POSITIVE_INFINITY
+): Promise<CatchUpReport> {
+  const run: StartedRun = {
+    ctx,
+    run: Promise.resolve(NOTHING),
+    at: Date.now(),
+    stopAt,
+    settled: false,
+  };
+  started = run;
+  run.run = caughtUp(run, options);
+  return run.run;
+}
 
 /**
  * Start a catch-up for the SEO plugin's context `ctx`, not awaited by the
  * caller: it waits for the boot to finish, and logs rather than throws.
  */
 export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
-  const run = caughtUp(ctx);
-  started = { ctx, run };
-  return run;
+  return begin(ctx);
 }
 
 /** How many catch-ups are under way. */
 let running = 0;
-/** Whether the last catch-up to finish failed, leaving the record behind. */
-let failed = false;
-/** When the last catch-up to fail failed, by the clock. */
-let failedAt = 0;
-/** Whether a retry is starting: set before it awaits anything, so a second request starts none. */
-let retrying = false;
+/**
+ * Where the last catch-up to finish left the record behind: it failed, or
+ * it stopped part-way (`unfinished`); when it started, by the clock.
+ */
+let behind: { why: "failed" | "unfinished"; startedAt: number } | undefined;
 
 /**
  * Whether the record says what each page holds: no catch-up is under way,
- * and the last one to finish succeeded. An output that lists addresses from
- * the record answers as not ready otherwise.
+ * and the last one to finish brought the record up to date. An output that
+ * lists addresses from the record answers as not ready otherwise.
  */
 export function addressRecordReady(): boolean {
-  return running === 0 && !failed;
+  return running === 0 && behind === undefined;
 }
 
-/**
- * Start the catch-up again, not awaited, where the last one failed, none is
- * under way, and the failure is `RETRY_FAILED_AFTER_MS` old: a failure from a
- * passing cause is not left in place until the next start, and while the
- * cause is still there the requests that find the record not ready do not
- * each start a catch-up of their own, every one taking a connection.
- */
-export function retryFailedCatchUp(): void {
-  if (!failed || running > 0 || retrying || started === undefined) return;
-  if (Date.now() - failedAt < RETRY_FAILED_AFTER_MS) return;
-  retrying = true;
-  void catchUp().finally(() => {
-    retrying = false;
-  });
+/** Whether the record is behind and a request may run the catch-up again. */
+function nextRunDue(): boolean {
+  if (behind === undefined) return false;
+  return (
+    behind.why === "unfinished" ||
+    Date.now() - behind.startedAt >= RETRY_FAILED_AFTER_MS
+  );
 }
 
 /** The last catch-up started, to wait for. */
@@ -176,27 +241,34 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
 }
 
 /**
- * Whether the record is ready within `ms`: it waits for the catch-up under
- * way, and for one started again meanwhile, but never past `ms`, and not at
- * all where the last one to finish failed. For an answer that cannot be
- * given without the record, on a server that has only just started.
+ * Whether the record is ready within `ms`, for an answer that cannot be
+ * given without it. It waits, never past `ms`, for the catch-up under way,
+ * as on a server that has only just started, where the start's run finds the
+ * stored fingerprint current with a read or two. Where the record is behind,
+ * it runs the catch-up itself, awaited, stopped part-way once `ms` is up:
+ * a run that failed, once its start is `RETRY_FAILED_AFTER_MS` old, and one
+ * that stopped part-way, at once, going on from what that one left. A run it
+ * waits for but did not start is never stopped: it may be a long-running
+ * server's whole catch-up. One it started has settled when it answers, so
+ * no transaction of the catch-up is left open when the answer is sent.
  */
 export async function addressRecordReadyWithin(ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
-  let waited: Promise<CatchUpReport> | undefined;
-  while (!addressRecordReady()) {
-    const run = lastCatchUp();
-    const left = deadline - Date.now();
-    // None under way to wait for (the last one failed and none is retrying),
-    // or only the one already waited for, which has settled while another
-    // started beside it is still running: the record is not ready in time.
-    if (run === undefined || run === waited || left <= 0 || running === 0) {
-      return false;
+  for (;;) {
+    if (addressRecordReady()) return true;
+    const last = started;
+    // Never started, so nothing to wait for or run with.
+    if (last === undefined) return false;
+    if (!last.settled) {
+      const left = deadline - Date.now();
+      if (left <= 0 || !(await settlesWithin(last.run, left))) return false;
+      continue;
     }
-    if (!(await settlesWithin(run, left))) return false;
-    waited = run;
+    // Settled and still not ready: behind, and run again only where due
+    // and while the wait lasts.
+    if (!nextRunDue() || Date.now() >= deadline) return false;
+    await begin(last.ctx, {}, deadline);
   }
-  return true;
 }
 
 /** Whether `run` settles within `ms`, the timer cleared either way. */
@@ -238,6 +310,12 @@ interface CatchUpOptions {
    * read to be trusted (`earlierWritesSince`); the module's own where unset.
    */
   settleMs?: number;
+  /**
+   * Whether the run stops before its next step, unfinished: asked before
+   * each listing read after the first and before each page's change. Where
+   * unset, once the run's deadline has passed.
+   */
+  stopNow?: () => boolean;
 }
 
 /**
@@ -264,40 +342,43 @@ export async function catchUp(
     });
   }
   await started.run;
-  const run = caughtUp(started.ctx, options);
-  started = { ctx: started.ctx, run };
-  return run;
+  return begin(started.ctx, options);
 }
 
 async function caughtUp(
-  ctx: PluginContext,
-  options: CatchUpOptions = {}
+  run: StartedRun,
+  options: CatchUpOptions
 ): Promise<CatchUpReport> {
+  const { ctx } = run;
+  const stopNow = options.stopNow ?? (() => Date.now() >= run.stopAt);
   running += 1;
   try {
-    // Every transaction it opens bounded by the database: it runs unawaited,
-    // so on a serverless platform its function may be frozen with one open,
-    // and every save of a page and every other catch-up would otherwise wait
-    // on that transaction's lock rows until the function ran again.
+    // Every transaction it opens bounded by the database: a run started at a
+    // start is not awaited, so on a serverless platform its function may be
+    // frozen with one open, and every save of a page and every other
+    // catch-up would otherwise wait on that transaction's lock rows until
+    // the function ran again.
     const report = await ctx.db.withTransactionBounds(
       CATCH_UP_TRANSACTION_BOUNDS,
       async () => {
-        const done = await runCatchUp(ctx, options);
+        const done = await runCatchUp(ctx, options, stopNow);
         if (done.lost.length > 0) await problemsOutOfDate(ctx);
         return done;
       }
     );
-    failed = false;
+    behind = report.finished
+      ? undefined
+      : { why: "unfinished", startedAt: run.at };
     return report;
   } catch (error) {
-    failed = true;
-    failedAt = Date.now();
+    behind = { why: "failed", startedAt: run.at };
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });
-    return NOTHING;
+    return FAILED;
   } finally {
     running -= 1;
+    run.settled = true;
   }
 }
 
@@ -347,18 +428,27 @@ async function storedGate(ctx: PluginContext): Promise<{
   };
 }
 
+/** Whether the run is to stop before its next step, unfinished. */
+type StopNow = () => boolean;
+
+/** What a step answers where the run stopped before it was done. */
+const STOPPED = "stopped";
+
 /**
  * Every page of every site type, oldest first across all of them, by when
  * each was made; pages made at the same moment keep the order listed.
+ * `STOPPED` where the run stops between two reads.
  */
 async function everyPage(
   ctx: PluginContext,
-  options: CatchUpOptions
-): Promise<HeldDocument[]> {
+  options: CatchUpOptions,
+  stopNow: StopNow
+): Promise<HeldDocument[] | typeof STOPPED> {
   const updates: HeldDocument[] = [];
   for (const type of await ctx.publicAddresses.types()) {
     let after: string | undefined;
     do {
+      if (after !== undefined && stopNow()) return STOPPED;
       const page = await ctx.publicAddresses.held({
         type,
         after,
@@ -478,14 +568,17 @@ function heldBefore(
 
 /**
  * Pass 1: every page keeps what it held and still holds, and lets go of the
- * rest; answers what each page kept.
+ * rest; answers what each page kept, or `STOPPED` where the run stops before
+ * a page's change. The pages changed before it stand, and the next run finds
+ * them keeping what they hold.
  */
 async function keepWhatStands(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
   was: ReadonlyMap<string, { holds: HeldAddress[] }>,
-  expected: Expected
-): Promise<Map<string, HeldAddress[]>> {
+  expected: Expected,
+  stopNow: StopNow
+): Promise<Map<string, HeldAddress[]> | typeof STOPPED> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
     const key = holderKey(page.holder);
@@ -496,6 +589,7 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
+      if (stopNow()) return STOPPED;
       // The route has moved with the deploy: each address let go of is kept
       // on the same transaction, owed a redirect to the page's new one once
       // every claim stands.
@@ -576,17 +670,20 @@ async function entryIsGone(
  * A page that no longer exists lets go of everything: one of a site type
  * found gone, and any of a type that was the site's at the last run and is
  * not now, removed or pruned. A holder of any other type (a plugin's own
- * page) is that plugin's to judge.
+ * page) is that plugin's to judge. Answers false where the run stops
+ * before a page's change.
  */
 async function letGoOfTheGone(
   ctx: PluginContext,
   was: ReadonlyMap<string, { holder: AddressHolder }>,
   kept: ReadonlyMap<string, unknown>,
   expected: Expected,
-  types: { now: ReadonlySet<string>; before: ReadonlySet<string> }
-): Promise<void> {
+  types: { now: ReadonlySet<string>; before: ReadonlySet<string> },
+  stopNow: StopNow
+): Promise<boolean> {
   for (const [key, entry] of was) {
     if (kept.has(key)) continue;
+    if (stopNow()) return false;
     const { collection } = entry.holder;
     const removed = types.before.has(collection) && !types.now.has(collection);
     const gone =
@@ -596,20 +693,32 @@ async function letGoOfTheGone(
       await moveIfCurrent(ctx, { holder: entry.holder, holds: [] }, expected);
     }
   }
+  return true;
 }
 
-/** Pass 2: every page claims what it newly holds, oldest first. */
+/**
+ * Pass 2: every page claims what it newly holds, oldest first; `finished`
+ * false where the run stops before a page's claim. The claims made before it
+ * stand, and the next run, oldest first again, finds those pages holding
+ * what they claimed and goes on with the rest.
+ */
 async function claimTheNew(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
   kept: ReadonlyMap<string, HeldAddress[]>,
-  expected: Expected
-): Promise<{ recorded: number; lost: LostAddress[] }> {
+  expected: Expected,
+  stopNow: StopNow
+): Promise<{ recorded: number; lost: LostAddress[]; finished: boolean }> {
   let recorded = 0;
+  let finished = true;
   const lost: LostAddress[] = [];
   for (const page of pages) {
     const keep = kept.get(holderKey(page.holder)) ?? [];
     if (page.holds.length === keep.length) continue;
+    if (stopNow()) {
+      finished = false;
+      break;
+    }
     if (await claim(ctx, page, expected, lost)) recorded += 1;
   }
   for (const each of lost) {
@@ -618,15 +727,19 @@ async function claimTheNew(
       { address: each.address, page: each.holder, heldBy: each.heldBy }
     );
   }
-  return { recorded, lost };
+  return { recorded, lost, finished };
 }
 
 /**
  * Make the redirects every page's move owes, this start's and any an earlier
  * start left owing, each to where the record says the page is now. Each
- * owed move is forgotten once its redirect is made or refused.
+ * owed move is forgotten once its redirect is made or refused. Answers false
+ * where the run stops before one, which stays owed for the next run.
  */
-async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
+async function redirectOwedMoves(
+  ctx: PluginContext,
+  stopNow: StopNow
+): Promise<boolean> {
   const owed = new Map<string, PendingMove[]>();
   for (const move of await pendingMoves(ctx)) {
     const key = holderKey(move.holder);
@@ -635,6 +748,7 @@ async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
   for (const moves of owed.values()) {
     const [first] = moves;
     if (first === undefined) continue;
+    if (stopNow()) return false;
     await redirectDeployMove(
       ctx,
       first.holder,
@@ -646,11 +760,18 @@ async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
       moves.map(move => move.key)
     );
   }
+  return true;
 }
 
+/**
+ * One run of the catch-up. Where `stopNow` says so before a step, it stops
+ * there, unfinished, and stores no fingerprint: what it changed stands, and
+ * the next run, finding the stored notes still behind, goes on from it.
+ */
 async function runCatchUp(
   ctx: PluginContext,
-  options: CatchUpOptions
+  options: CatchUpOptions,
+  stopNow: StopNow
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
   // Skipped on its inputs alone, never on what the record holds: a site none
@@ -668,17 +789,24 @@ async function runCatchUp(
   if (earlier !== undefined) await beginTakingIn(ctx, earlier);
   const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
-  const pages = await everyPage(ctx, options);
+  const pages = await everyPage(ctx, options, stopNow);
+  if (pages === STOPPED) return unfinished(0, []);
   await options.afterListing?.();
   const was = heldBefore(held);
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
-  const kept = await keepWhatStands(ctx, pages, was, expected);
-  await letGoOfTheGone(ctx, was, kept, expected, {
-    now: new Set(siteTypes),
-    before: typesIn(stored.siteTypes),
-  });
+  const kept = await keepWhatStands(ctx, pages, was, expected, stopNow);
+  if (kept === STOPPED) return unfinished(0, []);
+  const letGo = await letGoOfTheGone(
+    ctx,
+    was,
+    kept,
+    expected,
+    { now: new Set(siteTypes), before: typesIn(stored.siteTypes) },
+    stopNow
+  );
+  if (!letGo) return unfinished(0, []);
   // The redirects that process saved or removed, once every page has let go
   // of what it no longer holds: a redirect from a page's old address claims
   // it only after the page lets it go.
@@ -687,8 +815,17 @@ async function runCatchUp(
       ? { settled: true }
       : await reclaimRedirectAddresses(ctx);
   await options.afterReleases?.();
-  const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
-  await redirectOwedMoves(ctx);
+  const { recorded, lost, finished } = await claimTheNew(
+    ctx,
+    pages,
+    kept,
+    expected,
+    stopNow
+  );
+  if (!finished) return unfinished(recorded, lost);
+  if (!(await redirectOwedMoves(ctx, stopNow))) {
+    return unfinished(recorded, lost);
+  }
   await storeNote(
     ctx,
     stored.siteTypes,
@@ -703,7 +840,12 @@ async function runCatchUp(
   if (earlier !== undefined && redirects.settled) {
     await keepEarlierShape(ctx, earlier);
   }
-  return { ran: true, recorded, lost };
+  return { ran: true, finished: true, recorded, lost };
+}
+
+/** The report of a run that stopped part-way. */
+function unfinished(recorded: number, lost: LostAddress[]): CatchUpReport {
+  return { ran: true, finished: false, recorded, lost };
 }
 
 /**

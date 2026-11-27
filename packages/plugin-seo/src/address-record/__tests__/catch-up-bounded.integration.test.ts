@@ -16,6 +16,11 @@
  *   locked goes through; the catch-up, when it runs again, fails and is
  *   tried again, and the process carries on.
  *
+ * - On a serverless platform, where a function runs only while it answers a
+ *   request, a catch-up frozen mid-transaction is not left failing for ever:
+ *   the request that next needs the record runs the catch-up itself,
+ *   awaited, and the sitemap answers.
+ *
  * On SQLite and MySQL the catch-up's transactions are opened as before.
  */
 process.env.NEXTLY_SECRET =
@@ -30,6 +35,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
+import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -150,6 +156,30 @@ async function forgetAddresses(): Promise<void> {
   await forgetNote("fingerprint");
 }
 
+/** The sitemap, as the site's rewrite reaches the API handler with it. */
+async function sitemap(): Promise<{ status: number; body: string }> {
+  const response = await createDynamicHandlers().GET(
+    new Request("http://localhost/admin/api/sitemap.xml"),
+    { params: Promise.resolve({ params: ["sitemap.xml"] }) }
+  );
+  return { status: response.status, body: await response.text() };
+}
+
+/**
+ * The process frozen once it has answered, as a serverless platform freezes
+ * a function, until its next request, longer than a catch-up transaction
+ * may idle: a catch-up statement inside a transaction is held for the whole
+ * time, so the database ends that transaction meanwhile. A catch-up with
+ * nothing under way is not touched.
+ */
+async function frozenUntilNextRequest(dialect: TestDialect): Promise<void> {
+  const freeze = holdNextStatement(dialect, /for share/i);
+  await sleep((CATCH_UP_TRANSACTION_BOUNDS.idleMs ?? 0) + 1500);
+  // Released whether or not a statement was held: one sent later goes
+  // straight through.
+  freeze.release();
+}
+
 const postgres = getConfiguredTestDialects().filter(
   dialect => dialect === "postgresql"
 );
@@ -237,6 +267,45 @@ describe.each(postgres)(
       expect((await catchUp()).ran).toBe(true);
       expect(addressRecordReady()).toBe(true);
     }, 60_000);
+
+    it("finishes, on a host that runs only while it answers, once a request needs the record, and the sitemap answers", async () => {
+      const t = await boot(dialect);
+      const page = await publish(t, "hello");
+      await forgetAddresses();
+
+      // The start's catch-up, frozen once its claim's transaction is open
+      // and run again past the idle bound: it fails, as on a deployment just
+      // migrated.
+      let freeze: ReturnType<typeof holdNextStatement> | undefined;
+      const run = catchUp({
+        afterReleases: async () => {
+          freeze = holdNextStatement(dialect, /for share/i);
+        },
+      });
+      for (let waited = 0; freeze === undefined && waited < 10_000; ) {
+        await sleep(50);
+        waited += 50;
+      }
+      if (freeze === undefined) throw new Error("the catch-up never froze");
+      await freeze.reached;
+      await sleep((CATCH_UP_TRANSACTION_BOUNDS.idleMs ?? 0) + 1500);
+      freeze.release();
+      expect((await run).ran).toBe(false);
+      expect(addressRecordReady()).toBe(false);
+
+      // Requests, the process frozen between each and the next.
+      const answers: number[] = [];
+      for (let request = 0; request < 3; request += 1) {
+        const answer = await sitemap();
+        answers.push(answer.status);
+        if (answer.status === 200) break;
+        await frozenUntilNextRequest(dialect);
+      }
+      expect(answers.at(-1)).toBe(200);
+      expect(addressRecordReady()).toBe(true);
+      expect(Object.values(await recordedRows())).toContain(`pages:${page}`);
+      expect((await sitemap()).body).toContain("/hello</loc>");
+    }, 90_000);
   }
 );
 
