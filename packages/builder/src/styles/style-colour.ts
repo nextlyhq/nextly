@@ -641,14 +641,16 @@ function nameRank(
 
 /**
  * The colour variables a colour box suggests for what is typed in it, best
- * first: those holding the colour the text is (a hex code, `rgb()`, a colour
- * word), in light or dark, then those whose name it matches, ignoring case,
- * spaces and hyphens.
+ * first: those holding the colour the text is (a hex code or `rgb()`), in
+ * light or dark, then those whose name it matches, ignoring case, spaces and
+ * hyphens.
  *
  * The one answer to "which variable does this text mean", for the list under
  * a typed box and for the picker's search alike. The colour is read by
- * {@link colourHexOf}, the engine's reading, so a value matches here exactly
- * when the box would store it as that colour.
+ * {@link colourHexOf}, the engine's reading, which has no table of the CSS
+ * colour words: "red" matches a variable by its name only, never one holding
+ * #ff0000 under another name, as the contrast readout gives no figure for a
+ * word it cannot read either.
  *
  * A whole name is `exact` only where no other variable shares it, for the
  * reason `tokenForTypedName` gives: connecting one of two would store an

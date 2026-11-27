@@ -108,6 +108,19 @@ function steppedHighlight(index: number, step: 1 | -1, count: number): number {
 }
 
 /**
+ * The step an arrow moves the highlight by, or `undefined` for any other key.
+ * An arrow held with a modifier is the box's own, selecting or moving through
+ * the text (Shift, Ctrl, Cmd, Alt), so it moves nothing in the list.
+ */
+function arrowStep(event: React.KeyboardEvent): 1 | -1 | undefined {
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) {
+    return undefined;
+  }
+  if (event.key === "ArrowDown") return 1;
+  return event.key === "ArrowUp" ? -1 : undefined;
+}
+
+/**
  * The list's answer to a key. While it is open the arrows move the highlight
  * rather than step the value, Enter takes the highlighted entry, and Escape
  * closes the list before it puts the old text back. While it is closed, the
@@ -115,14 +128,15 @@ function steppedHighlight(index: number, step: 1 | -1, count: number): number {
  * stays closed until the author types again.
  */
 function listKeyAction(
-  key: string,
+  event: React.KeyboardEvent,
   open: boolean,
   index: number,
   matches: readonly TypedColourMatch[]
 ): ListKeyAction {
+  const { key } = event;
   if (!open) return key === "Escape" ? { kind: "forget" } : { kind: "pass" };
-  if (key === "ArrowDown" || key === "ArrowUp") {
-    const step = key === "ArrowDown" ? 1 : -1;
+  const step = arrowStep(event);
+  if (step !== undefined) {
     return {
       kind: "move",
       index: steppedHighlight(index, step, matches.length),
@@ -200,7 +214,7 @@ export function TypedColourSuggestions({
   // Caught before the box's own keys, which the list's own keys replace.
   const onKeyDownCapture = (event: React.KeyboardEvent): void => {
     if (composing(event)) return;
-    const action = listKeyAction(event.key, open, index, matches);
+    const action = listKeyAction(event, open, index, matches);
     if (action.kind === "pass") return;
     if (action.kind === "forget") {
       setTyped(false);
@@ -238,6 +252,10 @@ export function TypedColourSuggestions({
             // Escape closed the list for the text it was pressed on; any edit
             // after it offers the list again, even back to the same text.
             setDismissedAt(null);
+            // Each edit starts from the top entry: an arrow's highlight kept
+            // for text typed again later would make Enter take an entry the
+            // author no longer sees as the default.
+            setMoved(undefined);
           }}
           onKeyDownCapture={onKeyDownCapture}
         >

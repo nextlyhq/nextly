@@ -44,14 +44,19 @@ function refusalWords(refused: TypedRefusal): string {
  * name, said in the box's own words until the box is written another way.
  * `refusalId` names the line saying so, and is `undefined` while there is none,
  * so the box is described by it only while it shows.
+ *
+ * A refusal belongs to the text it was given for, `draft` being the text the
+ * box holds now: once other text replaces it (an undo, a Reset, typing), the
+ * box no longer holds what was refused, and says nothing about it.
  */
-export function useTypedRefusal(): {
+export function useTypedRefusal(draft: string): {
   refused: TypedRefusal | undefined;
   setRefused: (refused: TypedRefusal | undefined) => void;
   refusalId: string | undefined;
 } {
   const id = React.useId();
-  const [refused, setRefused] = React.useState<TypedRefusal>();
+  const [given, setRefused] = React.useState<TypedRefusal>();
+  const refused = given?.text === draft.trim() ? given : undefined;
   return {
     refused,
     setRefused,
@@ -85,6 +90,8 @@ export function TypedRefusalLine({
  * A suggestion taken from the list under the box: its variable connected, as
  * a reference by identity, and focus moved to the trigger that names it now,
  * since the box gives way to that trigger rather than falling to the page.
+ * A write refused (a locked design, a page at its size limit) leaves focus in
+ * the box, which stays with its text, and the write's own refusal beside it.
  */
 export function connectSuggestion(
   variable: SiteVariable,
@@ -102,7 +109,7 @@ export function connectSuggestion(
     live: LiveDraft;
     commitColour: (value: StyleValue | null) => CommitOutcome;
     /** The write every other way of setting the value makes. */
-    commitInstead: (value: StyleValue | null) => void;
+    commitInstead: (value: StyleValue | null) => CommitOutcome;
     clearRefusal: () => void;
   }
 ): void {
@@ -110,13 +117,15 @@ export function connectSuggestion(
     .getElementById(fieldId)
     ?.closest<HTMLElement>(".nx-style-inspector__colour");
   const token = { $token: variable.identity };
+  let outcome: CommitOutcome;
   if (typesLive) {
     // In the edit's own run of typing, so a hex written as it was typed and
     // the variable chosen for it are one step of undo.
     clearRefusal();
-    live.join(() => commitColour(token));
+    outcome = live.join(() => commitColour(token));
     live.end();
-  } else commitInstead(token);
+  } else outcome = commitInstead(token);
+  if (outcome === "refused") return;
   focusAfterUnlink(() =>
     row?.querySelector<HTMLElement>(".nx-style-inspector__colour-pick")
   );

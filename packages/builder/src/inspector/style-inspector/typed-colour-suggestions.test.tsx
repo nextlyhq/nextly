@@ -9,10 +9,12 @@
 import {
   BASE_BREAKPOINT,
   clearBlocks,
+  DEFAULT_LIMITS,
   findNode,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type DocumentLimits,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -55,6 +57,7 @@ afterAll(clearBlocks);
 
 beforeEach(() => {
   siteTokens = TOKENS;
+  siteLimits = undefined;
   clearBlocks();
   registerBlocks(
     [
@@ -127,6 +130,8 @@ const PAGE: BlockDocument = {
 let editorRef: EditorState | null = null;
 /** The site's variables a test runs with: {@link TOKENS} unless it says. */
 let siteTokens: SiteTokenSet = TOKENS;
+/** The caps the page is held to: the editor's own unless a test says. */
+let siteLimits: DocumentLimits | undefined;
 
 function editor(): EditorState {
   if (editorRef === null) throw new Error("no editor rendered");
@@ -134,7 +139,10 @@ function editor(): EditorState {
 }
 
 function Host(): React.JSX.Element {
-  const state = useEditorState({ initialDocument: PAGE });
+  const state = useEditorState({
+    initialDocument: PAGE,
+    ...(siteLimits === undefined ? {} : { limits: siteLimits }),
+  });
   editorRef = state;
   return <InspectorPanel editor={state} tokens={siteTokens} />;
 }
@@ -469,5 +477,65 @@ describe("a colour box's list, over a longer edit", () => {
     } finally {
       scrolled.mockRestore();
     }
+  });
+
+  it("leaves modified arrows to the box, for selecting and moving through the text", () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    const first = box.getAttribute("aria-activedescendant");
+    for (const chord of [
+      { shiftKey: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { altKey: true },
+    ]) {
+      // Not prevented: the box extends its selection or moves its caret.
+      expect(fireEvent.keyDown(box, { key: "ArrowDown", ...chord })).toBe(true);
+      expect(fireEvent.keyDown(box, { key: "ArrowUp", ...chord })).toBe(true);
+    }
+    expect(box.getAttribute("aria-activedescendant")).toBe(first);
+  });
+
+  it("starts each edit from the top entry, even back to text an arrow moved on", () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.change(box, { target: { value: "yellow 50" } });
+    fireEvent.change(box, { target: { value: "yellow 5" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(colourOf()).toEqual({ $token: "color.yellow.500" });
+  });
+
+  it("drops its refusal once undo puts other text in the box", () => {
+    const box = mount();
+    typeInto(box, "#ff0000");
+    fireEvent.blur(box);
+    expect(colourOf()).toBe("#ff0000");
+    typeInto(box, "yellow 50");
+    fireEvent.blur(box);
+    expect(screen.getByRole("alert").textContent).toContain("yellow 50");
+    act(() => {
+      void editor().undo();
+    });
+    expect(colourOf()).toBe("#0000ff");
+    expect(box.value).toBe("#0000ff");
+    expect(screen.queryByText(/No color or variable/)).toBeNull();
+    expect(box.getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("keeps focus, and the text, in the box when the suggestion's write is refused", async () => {
+    // A page with no room for a reference, which is longer than the colour.
+    siteLimits = {
+      ...DEFAULT_LIMITS,
+      maxBytes: new TextEncoder().encode(JSON.stringify(PAGE)).length + 2,
+    };
+    const box = mount();
+    typeInto(box, "yellow 5");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await frame();
+    expect(colourOf()).not.toEqual({ $token: "color.yellow.500" });
+    expect(document.activeElement).toBe(box);
+    expect(box.value).toBe("yellow 5");
+    expect(screen.queryByText(/No color or variable/)).toBeNull();
   });
 });

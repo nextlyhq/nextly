@@ -321,13 +321,13 @@ export function ColourField({
   onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   const noteId = React.useId();
-  const { refused, setRefused, refusalId } = useTypedRefusal();
   // Whether the box writes as it is typed: the text field's own answer, which
   // is no for a shared style, written once when the edit ends.
   const typesLive = useTypesLive();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset, live } = useDraft(stored);
+  const { refused, setRefused, refusalId } = useTypedRefusal(draft);
   const commitColour = rememberingCommit(
     onCommit,
     React.useContext(RecentColoursStore)
@@ -360,9 +360,9 @@ export function ColourField({
   });
   // Every other way of writing the value ends what the box refused: the
   // picker, a recent colour, a suggestion and Unlink alike.
-  const commitInstead = (value: StyleValue | null): void => {
+  const commitInstead = (value: StyleValue | null): CommitOutcome => {
     setRefused(undefined);
-    picker.commitInstead(value);
+    return picker.commitInstead(value);
   };
   const onColour = (value: string): void => {
     setRefused(undefined);
@@ -779,7 +779,7 @@ function usePickerWrites({
   reset: () => void;
   setDraft: (value: string) => void;
 }): {
-  commitInstead: (value: StyleValue | null) => void;
+  commitInstead: (value: StyleValue | null) => CommitOutcome;
   closed: (outcome: PickerClose) => void;
   onColour: (value: string) => void;
 } {
@@ -804,11 +804,18 @@ function usePickerWrites({
    * such choice, and joins the front of Recent colours again; a variable or
    * a clear is no colour of its own and is not remembered.
    */
-  const commitInstead = (value: StyleValue | null): void => {
+  const commitInstead = (value: StyleValue | null): CommitOutcome => {
     pending.current = null;
+    // Answered back, so a choice whose write is refused can leave focus where
+    // it was. "unchanged" stands only if the gesture ran no write at all.
+    const answer: { outcome: CommitOutcome } = { outcome: "unchanged" };
     // In the gesture's run, so the moves before it and the choice are one
     // step.
-    gesture.end(() => settle(commitColour(value), reset));
+    gesture.end(() => {
+      answer.outcome = commitColour(value);
+      settle(answer.outcome, reset);
+    });
+    return answer.outcome;
   };
   /*
    * The picker closed, whichever outcome that close had.
