@@ -5,7 +5,7 @@
  * reach: whether the sidebar DRAWS by that rule. A sidebar that computed the settled entries and
  * went on drawing every entry it shows while loading would leave every rule test green.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -55,6 +55,8 @@ vi.mock("@nextlyhq/ui", () => ({
   TooltipContent: () => null,
   // The rail's neutral shapes for entries not decided yet.
   Skeleton: () => <span data-testid="skeleton" />,
+  // An Apple machine, so the rail's Search reads "Search (⌘K)".
+  detectApplePlatform: () => true,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,
@@ -134,6 +136,11 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
 }));
 
 import { DualSidebar } from "../DualSidebar";
+import { RailColumn } from "../RailColumn";
+import {
+  isPaletteOpen,
+  setPaletteOpen,
+} from "@admin/components/shared/command-palette/palette-store";
 
 const railLabels = () =>
   Array.from(
@@ -257,6 +264,52 @@ describe("the entries DualSidebar's rail offers", () => {
     permissionsLoading: false,
     contentLoading: false,
   };
+
+  it("puts Search under the logo, above the entries, and it opens the palette", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    const rail = document.querySelector("aside");
+    const logo = rail?.querySelector(":scope > a");
+    const search = rail?.querySelector('button[aria-label="Search (⌘K)"]');
+    const nav = rail?.querySelector("nav");
+    expect(logo && search && nav).toBeTruthy();
+    // Logo, then Search, then the entries, in reading and Tab order.
+    expect(
+      logo!.compareDocumentPosition(search!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      search!.compareDocumentPosition(nav!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Not one of the entries: it opens the palette and selects nothing.
+    expect(nav!.contains(search!)).toBe(false);
+    expect(isPaletteOpen()).toBe(false);
+    fireEvent.click(search!);
+    expect(isPaletteOpen()).toBe(true);
+    setPaletteOpen(false);
+  });
+
+  it("keeps Search's place while the rail is an outline, so nothing moves when it settles", () => {
+    // The loading outline passes no Search; the settled rail does. Both hold
+    // the same box under the logo, so the entries below never jump down.
+    const outline = render(
+      <RailColumn settled={false} foot={null}>
+        {null}
+      </RailColumn>
+    );
+    const outlineSlot = document.querySelector("[data-rail-search-slot]");
+    expect(outlineSlot).not.toBeNull();
+    const outlineClass = outlineSlot!.className;
+    expect(outlineClass).toContain("h-11");
+    outline.unmount();
+    render(
+      <RailColumn settled foot={null} search={<button type="button" />}>
+        {null}
+      </RailColumn>
+    );
+    expect(document.querySelector("[data-rail-search-slot]")?.className).toBe(
+      outlineClass
+    );
+  });
 
   it("offers Releases in the main menu, beside Media", () => {
     answers = ALL_IN;

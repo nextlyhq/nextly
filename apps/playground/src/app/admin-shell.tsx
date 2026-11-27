@@ -1,20 +1,15 @@
 "use client";
 
-import {
-  CommandPalette,
-  ErrorBoundary,
-  QueryProvider,
-  ThemeProvider,
-} from "@nextlyhq/admin";
+import { ErrorBoundary, QueryProvider, ThemeProvider } from "@nextlyhq/admin";
 
 /**
  * The client runtime every admin surface needs, mounted by the layouts of the
  * surfaces that need it rather than by the root.
  *
- * These four are the admin's, not the site's. A theme the panel toggles, a
- * query cache the panel's data hooks read, an error boundary that keeps a
- * failed panel screen from blanking the tab, and a command palette bound to a
- * keyboard shortcut only an editor uses. Mounted at the root they reach every
+ * These three are the admin's, not the site's. A theme the panel toggles, a
+ * query cache the panel's data hooks read, and an error boundary that keeps a
+ * failed panel screen from blanking the tab. (The command palette is the
+ * admin's own: it mounts it itself.) Mounted at the root they reach every
  * URL in the app, so a public page — which renders on the server, hydrates
  * nothing of its own and offers no palette to open — still pays for the whole
  * admin client bundle.
@@ -36,10 +31,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           console.error("Error boundary caught error:", error, errorInfo);
         }}
       >
-        <QueryProvider>
-          {children}
-          <CommandPalette />
-        </QueryProvider>
+        <QueryProvider>{children}</QueryProvider>
       </ErrorBoundary>
     </ThemeProvider>
   );
