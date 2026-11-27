@@ -6,6 +6,7 @@ import { classifyError } from "@nextlyhq/telemetry";
 import fs from "fs-extra";
 import pc from "picocolors";
 
+import { connectedLine, testConnection } from "./connection-test";
 import {
   type BundledSkill,
   bundledSkillsVersion,
@@ -60,6 +61,7 @@ import {
   getDefaultApproach,
   shouldUseBundledTemplate,
 } from "./lib/templates";
+import { existingTablesWarning, formatPlanWarning } from "./plan/warnings";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import {
@@ -223,6 +225,20 @@ export async function createNextly(
   // app would add app dependencies and config and never copy the plugin.
   const existingProject =
     options.projectType !== "plugin" && (await isExistingNextProject(cwd));
+
+  // --- PostgreSQL or MySQL with no string given reads DATABASE_URL ---
+  //
+  // As the app will once it runs. Read here so a run without a terminal does
+  // not count the string as missing, and checked below like a given one.
+  const environmentUrl = process.env.DATABASE_URL?.trim();
+  if (
+    options.databaseUrl === undefined &&
+    environmentUrl &&
+    options.projectType !== "plugin" &&
+    (options.database === "postgresql" || options.database === "mysql")
+  ) {
+    options = { ...options, databaseUrl: environmentUrl };
+  }
 
   // --- The connection string agrees with the database ---
   //
@@ -563,8 +579,9 @@ export async function createNextly(
     // SQLite: auto-fill, no prompt needed
     databaseUrl = "file:./data/nextly.db";
   } else if (defaults) {
-    // Defaults mode for PG/MySQL: use placeholder (user must update .env)
-    databaseUrl = database.connectionUrl;
+    // Defaults mode for PG/MySQL: DATABASE_URL, else a placeholder the
+    // person sets in .env.
+    databaseUrl = environmentUrl || database.connectionUrl;
   } else {
     const placeholders: Record<string, string> = {
       postgresql: "postgresql://user:password@localhost:5432/nextly",
@@ -585,8 +602,44 @@ export async function createNextly(
       return;
     }
 
-    // Use the provided value or fall back to placeholder
-    databaseUrl = url?.trim() || database.connectionUrl;
+    // The answer, else DATABASE_URL, else a placeholder.
+    databaseUrl = url?.trim() || environmentUrl || database.connectionUrl;
+  }
+
+  // --- The connection is tested before anything is written ---
+  //
+  // For a run that asked no connection question: without a terminal, or
+  // with --yes. A placeholder, used when no string was given at all, is not
+  // tested: the person is told to set DATABASE_URL in .env instead.
+  if (
+    projectType !== "plugin" &&
+    databaseType !== "sqlite" &&
+    databaseUrl !== database.connectionUrl &&
+    (options.interactive === false || defaults)
+  ) {
+    const tested = await testConnection(databaseType, databaseUrl);
+    if (!tested.ok) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(
+        tested.cause === "database-missing" && tested.database
+          ? `${tested.message} Create it, then run again.`
+          : tested.message
+      );
+      process.exit(1);
+    }
+    p.log.success(connectedLine(tested));
+    if (tested.variantWarning) p.log.warn(tested.variantWarning);
+    if (tested.existingTables) {
+      p.log.warn(
+        formatPlanWarning(existingTablesWarning(tested.existingTables), {
+          terminal: Boolean(process.stdout.isTTY),
+        })
+      );
+    }
   }
 
   // --- Step 7: Skills for coding agents ---
