@@ -283,4 +283,56 @@ test.describe("the Add panel", () => {
     await page.keyboard.press("Escape");
     await expect(popover(page)).toHaveCount(0);
   });
+
+  test("the current group's heading stays pinned at the top while its tiles scroll", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 700 });
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await openAdd(page);
+
+    const list = page.locator(".nx-insert-panel__list");
+    // Scrolled part-way into the groups, as an author does.
+    await list.evaluate(element => element.scrollTo({ top: 320 }));
+    const pinned = await list.evaluate(element => {
+      const top = element.getBoundingClientRect().top;
+      return [...element.querySelectorAll("[cmdk-group-heading]")]
+        .filter(heading => {
+          const box = heading.getBoundingClientRect();
+          return Math.abs(box.top - top) <= 2;
+        })
+        .map(heading => heading.textContent);
+    });
+    // One heading sits right at the list's top edge, though its group
+    // started above it.
+    expect(pinned).toHaveLength(1);
+    // The control: the list did scroll.
+    expect(await list.evaluate(element => element.scrollTop)).toBeGreaterThan(
+      0
+    );
+  });
+
+  test("a search for a carousel says there is no slider yet and offers Gallery, and clears", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await openAdd(page);
+
+    const search = page.getByRole("combobox", { name: "Insert a block" });
+    await search.fill("carousel");
+    await expect(
+      page.getByText("No slider block yet. Gallery shows pictures in a grid.")
+    ).toBeVisible();
+    await expect(tile(page, "Gallery")).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(1);
+
+    await page.getByRole("button", { name: "Clear search" }).click();
+    await expect(search).toHaveValue("");
+    await expect(search).toBeFocused();
+    await expect(
+      page.getByText("No slider block yet. Gallery shows pictures in a grid.")
+    ).toHaveCount(0);
+  });
 });
