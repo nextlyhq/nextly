@@ -13,5 +13,8 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     fileParallelism: false,
+    // The CI lanes shard every package's suite; this one has fewer files
+    // than shards, so a shard with none of them passes.
+    passWithNoTests: true,
   },
 });
