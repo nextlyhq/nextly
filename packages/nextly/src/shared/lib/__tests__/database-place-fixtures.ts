@@ -44,6 +44,11 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     place: "local",
   },
   {
+    name: "a MySQL Unix socket written relative to the project",
+    url: "mysql://app@localhost/shop?socketPath=./mysql.sock",
+    place: "local",
+  },
+  {
     name: "localhost",
     url: "postgresql://app:pw@localhost:5432/shop",
     place: "local",

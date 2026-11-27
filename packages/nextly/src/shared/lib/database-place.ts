@@ -155,6 +155,8 @@ function decoded(text: string): string | undefined {
 /** What each part of an address may hold. Anything else is not that part. */
 const HOST = /^[a-z0-9._:[\]-]+$/i;
 const SOCKET = /^\/[a-z0-9._/-]*$/i;
+/** A socket path written relative to the project folder, as MySQL's driver takes one. */
+const RELATIVE_SOCKET = /^\.{0,2}\/?[a-z0-9._-][a-z0-9._/-]*$/i;
 const PORT = /^\d{1,5}$/;
 const DATABASE = /^[^@/?#\s]*$/;
 
@@ -232,7 +234,8 @@ function oneParameter(
 function serverParts(
   parsed: URL,
   dialect: keyof typeof DEFAULT_PORTS,
-  env: Readonly<Record<string, string | undefined>>
+  env: Readonly<Record<string, string | undefined>>,
+  folder: string
 ): ServerParts | undefined {
   const named = decoded(parsed.hostname);
   const database = decoded(parsed.pathname.replace(/^\//, ""));
@@ -241,10 +244,18 @@ function serverParts(
   const pg = dialect === "postgresql";
   const host = pg ? oneParameter(parsed, "host") : null;
   const port = pg ? oneParameter(parsed, "port") : null;
-  const socket = pg ? null : oneParameter(parsed, "socketPath");
-  if (host === AMBIGUOUS || port === AMBIGUOUS || socket === AMBIGUOUS) {
+  const namedSocket = pg ? null : oneParameter(parsed, "socketPath");
+  if (host === AMBIGUOUS || port === AMBIGUOUS || namedSocket === AMBIGUOUS) {
     return undefined;
   }
+  // MySQL's driver opens a relative socket path from the folder it runs in,
+  // as the adapter opens a relative SQLite file: resolved the same way.
+  const socket =
+    namedSocket &&
+    !namedSocket.startsWith("/") &&
+    RELATIVE_SOCKET.test(namedSocket)
+      ? resolve(folder, namedSocket)
+      : namedSocket;
   const defaults = driverDefaults(dialect, env);
   const parts = {
     host: socket || host || (named === NO_HOST ? "" : named) || defaults.host,
@@ -278,7 +289,14 @@ export function readDatabaseAddress(
   return {
     kind: "server",
     dialect,
-    parts: parsed && serverParts(parsed, dialect, input.env ?? {}),
+    parts:
+      parsed &&
+      serverParts(
+        parsed,
+        dialect,
+        input.env ?? {},
+        input.folder ?? process.cwd()
+      ),
     disagrees,
   };
 }

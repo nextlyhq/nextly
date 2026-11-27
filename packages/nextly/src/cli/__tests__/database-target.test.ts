@@ -54,6 +54,10 @@ describe("the database a command names", () => {
     expect(
       target("mysql://root:s3cr3t@localhost/shop?socketPath=/tmp/mysql.sock")
     ).toBe("MySQL /tmp/mysql.sock/shop");
+    // A relative socket is opened from the project folder, as a SQLite file is.
+    expect(
+      target("mysql://root:s3cr3t@localhost/shop?socketPath=./run/mysql.sock")
+    ).toBe(`MySQL ${resolve(FOLDER, "run/mysql.sock")}/shop`);
   });
 
   it("names a SQLite file resolved against the project folder, or :memory:", () => {
