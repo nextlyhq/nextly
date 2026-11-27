@@ -690,7 +690,8 @@ code that genuinely needs to write a protected field says so with `overrideAcces
 
 `nextly.ai` is the exception: its calls are checked unless the call itself passes
 `overrideAccess: true`, whatever the instance's default, because an AI run sends content to
-an outside service and spends the site's money. A call that names no `user` is refused.
+an outside service and spends the site's money. An instance made with `overrideAccess: true`,
+such as a script's or a test's, is still checked here. A call that names no `user` is refused.
 
 ## Limits
 
