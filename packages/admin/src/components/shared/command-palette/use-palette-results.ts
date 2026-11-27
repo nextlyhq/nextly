@@ -19,7 +19,7 @@ import type { ApiSingle } from "@admin/types/entities";
 import { paletteResults, type PaletteResults } from "./palette-results";
 
 export function usePaletteResults(): PaletteResults {
-  const { hasPermission, capabilities } = useCurrentUserPermissions();
+  const { hasPermission } = useCurrentUserPermissions();
   const branding = useBranding();
   // The Content panel's own lists: every collection it lists, past its first
   // page, and every Single.
@@ -35,7 +35,6 @@ export function usePaletteResults(): PaletteResults {
       addressOf({ kind: "single", slug: single.slug }, { collection: single }),
     creatable: creatable.collections,
     hasPermission,
-    canManageSettings: capabilities?.canManageSettings ?? false,
     plugins: branding.plugins,
     // The Builders pages open only on the site's explicit yes (the builder
     // guard's rule): while the answer is in flight or failed, a pick would

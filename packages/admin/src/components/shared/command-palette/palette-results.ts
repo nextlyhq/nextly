@@ -22,10 +22,11 @@ import {
   type SettingsNavAccess,
   type SettingsNavGroup,
 } from "@admin/components/layout/sidebar/lib/settings-nav";
+import { isExternalHref } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
-import { pluginSettingsLinks } from "@admin/lib/plugins/plugin-settings-permission";
+import { openablePluginSettings } from "@admin/lib/plugins/plugin-settings-permission";
 import {
   collectionDisplayName,
   singleDisplayName,
@@ -45,8 +46,6 @@ export interface PaletteSources {
   /** The collections this reader may create entries in. */
   creatable: readonly ApiCollection[];
   hasPermission: (slug: string) => boolean;
-  /** Whether the reader manages settings, who reach plugin settings from Plugins. */
-  canManageSettings: boolean;
   plugins: PluginMetadata[] | undefined;
   /** Whether the site shows the Builders (`admin.branding.showBuilder`). */
   showBuilder: boolean;
@@ -126,10 +125,10 @@ export function paletteResults(
         keywords: ["home", "overview"],
       },
       ...settingsPages(hasPermission, nav),
-      ...pluginSettingsLinks(sources.plugins, {
-        canManageSettings: sources.canManageSettings,
-        hasPermission,
-      }).map(link => ({
+      // Every one the reader may open, a settings manager's included: the
+      // palette is where a page is searched for by name, whatever other way
+      // to it the menus give.
+      ...openablePluginSettings(sources.plugins, hasPermission).map(link => ({
         id: `page:plugin-settings:${link.slug}`,
         label: link.label,
         value: `${link.label} Settings ${link.slug}`,
@@ -202,6 +201,18 @@ export function paletteResults(
 }
 
 /**
+ * Where each Settings page the palette offers this reader leads, for the
+ * go-to key sequences (`g u`, `g r`, `g s`): derived from the palette's own
+ * Settings rows, so a sequence never leads where the palette would not.
+ */
+export function openableSettingsHrefs(
+  hasPermission: (slug: string) => boolean,
+  nav: readonly SettingsNavGroup[] = SETTINGS_NAV
+): Set<string> {
+  return new Set(settingsPages(hasPermission, nav).map(page => page.href));
+}
+
+/**
  * Every Settings destination the reader may both see and open: the Settings
  * panel's own visibility rule, then the route's grant where it asks more.
  */
@@ -249,6 +260,10 @@ function pluginPages(
       value: `${label} ${hint ?? ""} ${to}`,
       href: to,
       ...(hint ? { hint } : {}),
+      // An item may lead away from the admin (another site, a mail address):
+      // the browser opens it, by the menus' own test, never the admin's
+      // router, which would read it as an admin path.
+      ...(isExternalHref(to) ? { external: true } : {}),
     });
   };
   for (const item of resolveVisibleMenuItems(plugins, hasPermission)) {

@@ -55,6 +55,8 @@ vi.mock("@nextlyhq/ui", () => ({
   TooltipContent: () => null,
   // The rail's neutral shapes for entries not decided yet.
   Skeleton: () => <span data-testid="skeleton" />,
+  // An Apple machine, so the rail's Search reads "Search (⌘K)".
+  detectApplePlatform: () => true,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,

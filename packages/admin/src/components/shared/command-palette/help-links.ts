@@ -1,8 +1,8 @@
 /**
  * The help and community links: Documentation, GitHub and Discord.
  *
- * The one list of them. The command palette reads it, and the person's menu
- * and the rail's Help item are meant to read it too, so a link changed here
+ * The one list of them. The command palette and the person's menu read it,
+ * and the rail's Help item is meant to as well, so a link changed here
  * changes everywhere it is offered. Each id is a `HeaderButtonId`, the name a
  * plugin's `header.hide` uses to take the link away.
  *

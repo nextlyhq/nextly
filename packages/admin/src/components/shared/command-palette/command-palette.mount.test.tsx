@@ -38,6 +38,11 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => false }),
 }));
 
+const navigateTo = vi.fn();
+vi.mock("@admin/lib/navigation", () => ({
+  navigateTo: (path: string) => navigateTo(path),
+}));
+
 import { AdminCommandPalette, CommandPalette } from "./index";
 import { RailSearchButton } from "./PaletteSearchButton";
 import { setPaletteOpen } from "./palette-store";
@@ -106,7 +111,7 @@ describe("the admin's own palette", () => {
         <AdminCommandPalette />
       </ShortcutProvider>
     );
-    const button = screen.getByRole("button", { name: "Search (⌘K)" });
+    const button = screen.getByRole("button", { name: /^Search \(/ });
     button.focus();
     fireEvent.click(button);
     expect(dialogs()).toHaveLength(1);
@@ -116,6 +121,34 @@ describe("the admin's own palette", () => {
     expect(dialogs()).toHaveLength(0);
     // The dialog hands focus back after it has gone, on the next task.
     await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+});
+
+describe("the rail's Search button's name", () => {
+  // The key that opens the palette where the person is: ⌘K on Apple
+  // machines, Ctrl+K on the others, where ⌘ is not on the keyboard.
+  it("says Ctrl+K off Apple", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    render(
+      <TooltipProvider>
+        <RailSearchButton />
+      </TooltipProvider>
+    );
+    expect(
+      screen.getByRole("button", { name: "Search (Ctrl+K)" })
+    ).toBeTruthy();
+    vi.restoreAllMocks();
+  });
+
+  it("says ⌘K on Apple", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    render(
+      <TooltipProvider>
+        <RailSearchButton />
+      </TooltipProvider>
+    );
+    expect(screen.getByRole("button", { name: "Search (⌘K)" })).toBeTruthy();
+    vi.restoreAllMocks();
   });
 });
 
@@ -131,7 +164,7 @@ describe("focus back from the rail's Search button", () => {
         <AdminCommandPalette />
       </ShortcutProvider>
     );
-    const button = screen.getByRole("button", { name: "Search (⌘K)" });
+    const button = screen.getByRole("button", { name: /^Search \(/ });
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(button);
     expect(dialogs()).toHaveLength(1);
@@ -139,6 +172,36 @@ describe("focus back from the rail's Search button", () => {
       key: "Escape",
     });
     await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+});
+
+describe("the go-to key sequences", () => {
+  function press(key: string): void {
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+      );
+    });
+  }
+
+  // This reader holds no grant (the permissions mock answers no to every
+  // one), so Users, Roles and Settings are not theirs to open.
+  it("lead only where the palette would: no Users, Roles or Settings without access", () => {
+    navigateTo.mockClear();
+    render(
+      <ShortcutProvider>
+        <AdminCommandPalette />
+      </ShortcutProvider>
+    );
+    for (const second of ["u", "r", "s"]) {
+      press("g");
+      press(second);
+    }
+    expect(navigateTo).not.toHaveBeenCalled();
+    // The control: the dashboard is everyone's.
+    press("g");
+    press("d");
+    expect(navigateTo).toHaveBeenCalledWith("/admin");
   });
 });
 

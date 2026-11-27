@@ -24,7 +24,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
 
-import type { PaletteRow } from "./palette-results";
+import { openableSettingsHrefs, type PaletteRow } from "./palette-results";
 import {
   adminPaletteMounted,
   isPaletteOpen,
@@ -144,6 +144,13 @@ function PaletteDialog(): JSX.Element {
     { name: "command-palette", priority: PALETTE_KEY_PRIORITY }
   );
 
+  // The go-to sequences lead only where the palette's own Settings rows
+  // would: a reader who may not open Users, Roles or Settings is not sent to
+  // a refusal by two keystrokes.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayGoTo = (href: string) =>
+    openableSettingsHrefs(hasPermission).has(href);
+
   useShortcuts(
     [
       {
@@ -156,19 +163,19 @@ function PaletteDialog(): JSX.Element {
         keys: "g u",
         description: "Go to users",
         run: () => handleSelect(() => navigateTo(ROUTES.USERS)),
-        when: () => !open,
+        when: () => !open && mayGoTo(ROUTES.USERS),
       },
       {
         keys: "g r",
         description: "Go to roles",
         run: () => handleSelect(() => navigateTo(ROUTES.SECURITY_ROLES)),
-        when: () => !open,
+        when: () => !open && mayGoTo(ROUTES.SECURITY_ROLES),
       },
       {
         keys: "g s",
         description: "Go to settings",
         run: () => handleSelect(() => navigateTo(ROUTES.SETTINGS)),
-        when: () => !open,
+        when: () => !open && mayGoTo(ROUTES.SETTINGS),
       },
     ],
     { name: "command-palette-go-to" }

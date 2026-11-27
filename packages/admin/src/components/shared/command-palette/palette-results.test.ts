@@ -9,7 +9,11 @@ import type { SettingsNavGroup } from "@admin/components/layout/sidebar/lib/sett
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection, ApiSingle } from "@admin/types/entities";
 
-import { paletteResults, type PaletteSources } from "./palette-results";
+import {
+  openableSettingsHrefs,
+  paletteResults,
+  type PaletteSources,
+} from "./palette-results";
 
 function collection(name: string, singular: string, plural: string) {
   return {
@@ -48,7 +52,6 @@ function sources(over: Partial<PaletteSources>): PaletteSources {
     singleHref: s => `/admin/singles/${s.slug}`,
     creatable: [],
     hasPermission: () => false,
-    canManageSettings: false,
     plugins: [],
     showBuilder: true,
     ...over,
@@ -64,7 +67,6 @@ describe("the palette's results for an admin", () => {
       singles: [homepage],
       creatable: [posts, products],
       hasPermission: () => true,
-      canManageSettings: true,
       plugins: [reportsPlugin],
     })
   );
@@ -227,5 +229,86 @@ describe("help links a plugin hides", () => {
     for (const link of ["Open documentation", "GitHub", "Discord"]) {
       expect(actions).not.toContain(link);
     }
+  });
+});
+
+describe("plugin settings pages", () => {
+  const seo = {
+    name: "seo",
+    enabled: true,
+    appearance: { label: "SEO" },
+    settings: {},
+  } as unknown as PluginMetadata;
+  const own = {
+    name: "billing",
+    enabled: true,
+    appearance: { label: "Billing" },
+    settings: { permission: "manage-billing" },
+  } as unknown as PluginMetadata;
+
+  // A settings manager reaches them through the plugins overview in the
+  // menus, so the panel's own links leave them out; the palette still lists
+  // them, since it is where the person searches for them by name.
+  it("lists every one a settings manager may open", () => {
+    const pages = paletteResults(
+      sources({
+        plugins: [seo, own],
+        hasPermission: slug => slug === "update-settings",
+      })
+    ).pages;
+    expect(labels(pages)).toContain("SEO settings");
+    expect(labels(pages)).not.toContain("Billing settings");
+  });
+
+  it("lists the one a plugin keeps to a role of its own, for that role", () => {
+    const pages = paletteResults(
+      sources({
+        plugins: [seo, own],
+        hasPermission: slug => slug === "manage-billing",
+      })
+    ).pages;
+    expect(labels(pages)).toEqual(expect.arrayContaining(["Billing settings"]));
+    expect(labels(pages)).not.toContain("SEO settings");
+  });
+});
+
+describe("plugin menu items that lead away from the admin", () => {
+  it("opens an absolute or protocol-relative address natively, not through the admin's router", () => {
+    const linker = {
+      name: "linker",
+      menu: [
+        { label: "Status page", to: "https://status.example.com" },
+        { label: "Mirror", to: "//mirror.example.com/docs" },
+        { label: "Inside", to: "/admin/plugins/linker" },
+      ],
+    } as unknown as PluginMetadata;
+    const pages = paletteResults(
+      sources({ plugins: [linker], hasPermission: () => true })
+    ).pages;
+    const row = (label: string) => pages.find(page => page.label === label);
+    expect(row("Status page")?.external).toBe(true);
+    expect(row("Mirror")?.external).toBe(true);
+    expect(row("Inside")?.external).toBeFalsy();
+  });
+});
+
+describe("the go-to sequences' destinations", () => {
+  it("are the Settings pages the reader may open, by the palette's own rule", () => {
+    const none = openableSettingsHrefs(() => false);
+    expect(none.has("/admin/users")).toBe(false);
+    expect(none.has("/admin/security/roles")).toBe(false);
+    expect(none.has("/admin/settings")).toBe(false);
+    const all = openableSettingsHrefs(() => true);
+    expect(all.has("/admin/users")).toBe(true);
+    expect(all.has("/admin/security/roles")).toBe(true);
+    expect(all.has("/admin/settings")).toBe(true);
+    // The same rule as the palette's rows, not a second one.
+    const reader = (slug: string) => slug === "read-users";
+    expect([...openableSettingsHrefs(reader)].sort()).toEqual(
+      paletteResults(sources({ hasPermission: reader }))
+        .pages.filter(page => page.id.startsWith("page:settings:"))
+        .map(page => page.href)
+        .sort()
+    );
   });
 });

@@ -25,6 +25,35 @@ export interface PluginSettingsLink {
 }
 
 /**
+ * Every plugin settings page this reader may open: an enabled plugin's, where
+ * it has settings, behind the permission its page asks. A disabled plugin's
+ * settings do not load, and a plugin without settings has no page, so neither
+ * is offered. The command palette lists these, since a person searches it for
+ * a page by name whatever other way to it the menus give.
+ */
+export function openablePluginSettings(
+  plugins: PluginMetadata[] | undefined,
+  hasPermission: (slug: string) => boolean
+): PluginSettingsLink[] {
+  if (!plugins) return [];
+  return plugins
+    .filter(
+      plugin =>
+        plugin.enabled !== false &&
+        plugin.settings !== undefined &&
+        hasPermission(pluginSettingsPermission(plugin))
+    )
+    .map(plugin => {
+      const slug = pluginSlug(plugin.name);
+      return {
+        slug,
+        label: `${plugin.appearance?.label ?? plugin.name} settings`,
+        href: buildRoute(ROUTES.PLUGIN_SETTINGS, { slug }),
+      };
+    });
+}
+
+/**
  * The plugin settings pages this reader may open but cannot reach through the
  * plugins overview.
  *
@@ -33,8 +62,7 @@ export interface PluginSettingsLink {
  * offered none here. Anyone else reaches a settings page only by a link that
  * leads straight to it, and only where its gate, the permission the plugin
  * names, lets them in: a plugin that keeps its settings to a role of its own
- * gives that role this link. A disabled plugin's settings do not load, and a
- * plugin without settings has no page, so neither is offered.
+ * gives that role this link. Derived from `openablePluginSettings`.
  *
  * One function for the panel that draws the links and the rail that decides
  * whether the panel has anything to show, so the two cannot disagree.
@@ -46,20 +74,6 @@ export function pluginSettingsLinks(
     hasPermission: (slug: string) => boolean;
   }
 ): PluginSettingsLink[] {
-  if (reader.canManageSettings || !plugins) return [];
-  return plugins
-    .filter(
-      plugin =>
-        plugin.enabled !== false &&
-        plugin.settings !== undefined &&
-        reader.hasPermission(pluginSettingsPermission(plugin))
-    )
-    .map(plugin => {
-      const slug = pluginSlug(plugin.name);
-      return {
-        slug,
-        label: `${plugin.appearance?.label ?? plugin.name} settings`,
-        href: buildRoute(ROUTES.PLUGIN_SETTINGS, { slug }),
-      };
-    });
+  if (reader.canManageSettings) return [];
+  return openablePluginSettings(plugins, reader.hasPermission);
 }

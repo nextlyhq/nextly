@@ -19,6 +19,13 @@ import { createPage, openBuilder } from "./support/builder-chrome";
 import { waitForShellAnswers } from "./support/shell-geometry";
 import { test } from "./support/test";
 
+/**
+ * The rail's Search button, named with the key that opens the palette on
+ * this machine: ⌘K on an Apple machine, Ctrl+K elsewhere.
+ */
+const SEARCH_NAME =
+  process.platform === "darwin" ? "Search (⌘K)" : "Search (Ctrl+K)";
+
 const VIEWPORTS = [
   { width: 390, height: 844 },
   { width: 1024, height: 768 },
@@ -87,7 +94,7 @@ test("the rail's Search button opens the palette and gets focus back on Escape",
   await waitForShellAnswers(page);
   const search = page
     .locator("aside")
-    .getByRole("button", { name: "Search (⌘K)" });
+    .getByRole("button", { name: SEARCH_NAME });
   await search.click();
   await expect(adminPalette(page)).toBeVisible();
   await expect(page.getByPlaceholder("Search or jump to…")).toBeFocused();
@@ -109,7 +116,7 @@ test("on a phone, Search at the top of the menu drawer opens the palette", async
     exact: true,
   });
   await expect(drawer).toBeVisible();
-  const search = drawer.getByRole("button", { name: "Search (⌘K)" });
+  const search = drawer.getByRole("button", { name: SEARCH_NAME });
   const searchBox = await search.boundingBox();
   const firstEntry = await drawer
     .getByRole("link", { name: "Dashboard", exact: true })
@@ -169,15 +176,13 @@ test("in the Page Builder's editor ⌘K is the editor's, and back in the admin t
 
   // The editor takes the whole window, the admin's rail with it; its own back
   // arrow is the way out, and the rail's Search is there again once out.
-  await expect(page.getByRole("button", { name: "Search (⌘K)" })).toHaveCount(
-    0
-  );
+  await expect(page.getByRole("button", { name: SEARCH_NAME })).toHaveCount(0);
   await page
     .getByRole("button", { name: "Back to Pages", exact: true })
     .click();
   await page
     .locator("aside")
-    .getByRole("button", { name: "Search (⌘K)" })
+    .getByRole("button", { name: SEARCH_NAME })
     .click();
   await expect(adminPalette(page)).toBeVisible();
 });
