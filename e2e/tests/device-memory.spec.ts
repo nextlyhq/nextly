@@ -179,7 +179,7 @@ test.describe("the admin's memory on this device", () => {
     await menuRemembers(page, "posts");
     const foot = page.getByTestId("rail-account");
     const real = {
-      bell: await boxOf(foot.getByRole("button", { name: /notifications/i })),
+      inbox: await boxOf(foot.getByRole("button", { name: /^Inbox/ })),
       avatar: await boxOf(
         foot.getByRole("button", { name: "User profile menu" })
       ),
@@ -204,9 +204,10 @@ test.describe("the admin's memory on this device", () => {
       await held.waitForTimeout(1_000);
       const shapes = ghost.locator(":scope > *");
       const label = remembered ? "drawn from memory" : "with no memory";
-      expect(await boxOf(shapes.first()), `the bell's shape, ${label}`).toEqual(
-        real.bell
-      );
+      expect(
+        await boxOf(shapes.first()),
+        `the Inbox's shape, ${label}`
+      ).toEqual(real.inbox);
       expect(
         await boxOf(shapes.last()),
         `the avatar's shape, ${label}`

@@ -25,7 +25,7 @@ import {
   defineNoticeKind,
   registerNoticeKind,
 } from "../notice-kinds";
-import { NoticesService } from "../notices-service";
+import { NoticesService, type NoticesDb } from "../notices-service";
 import { pruneNoticesSafely } from "../prune";
 
 let current: TestNextly | undefined;
@@ -322,6 +322,140 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
     expect(await notices.markRead({ userId: "alice", all: true })).toBe(1);
     // Marking again changes nothing: read stays read, at its first time.
     expect(await notices.markRead({ userId: "alice", all: true })).toBe(0);
+  });
+
+  it("keeps read state in the database, so another server process sees a read at once", async () => {
+    // Two sessions of one person reach the server through whichever process
+    // answers them; a second service over the same database stands in for
+    // the other process, and would disagree if read state were held in memory.
+    const notices = await boot(dialect);
+    const other = new NoticesService({
+      db: current!.adapter as unknown as NoticesDb,
+    });
+    const ids: string[] = [];
+    for (let n = 1; n <= 3; n += 1) {
+      const written = await notices.record({
+        kind: plain,
+        userId: "alice",
+        subjectId: `t${n}`,
+        occurrence: "1",
+        data: { n },
+      });
+      ids.push(written.id!);
+    }
+    expect(await other.count({ userId: "alice", unread: true })).toBe(3);
+
+    await current!.nextly.notices.markRead({ userId: "alice", ids: [ids[0]] });
+    expect(await other.count({ userId: "alice", unread: true })).toBe(2);
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(2);
+
+    await other.markUnread({ userId: "alice", ids: [ids[0]] });
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(3);
+  });
+
+  it("marks all read in the tab shown only, including items past the first page", async () => {
+    // Every kind recorded so far is activity, so every item is in For you and
+    // Alerts is empty: "Mark all read" on Alerts leaves For you alone, and on
+    // For you reaches the items no page has loaded.
+    const notices = await boot(dialect);
+    for (let n = 1; n <= 30; n += 1) {
+      await notices.record({
+        kind: plain,
+        userId: "alice",
+        subjectId: `t${n}`,
+        occurrence: "1",
+        data: { n },
+      });
+    }
+    await notices.record({
+      kind: plain,
+      userId: "bob",
+      subjectId: "t1",
+      occurrence: "1",
+      data: { n: 1 },
+    });
+    const firstPage = await notices.find({ userId: "alice", tab: "for-you" });
+    expect(firstPage.rows).toHaveLength(20);
+    expect(firstPage.total).toBe(30);
+    expect(
+      await notices.count({ userId: "alice", unread: true, tab: "alerts" })
+    ).toBe(0);
+    expect((await notices.find({ userId: "alice", tab: "alerts" })).total).toBe(
+      0
+    );
+
+    expect(
+      await notices.markRead({ userId: "alice", all: true, tab: "alerts" })
+    ).toBe(0);
+    expect(
+      await notices.count({ userId: "alice", unread: true, tab: "for-you" })
+    ).toBe(30);
+
+    expect(
+      await notices.markRead({ userId: "alice", all: true, tab: "for-you" })
+    ).toBe(30);
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(0);
+    // Another person's unread item is nobody's "all" but theirs.
+    expect(await notices.count({ userId: "bob", unread: true })).toBe(1);
+  });
+
+  it("marks an item unread again, only for its own person and only where it may be seen", async () => {
+    const notices = await boot(dialect);
+    const mine = await notices.record({
+      kind: plain,
+      userId: "alice",
+      subjectId: "t1",
+      occurrence: "1",
+      data: { n: 1 },
+    });
+    const hidden = await notices.record({
+      kind: stopped,
+      userId: "alice",
+      subjectId: "r1",
+      occurrence: "1",
+      data: { title: "Spring" },
+    });
+    const theirs = await notices.record({
+      kind: plain,
+      userId: "bob",
+      subjectId: "t1",
+      occurrence: "1",
+      data: { n: 1 },
+    });
+    await notices.markRead({ userId: "alice", all: true });
+    await notices.markRead({ userId: "bob", all: true });
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(0);
+
+    // A kind hidden from her now is not changed unseen, and Bob's id in her
+    // request is ignored, not reported.
+    mayReadReleases.delete("alice");
+    const result = await current!.nextly.notices.markUnread({
+      userId: "alice",
+      ids: [mine.id!, hidden.id!, theirs.id!],
+    });
+    expect(result).toMatchObject({
+      message: expect.any(String),
+      item: { marked: 1 },
+    });
+    mayReadReleases.add("alice");
+
+    const page = await notices.find({ userId: "alice" });
+    expect(
+      page.rows.map(n => [n.title, n.readAt === null ? "unread" : "read"])
+    ).toEqual([
+      ["“Spring” stopped", "read"],
+      ["Thing 1", "unread"],
+    ]);
+    expect(await notices.count({ userId: "bob", unread: true })).toBe(0);
+    // Marking an unread item unread again changes nothing.
+    expect(await notices.markUnread({ userId: "alice", ids: [mine.id!] })).toBe(
+      0
+    );
+    // Read again, it reads at the new time: the round trip ends where it began.
+    expect(await notices.markRead({ userId: "alice", ids: [mine.id!] })).toBe(
+      1
+    );
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(0);
   });
 
   it("reads from its snapshot once its subject is gone", async () => {

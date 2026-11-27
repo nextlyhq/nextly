@@ -75,7 +75,7 @@ vi.mock("@admin/lib/i18n/I18nProvider", () => ({
   useInterfaceLanguages: () => ["en"],
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: () => (
+  InboxButton: () => (
     <button type="button" aria-label="Notifications" data-testid="bell" />
   ),
 }));

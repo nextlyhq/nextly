@@ -17,7 +17,7 @@
         "unanswered": []
       },
       "signin": {
-        "requests": 8,
+        "requests": 7,
         "rounds": 6,
         "statements": 106,
         "kinds": {
@@ -25,7 +25,6 @@
           "POST /admin/api/auth/login": 1,
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -34,13 +33,12 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 6,
+        "requests": 5,
         "rounds": 4,
         "statements": 95,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -49,13 +47,12 @@
         "unanswered": []
       },
       "list": {
-        "requests": 7,
+        "requests": 6,
         "rounds": 4,
         "statements": 20,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/posts": 1,
           "GET /admin/api/collections/posts/entries": 1,
@@ -65,13 +62,12 @@
         "unanswered": []
       },
       "edit": {
-        "requests": 16,
+        "requests": 15,
         "rounds": 6,
         "statements": 45,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/schema/posts": 1,
           "GET /admin/api/dashboard/pins": 1,
@@ -106,7 +102,7 @@
         "unanswered": []
       },
       "signin": {
-        "requests": 8,
+        "requests": 7,
         "rounds": 6,
         "statements": 103,
         "kinds": {
@@ -114,7 +110,6 @@
           "POST /admin/api/auth/login": 1,
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -123,13 +118,12 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 6,
+        "requests": 5,
         "rounds": 3,
         "statements": 91,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -138,13 +132,12 @@
         "unanswered": []
       },
       "list": {
-        "requests": 7,
+        "requests": 6,
         "rounds": 4,
         "statements": 18,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/posts": 1,
           "GET /admin/api/collections/posts/entries": 1,
@@ -154,13 +147,12 @@
         "unanswered": []
       },
       "edit": {
-        "requests": 16,
+        "requests": 15,
         "rounds": 6,
         "statements": 44,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/schema/posts": 1,
           "GET /admin/api/dashboard/pins": 1,
@@ -195,7 +187,7 @@
         "unanswered": []
       },
       "signin": {
-        "requests": 8,
+        "requests": 7,
         "rounds": 5,
         "statements": 105,
         "kinds": {
@@ -203,7 +195,6 @@
           "POST /admin/api/auth/login": 1,
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -212,13 +203,12 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 6,
+        "requests": 5,
         "rounds": 3,
         "statements": 93,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -227,13 +217,12 @@
         "unanswered": []
       },
       "list": {
-        "requests": 7,
+        "requests": 6,
         "rounds": 4,
         "statements": 18,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/posts": 1,
           "GET /admin/api/collections/posts/entries": 1,
@@ -243,13 +232,12 @@
         "unanswered": []
       },
       "edit": {
-        "requests": 16,
+        "requests": 15,
         "rounds": 6,
         "statements": 44,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
           "GET /admin/api/singles": 1,
           "GET /admin/api/collections/schema/posts": 1,
           "GET /admin/api/dashboard/pins": 1,

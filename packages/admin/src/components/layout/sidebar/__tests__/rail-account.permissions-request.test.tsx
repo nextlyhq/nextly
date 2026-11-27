@@ -1,8 +1,8 @@
 /**
- * The rail's account foot and the notification bell read the same permissions answer, and the
- * hook asks again whenever a new reader of it mounts with no request in flight. So a cold load
- * asks once only if every reader in the foot has mounted while the first request is still out: a
- * bell mounted after the answer arrives asks a second time, one round trip after the first. Where
+ * The rail's account foot reads the permissions answer, and the hook asks again whenever a new
+ * reader of it mounts with no request in flight. So a cold load asks once only if every reader in
+ * the foot has mounted while the first request is still out: a reader mounted after the answer
+ * arrives asks a second time, one round trip after the first. Where
  * no item waits on the permissions, the foot asks for none: the hook asks again each time a
  * reader of it mounts, and the foot is drawn again whenever the shell is.
  *
@@ -19,8 +19,8 @@ import type {
   UserPermissionsResponse,
 } from "@admin/types/permissions";
 
-/** What the workspace answers: whether a plugin hides the bell, which decides whether it is offered. */
-const workspace = vi.hoisted(() => ({ hideBell: false }));
+/** What the workspace answers: whether a plugin hides the Inbox, which decides whether it is offered. */
+const workspace = vi.hoisted(() => ({ hideInbox: false }));
 
 const server = vi.hoisted(() => ({
   asked: [] as string[],
@@ -50,9 +50,9 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
         return SUPER_ADMIN;
       }
       if (route === "/me/capabilities") return EVERYTHING;
-      if (route === "/schema/journal") return { rows: [], hasMore: false };
-      // The bell counts the reader's own unread notices.
-      if (route === "/notices/count") return { total: 0 };
+      // The Inbox counts the reader's own unread notices, and asks for
+      // nothing else until it is opened.
+      if (route === "/notices/count") return { total: 0, alerts: 0 };
       throw new Error(`unexpected request ${path}`);
     },
   },
@@ -64,10 +64,10 @@ vi.mock("@admin/hooks/useLocaleParam", () => ({
   useLocaleParam: () => undefined,
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  // The workspace answer is in; it offers the bell unless a plugin hides it.
+  // The workspace answer is in; it offers the Inbox unless a plugin hides it.
   useBranding: () =>
     ({
-      plugins: workspace.hideBell
+      plugins: workspace.hideInbox
         ? [
             {
               name: "@acme/p",
@@ -98,11 +98,11 @@ import { RailAccount } from "../RailAccount";
 
 afterEach(() => {
   server.asked.length = 0;
-  workspace.hideBell = false;
+  workspace.hideInbox = false;
 });
 
 describe("the rail's account foot on a cold load", () => {
-  it("asks for the reader's permissions once, though the bell reads them too", async () => {
+  it("asks for the reader's permissions once", async () => {
     let release = (): void => {};
     server.permissionsGate = new Promise(done => {
       release = done;
@@ -120,9 +120,9 @@ describe("the rail's account foot on a cold load", () => {
     await waitFor(() => expect(server.asked).toContain("/me/permissions"));
     release();
 
-    // The bell is the reader's (a super-admin), so it shows once the answer is in.
+    // The Inbox is every reader's, so it shows once the answer is in.
     expect(
-      await screen.findByRole("button", { name: "Notifications" })
+      await screen.findByRole("button", { name: "Inbox" })
     ).toBeInTheDocument();
     await waitFor(() => expect(client.isFetching()).toBe(0));
 
@@ -132,8 +132,8 @@ describe("the rail's account foot on a cold load", () => {
   });
 
   it("asks for no permissions where no control waits on them", async () => {
-    // A plugin hides the bell, and no plugin adds a control.
-    workspace.hideBell = true;
+    // A plugin hides the Inbox, and no plugin adds a control.
+    workspace.hideInbox = true;
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });

@@ -11,7 +11,7 @@
  */
 import type { JSX } from "react";
 
-import { NotificationBell } from "@admin/components/features/notifications";
+import { InboxButton } from "@admin/components/features/notifications";
 import {
   useBranding,
   useBrandingStatus,
@@ -51,9 +51,9 @@ export function RailAccount({
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
   const { isPending: workspacePending } = useBrandingStatus();
-  const bellOffered = !hidden.has("notifications");
+  const inboxOffered = !hidden.has("notifications");
 
-  return bellOffered ? (
+  return inboxOffered ? (
     <AwaitingPermissions
       className={className}
       placement={placement}
@@ -64,14 +64,15 @@ export function RailAccount({
       className={className}
       placement={placement}
       pending={{ workspace: workspacePending, permissions: false }}
-      bellOffered={false}
+      inboxOffered={false}
     />
   );
 }
 
 /**
- * The bell is the one item that waits on the reader's permissions, so they are
- * read only where it is offered; elsewhere nothing would use the answer.
+ * Where the Inbox is offered, the foot is drawn only once the reader's
+ * permissions are in, as it was for the bell, which read them. The Inbox
+ * itself reads none; the wait keeps the foot settling as it did.
  */
 function AwaitingPermissions({
   className,
@@ -88,7 +89,7 @@ function AwaitingPermissions({
       className={className}
       placement={placement}
       pending={{ workspace: workspacePending, permissions: isLoading }}
-      bellOffered
+      inboxOffered
     />
   );
 }
@@ -161,21 +162,20 @@ function RailAccountItems({
   className,
   placement,
   pending,
-  bellOffered,
+  inboxOffered,
 }: {
   className?: string;
   placement: AccountPlacement;
   pending: HeaderAnswersPending;
-  bellOffered: boolean;
+  inboxOffered: boolean;
 }): JSX.Element {
   const { user } = useDashboardUser();
   const logout = useLogout();
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
-  const journalOffered = branding?.showBuilder !== false;
-  // Drawn only once every answer it depends on is in, so neither the bell nor
+  // Drawn only once every answer it depends on is in, so neither the Inbox nor
   // the avatar arrives after the rest and moves the foot.
-  const settled = headerControlsSettled(pending, bellOffered);
+  const settled = headerControlsSettled(pending, inboxOffered);
   const { flow, side, testId } = ACCOUNT_LAYOUT[placement];
   const inRail = placement === "rail";
   const footItemsShown = railFootItemsShown(
@@ -203,13 +203,7 @@ function RailAccountItems({
       <div hidden={!settled} className={settled ? flow : undefined}>
         {/* Plugins' own items in the bar, before the Inbox. */}
         {!inRail && <RailFootPluginPlace />}
-        {bellOffered && (
-          <NotificationBell
-            journalOffered={journalOffered}
-            side={side}
-            align="end"
-          />
-        )}
+        {inboxOffered && <InboxButton side={side} align="end" />}
         <UserProfileDropdown
           user={user}
           onLogout={() => {

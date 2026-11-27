@@ -14,7 +14,7 @@
  *
  * The notice's email job is queued beside it only where the site sends email (core's email
  * service is registered and configured) and the trigger's switch in the workflow's settings is not
- * off. The bell's notice is recorded either way.
+ * off. The notice in the person's Inbox is recorded either way.
  *
  * Everything the transaction cannot ask without a second connection is read on the pool first
  * ({@link prepareNoticeTelling}): whether the notices table exists, whether email is sent, the

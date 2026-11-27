@@ -1,6 +1,6 @@
 /**
- * The signed-in person's own notices: a page of them, how many are unread,
- * and marking them read. The server always answers for the person signed in,
+ * The signed-in person's own Inbox: a page of one tab, how many are unread,
+ * and marking items read or unread again. The server always answers for the person signed in,
  * never for one named in the request, so these calls take no user.
  *
  * Mirrors the notice view the notices routes answer with
@@ -34,20 +34,37 @@ export interface NoticeListResponse {
   meta: { total: number; page: number; limit: number; hasNext: boolean };
 }
 
-/** What marking notices read names: some by id, or every unread one. */
-export type MarkNoticesRead = { ids: string[] } | { all: true };
+/**
+ * The Inbox's tabs: "For you", what people did that involves the person, and
+ * "Alerts", what on the site needs fixing.
+ */
+export type InboxTab = "for-you" | "alerts";
 
-/** The notices shown at once in the bell. */
+/**
+ * How many items are unread: `total` across both tabs, and `alerts`, the part
+ * of it in Alerts. One answer feeds the Inbox button and both tab counts.
+ */
+export interface InboxCounts {
+  total: number;
+  alerts: number;
+}
+
+/** What marking read names: some by id, or every unread one in a tab. */
+export type MarkNoticesRead = { ids: string[] } | { all: true; tab: InboxTab };
+
+/** The items shown at once in the Inbox's popover. */
 const NOTICES_PAGE_SIZE = 20;
 
 export const noticesApi = {
-  list: (): Promise<NoticeListResponse> =>
+  list: (tab: InboxTab): Promise<NoticeListResponse> =>
     protectedApi.get<NoticeListResponse>(
-      `/notices?page=1&limit=${NOTICES_PAGE_SIZE}`
+      `/notices?tab=${tab}&page=1&limit=${NOTICES_PAGE_SIZE}`
     ),
-  unreadCount: async (): Promise<number> =>
-    (await protectedApi.get<{ total: number }>("/notices/count?unread=true"))
-      .total,
+  /** Unread items in all, and in Alerts. */
+  unreadCounts: (): Promise<InboxCounts> =>
+    protectedApi.get<InboxCounts>("/notices/count?unread=true"),
   markRead: (body: MarkNoticesRead): Promise<{ marked: number }> =>
     protectedApi.post<{ marked: number }>("/notices/read", body),
+  markUnread: (body: { ids: string[] }): Promise<{ marked: number }> =>
+    protectedApi.post<{ marked: number }>("/notices/unread", body),
 };

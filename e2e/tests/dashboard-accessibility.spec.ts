@@ -12,9 +12,8 @@
  *
  * Each surface's own spec scans it alone (`dashboard-gallery`, `dashboard-customise`,
  * `dashboard-header`). This one walks them as one reader does, so a defect that shows only once
- * two are on screen together, or only on the way from one to the next, is found here. The header
- * bell's count is held to AA in `notification-bell`, on the dev server: a production build, which
- * this suite runs on, hides the bell with the Schema Builder.
+ * two are on screen together, or only on the way from one to the next, is found here. The Inbox
+ * button's count and its popover are held to AA in `inbox`.
  *
  * Each test returns the reader to the default dashboard when it ends.
  *

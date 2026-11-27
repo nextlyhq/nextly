@@ -1,8 +1,3 @@
-// F10 PR 5 — public barrel for the notifications feature module.
+// The notifications feature's public barrel: the Inbox button the shell mounts.
 
-export { NotificationBell } from "./NotificationBell";
-export { NotificationDropdown } from "./NotificationDropdown";
-export { NotificationRow } from "./NotificationRow";
-export { useUnreadCount, LAST_SEEN_KEY } from "./useUnreadCount";
-export { formatJournalScope, formatJournalSummary } from "./formatters";
-export { formatRelativeTime } from "./relative-time";
+export { InboxButton } from "./InboxButton";

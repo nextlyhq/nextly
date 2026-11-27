@@ -64,7 +64,7 @@ describe("computeHiddenHeaderButtons", () => {
 describe("headerControlsSettled", () => {
   const ANSWERED = { workspace: false, permissions: false };
 
-  it("is unsettled while the workspace answer is pending, bell or not", () => {
+  it("is unsettled while the workspace answer is pending, Inbox or not", () => {
     expect(headerControlsSettled({ ...ANSWERED, workspace: true }, true)).toBe(
       false
     );
@@ -73,7 +73,7 @@ describe("headerControlsSettled", () => {
     );
   });
 
-  it("waits on the permissions only where the bell may be offered", () => {
+  it("waits on the permissions only where the Inbox may be offered", () => {
     expect(
       headerControlsSettled({ ...ANSWERED, permissions: true }, true)
     ).toBe(false);

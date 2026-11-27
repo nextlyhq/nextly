@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Which workflow notifications also send an email. The bell always tells the
+ * Which workflow notifications also send an email. The Inbox always tells the
  * person named; each switch decides the email for its trigger alone and is
  * saved as it is switched. A switch whose save did not land (the settings
  * moved meanwhile, or the change was refused) keeps the choice on screen, with
@@ -9,7 +9,7 @@
  */
 
 import { Button, Switch } from "@nextlyhq/ui";
-import { Bell } from "lucide-react";
+import { Inbox } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
@@ -93,8 +93,8 @@ export function WorkflowEmailSection({
               <p className="text-xs text-muted-foreground">{to}</p>
             </div>
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Bell aria-hidden="true" className="size-3.5" />
-              Bell: always
+              <Inbox aria-hidden="true" className="size-3.5" />
+              Inbox: always
             </span>
             {canChange ? (
               <span className="inline-flex items-center gap-2 text-xs">
