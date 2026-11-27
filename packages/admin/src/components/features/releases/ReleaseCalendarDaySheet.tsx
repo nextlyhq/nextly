@@ -358,12 +358,14 @@ function DayListRow({
             list's row does, so a screen reader hears the same name for the
             same release in both places. Only the title underlines on hover.
             The space is for the link's name: without it a screen reader runs
-            the title and the mark together as one word. */}
+            the title and the mark together as one word. Where the sheet is
+            narrow the mark wraps under the title, as on a Board tile, so the
+            title keeps its width and is cut only when it alone is too long. */}
         <Link
           href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-          className="group flex min-w-0 items-center gap-2"
+          className="group flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
         >
-          <span className="truncate text-sm font-medium text-foreground group-hover:underline">
+          <span className="min-w-0 max-w-full truncate text-sm font-medium text-foreground group-hover:underline">
             {release.title}
           </span>
           {release.kind === "single" ? (
