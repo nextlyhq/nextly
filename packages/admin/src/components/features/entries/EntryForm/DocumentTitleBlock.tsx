@@ -23,6 +23,7 @@ import { useDocumentHistory } from "@admin/components/features/versions/document
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
+import { fieldAdminGates } from "../fields/field-admin-gates";
 
 import { DocumentAddressChip, type DocumentSlug } from "./DocumentAddressChip";
 import { DOCUMENT_COLUMN_INSET } from "./DocumentEditorLayout";
@@ -115,7 +116,12 @@ export function DocumentTitleBlock({
           control={form.control}
           label={title.label}
           required={title.required && !isReadingHistory}
-          locked={lockIdentity || isReadingHistory || documentLocked}
+          locked={
+            lockIdentity ||
+            isReadingHistory ||
+            documentLocked ||
+            heldByItsOwnGates(titleField)
+          }
           submitting={isSubmitting}
           rtl={title.rtl}
           inputRef={(element: HTMLInputElement | null) => {
@@ -124,7 +130,7 @@ export function DocumentTitleBlock({
         />
       </TitleRow>
       <DocumentAddressChip
-        slug={heldWhileReadingHistory(slug, isReadingHistory)}
+        slug={heldSlug(slug, isReadingHistory)}
         address={address}
         published={status === undefined || status.status === "published"}
       />
@@ -133,16 +139,32 @@ export function DocumentTitleBlock({
 }
 
 /**
- * The slug the address chip edits, held read-only while a past version is on
- * screen. The slug is part of the document too, held with the title, or an
- * edit made there would reach the live form and be saved after leaving the
- * version.
+ * Whether a field's own admin gates (`admin.readOnly`, `admin.disabled`) hold
+ * it read-only. The title and the slug are drawn here rather than by
+ * `FieldRenderer`, so they read the same gates it reads (`fieldAdminGates`):
+ * a field its author declared read-only stays read-only wherever it is drawn.
  */
-function heldWhileReadingHistory(
+function heldByItsOwnGates(field: FieldConfig | undefined): boolean {
+  if (field === undefined) return false;
+  const gates = fieldAdminGates(field);
+  return gates.readOnly || gates.disabled;
+}
+
+/**
+ * The slug the address chip edits, held read-only while a past version is on
+ * screen, and where its field's own gates hold it (`heldByItsOwnGates`). The
+ * slug is part of the document too, held with the title while a version is
+ * read, or an edit made there would reach the live form and be saved after
+ * leaving the version.
+ */
+function heldSlug(
   slug: DocumentSlug | undefined,
   isReadingHistory: boolean
 ): DocumentSlug | undefined {
-  return slug && isReadingHistory ? { ...slug, locked: true } : slug;
+  if (slug === undefined) return undefined;
+  return isReadingHistory || heldByItsOwnGates(slug.field)
+    ? { ...slug, locked: true }
+    : slug;
 }
 
 /**
