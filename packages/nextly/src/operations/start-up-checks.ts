@@ -38,6 +38,12 @@ const ID_PATTERN =
 /** One command word: lower case, hyphens inside a word. */
 const WORD_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
+/**
+ * One word of an old name, which may also hold the colons today's commands
+ * were named with (`migrate:status`, `db:sync`), so those names keep working.
+ */
+const OLD_WORD_PATTERN = /^[a-z][a-z0-9]*(?:[-:][a-z0-9]+)*$/;
+
 /** The doors on which an operation that needs no permission may run. */
 const DOORS_WITHOUT_PERMISSION: Readonly<
   Record<"project" | "maintenance", readonly string[]>
@@ -140,16 +146,30 @@ function sameSource(a: OperationSource, b: OperationSource): boolean {
   return a.name === b.name;
 }
 
-function commandProblems(words: unknown, what: string): string[] {
+/** Whether `words` is a non-empty list of words that `pattern` accepts. */
+function areWords(words: unknown, pattern: RegExp): words is string[] {
+  return (
+    Array.isArray(words) &&
+    words.length > 0 &&
+    words.every(word => typeof word === "string" && pattern.test(word))
+  );
+}
+
+function commandProblems(
+  words: unknown,
+  what: "command" | "old name"
+): string[] {
   if (!Array.isArray(words) || words.length === 0) {
     return [`its ${what} has no words`];
   }
+  const pattern = what === "command" ? WORD_PATTERN : OLD_WORD_PATTERN;
+  const allowed =
+    what === "command"
+      ? "lower case letters, digits and inner hyphens"
+      : "lower case letters, digits and inner hyphens or colons";
   return words
-    .filter(word => typeof word !== "string" || !WORD_PATTERN.test(word))
-    .map(
-      word =>
-        `its ${what} word ${quoted(word)} is not lower case letters, digits and inner hyphens`
-    );
+    .filter(word => typeof word !== "string" || !pattern.test(word))
+    .map(word => `its ${what} word ${quoted(word)} is not ${allowed}`);
 }
 
 /** It says it comes from whoever registered it. */
@@ -235,6 +255,12 @@ function raiseRuleProblems(
   }
   if (typeof rule.applies !== "function") {
     problems.push(`its raise rule "${rule.when}" has no applies()`);
+  } else if (
+    Object.prototype.toString.call(rule.applies) === "[object AsyncFunction]"
+  ) {
+    problems.push(
+      `its raise rule "${rule.when}" answers later; applies() must answer yes or no at once`
+    );
   }
   return problems;
 }
@@ -545,9 +571,13 @@ interface Claim {
 /** The words `op` answers to: its command and each old name. */
 function claimedWords(op: OperationDefinition): string[][] {
   const aliases = Array.isArray(op.aliases) ? op.aliases : [];
-  return [op.command, ...aliases.map(alias => alias?.command)].filter(
-    (words): words is string[] => Array.isArray(words) && words.length > 0
-  );
+  // Only well-formed words claim anything; any other is refused on its own.
+  return [
+    ...(areWords(op.command, WORD_PATTERN) ? [op.command] : []),
+    ...aliases
+      .map(alias => alias?.command)
+      .filter((words): words is string[] => areWords(words, OLD_WORD_PATTERN)),
+  ];
 }
 
 /**
@@ -620,8 +650,10 @@ interface Claims {
 
 /** How a refusal tells apart two operations that share an ID. */
 function describeCommand(op: OperationDefinition): string {
+  // Words that are not text are refused on their own; quoting them here
+  // keeps this description from failing on one.
   return Array.isArray(op.command)
-    ? `"nextly ${op.command.join(" ")}"`
+    ? `"nextly ${op.command.map(word => (typeof word === "string" ? word : quoted(word))).join(" ")}"`
     : "no command";
 }
 

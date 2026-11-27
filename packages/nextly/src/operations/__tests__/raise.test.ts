@@ -151,3 +151,36 @@ describe("two rules that both apply", () => {
     }
   });
 });
+
+describe("a rule whose answer is not a plain yes or no", () => {
+  // The list refuses a rule written to answer later; this is the run-time
+  // half, for one that answers oddly anyway. A level computed too low is the
+  // harm to avoid, so only a plain "no" leaves a rule out.
+  it.each([
+    ["a promise of no", () => Promise.resolve(false)],
+    ["nothing", () => undefined],
+    ["zero", () => 0],
+  ])("raises the run when it answers %s", (_answer, applies) => {
+    const odd = {
+      level: "draft" as const,
+      raise: [
+        {
+          when: "odd",
+          level: "change" as const,
+          applies: applies as () => boolean,
+        },
+      ],
+    };
+    expect(levelForRun(odd, { input: {} }).level).toBe("change");
+  });
+
+  it("leaves the level alone when it answers a plain no (control)", () => {
+    const no = {
+      level: "draft" as const,
+      raise: [
+        { when: "never", level: "change" as const, applies: () => false },
+      ],
+    };
+    expect(levelForRun(no, { input: {} }).level).toBe("draft");
+  });
+});

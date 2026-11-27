@@ -50,7 +50,12 @@ export function levelForRun<Input>(
   let level = operation.level;
   let alwaysAllow = operation.alwaysAllow !== false;
   for (const rule of operation.raise ?? []) {
-    if (!rule.applies(run)) continue;
+    // Only a plain "no" leaves a rule out. Any other answer (a promise from a
+    // rule written to answer later, a value that isn't true or false) raises
+    // the run, since a level computed too low is the harm to avoid.
+    const answer: unknown = rule.applies(run);
+    if (answer === false) continue;
+    if (answer instanceof Promise) answer.catch(() => undefined);
     if (levelRank(rule.level) > levelRank(level)) level = rule.level;
     if (rule.alwaysAllow === false) alwaysAllow = false;
   }

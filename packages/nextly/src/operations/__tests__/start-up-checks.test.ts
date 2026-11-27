@@ -662,3 +662,71 @@ describe("finding an operation by its command words", () => {
     expect(list.byCommand(["posts list"])).toBeUndefined();
   });
 });
+
+describe("old names with the colons today's commands use", () => {
+  it("are accepted as old names and found by their words", async () => {
+    const list = await assembleOperationList({
+      core: [
+        readOperation({
+          id: "migrations.status",
+          command: ["migrations", "status"],
+          aliases: [
+            {
+              command: ["migrate:status"],
+              addedIn: "0.0.2-alpha.90",
+              removableFrom: "0.1.0",
+            },
+          ],
+        }),
+      ],
+    });
+    expect(list.byCommand(["migrate:status"])?.id).toBe("migrations.status");
+  });
+
+  it("are still refused as a command's own words", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({ id: "migrations.status", command: ["migrate:status"] }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "migrations.status" from core: its command word "migrate:status" is not lower case letters, digits and inner hyphens',
+    ]);
+  });
+});
+
+describe("a command word that is not text", () => {
+  it("is refused by name rather than failing the check", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({
+          command: ["posts", Symbol("list") as unknown as string],
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its command word Symbol(list) is not lower case letters, digits and inner hyphens',
+    ]);
+  });
+});
+
+describe("a raise rule that answers later", () => {
+  it("is refused at registration", async () => {
+    const problems = await refusal({
+      core: [
+        writeOperation({
+          raise: [
+            {
+              when: "looked up",
+              level: "critical",
+              applies: async () => false,
+            },
+          ] as unknown as OperationDefinition["raise"],
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.publish" from core: its raise rule "looked up" answers later; applies() must answer yes or no at once',
+    ]);
+  });
+});
