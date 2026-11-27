@@ -51,7 +51,13 @@ const ORIGIN = "https://nextlyhq.com";
 function context(): PluginContext {
   const ctx = {
     self: { collections: {} },
-    config: {},
+    // Each Single here declares its own `title`, so its pages are named by it.
+    config: {
+      singles: ["about", "contact", "blog", "home"].map(slug => ({
+        slug,
+        fields: [{ name: "title", type: "text" }],
+      })),
+    },
     publicAddresses: { defaultLanguage: async () => "en" },
     services: {
       ownCollections: { listEntries: async () => ({ data: [] }) },

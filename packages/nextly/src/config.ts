@@ -450,6 +450,11 @@ export {
   entryTitleField,
   readableTitleText,
 } from "./domains/collections/entry-title";
+// Which of a Single's `title` and `slug` are its author's own fields rather
+// than the ones Nextly keeps beside every Single, read from its definition as
+// the admin's editor and the save path read it, so a plugin naming a Single's
+// page tells the two apart by the same rule rather than a second one.
+export { ownIdentityFieldNames } from "./collections/config/declared-config";
 // A VALUE, and the only one in this block. The admin batches a dashboard's
 // widgets into requests `POST /api/dashboard/query` will accept, so it needs the
 // number that endpoint refuses above -- and a second copy of it on the client

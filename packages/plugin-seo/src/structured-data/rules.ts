@@ -16,6 +16,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import type { TitleFields } from "../resolver/own-name";
+
 import {
   DETAIL_LABELS,
   isStructuredDataTypeKey,
@@ -140,6 +142,11 @@ export interface StructuredDataRules {
   defaultAuthor?: StructuredDataDefaultAuthor;
   /** How breadcrumb trails name their steps. */
   breadcrumbs?: StructuredDataBreadcrumbs;
+  /**
+   * The field each content type's pages are named from, where the site's
+   * options choose one (`titleFields`), as the page's head reads it.
+   */
+  titleFields?: TitleFields;
 }
 
 /** Where structured data reads its rules from, in a language. */
@@ -350,11 +357,13 @@ function checkedOptions(
  */
 export function rulesFromOptions(
   baseUrl: string | undefined,
-  options: StructuredDataOptions | undefined
+  options: StructuredDataOptions | undefined,
+  titleFields?: TitleFields
 ): ReadStructuredDataRules {
   const rules: StructuredDataRules = {
     ...(baseUrl === undefined ? {} : { origin: baseUrl }),
     ...checkedOptions(options),
+    ...(titleFields === undefined ? {} : { titleFields }),
   };
   return () => Promise.resolve(rules);
 }

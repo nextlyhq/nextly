@@ -30,7 +30,8 @@ import { nameOfAddress, readCodePage } from "../code-pages/store";
 import { contentDateOf, lastChangedOf } from "../content-dates/last-changed";
 import { originOf } from "../origin";
 import { singleKey } from "../problems/page-types";
-import { TITLE_FIELDS } from "../settings/patterns";
+import { pageNameOf, titleSourcesOf } from "../resolver/own-name";
+import { typeOf } from "../resolver/page-levels";
 
 import {
   DETAIL_LABELS,
@@ -1377,27 +1378,6 @@ function noSiteAddress(type: StructuredDataTypeKey): StructuredDataProblem {
   };
 }
 
-/** A separator between a title and the site's name after it. */
-const BEFORE_SITE_NAME = /\s*[|—–·:-]\s*$/;
-
-/**
- * `title` without the site's name its pattern put after it, so
- * "Pricing | Acme" names the page "Pricing". A title that only ends with
- * the name, with no separator before it ("Why we chose Acme"), is kept.
- */
-function withoutSiteName(
-  title: string | undefined,
-  siteName: string | undefined
-): string | undefined {
-  const text = textOf(title);
-  if (text === undefined || siteName === undefined) return text;
-  const name = siteName.trim().toLowerCase();
-  if (name === "" || !text.toLowerCase().endsWith(name)) return text;
-  const before = text.slice(0, text.length - name.length);
-  if (!BEFORE_SITE_NAME.test(before)) return text;
-  return textOf(before.replace(BEFORE_SITE_NAME, "")) ?? text;
-}
-
 /** The page's own name, and the name of what it describes. */
 interface OwnNames {
   page?: string;
@@ -1405,14 +1385,10 @@ interface OwnNames {
 }
 
 /**
- * The page's own name, as its heading shows it, which its title's pattern
- * fills `{Title}` from: what its route says, else its own title field, else
- * the route's title or the page's title without the site's name. What the
- * page describes goes by the same name.
- *
- * The home page is the exception: it is named by its whole title, which is
- * the site's own, and what it describes, such as the site's app, by the
- * brand's name, since a home page's title field is usually just "Home".
+ * The page's own name (`pageNameOf`, the name every output gives it), and
+ * what the page describes goes by the same name. On the home page, which
+ * is named by its whole title, what it describes, such as the site's app,
+ * is named by the brand's name.
  */
 function ownNamesOf(
   facts: Pick<
@@ -1422,47 +1398,30 @@ function ownNamesOf(
   home: boolean,
   siteName: string | undefined
 ): OwnNames {
-  const fromRoute = textOf(facts.hints.name);
-  const defined = (page: string | undefined, subject: string | undefined) => ({
-    ...(page === undefined ? {} : { page }),
-    ...(subject === undefined ? {} : { subject }),
-  });
-  if (fromRoute !== undefined) return defined(fromRoute, fromRoute);
-  if (home) {
-    const title = textOf(facts.answer.title);
-    return defined(
-      title,
-      textOf(brandNameOf(facts.rules, facts.answer)) ?? title
-    );
-  }
-  const fromCode = withoutSiteName(facts.input.code.title, siteName);
   const { source } = facts.input;
+  const { key } = typeOf(facts.input);
   const codePage =
     source.kind === "entry" && source.collection === codePagesSlug(facts.ctx);
-  const name =
-    ownTitleOf(facts.document, codePage ? fromCode : undefined) ??
-    fromCode ??
-    withoutSiteName(facts.answer.title, siteName);
-  return defined(name, name);
-}
-
-/**
- * The page's own title field, where it has one. A page built in code is
- * named from its address (`/pricing` is "Pricing") only where its route
- * gives no name, so there `fromCode`, its route's own title, is the better
- * name; it is given for a page built in code only.
- */
-function ownTitleOf(
-  document: Readonly<Record<string, unknown>>,
-  fromCode: string | undefined
-): string | undefined {
-  const own = TITLE_FIELDS.map(field => textOf(document[field])).find(
-    title => title !== undefined
-  );
-  const path = textOf(document.path);
-  const fromAddress =
-    path !== undefined && own === nameOfAddress(path) && fromCode !== undefined;
-  return fromAddress ? undefined : own;
+  const page = pageNameOf({
+    ...(facts.hints.name === undefined ? {} : { hint: facts.hints.name }),
+    home,
+    document: facts.document,
+    fields: titleSourcesOf(facts.ctx, key, facts.rules.titleFields).fields,
+    ...(facts.input.code.title === undefined
+      ? {}
+      : { codeTitle: facts.input.code.title }),
+    codePage,
+    ...(facts.answer.title === undefined ? {} : { title: facts.answer.title }),
+    ...(siteName === undefined ? {} : { siteName }),
+  });
+  const subject =
+    home && textOf(facts.hints.name) === undefined
+      ? (textOf(brandNameOf(facts.rules, facts.answer)) ?? page)
+      : page;
+  return {
+    ...(page === undefined ? {} : { page }),
+    ...(subject === undefined ? {} : { subject }),
+  };
 }
 
 /** `value` without its absent keys. */

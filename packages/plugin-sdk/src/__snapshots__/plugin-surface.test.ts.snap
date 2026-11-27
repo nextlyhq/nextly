@@ -1047,6 +1047,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "nextlyTags (value)",
   "number (value)",
   "option (value)",
+  "ownIdentityFieldNames (value)",
   "pluginAdminSlug (value)",
   "pluginCacheTag (value)",
   "pluginField (value)",

@@ -17,7 +17,12 @@
  *
  * @module outputs/rendered-copy
  */
-import { escapedLineStart, fencedCode, inlineCode } from "./plain-copy";
+import {
+  decodedEntities,
+  escapedLineStart,
+  fencedCode,
+  inlineCode,
+} from "./plain-copy";
 
 /** Elements that hold no content of their own and are never closed. */
 const VOID: ReadonlySet<string> = new Set([
@@ -107,42 +112,6 @@ const BLOCKS: ReadonlySet<string> = new Set([
   "h6",
 ]);
 
-/** The character references a page's text commonly carries, by name. */
-const NAMED: Readonly<Record<string, string>> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  hellip: "…",
-  mdash: "—",
-  ndash: "–",
-  rsquo: "’",
-  lsquo: "‘",
-  rdquo: "”",
-  ldquo: "“",
-  copy: "©",
-  middot: "·",
-};
-
-/** `text` with its character references read as the characters they name. */
-function decoded(text: string): string {
-  return text.replace(
-    /&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi,
-    (whole, ref: string) => {
-      if (!ref.startsWith("#")) return NAMED[ref.toLowerCase()] ?? whole;
-      const point =
-        ref[1]?.toLowerCase() === "x"
-          ? Number.parseInt(ref.slice(2), 16)
-          : Number.parseInt(ref.slice(1), 10);
-      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
-        ? String.fromCodePoint(point)
-        : whole;
-    }
-  );
-}
-
 /** An attribute's value in a tag's attribute text, decoded, or none. */
 function attributeOf(attributes: string, name: string): string | undefined {
   const found = new RegExp(
@@ -150,7 +119,7 @@ function attributeOf(attributes: string, name: string): string | undefined {
     "i"
   ).exec(attributes);
   if (found === null) return undefined;
-  return decoded(found[1] ?? found[2] ?? found[3] ?? "");
+  return decodedEntities(found[1] ?? found[2] ?? found[3] ?? "");
 }
 
 /** Whether a tag's attributes hide it from every reader. */
@@ -468,7 +437,7 @@ class CopyWriter {
   text(raw: string): void {
     if (this.skipping()) return;
     // Never a code block's mark, which only the writer places.
-    const text = decoded(raw).replaceAll(CODE_MARK, "");
+    const text = decodedEntities(raw).replaceAll(CODE_MARK, "");
     if (this.inside("pre")) {
       this.copy.add(text);
       return;
@@ -815,7 +784,7 @@ class CopyWriter {
 function titleOf(html: string): string | undefined {
   const head = html.slice(0, Math.max(html.search(/<\/head>/i), 0));
   const found = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(head);
-  const title = found === null ? "" : decoded(found[1] ?? "").trim();
+  const title = found === null ? "" : decodedEntities(found[1] ?? "").trim();
   return title === "" ? undefined : title;
 }
 

@@ -101,12 +101,16 @@ function callOf(
   const named = title !== undefined && title !== nameOfAddress(path);
   // The date the route states, handed with the page (`codePageDocument`).
   const lastModified = textOf(source.entry.lastModified);
+  // The name it gives the page in structured data, which the outputs read
+  // once the page is no longer being rendered.
+  const structuredDataName = textOf(input.structuredDataHints?.name);
   return {
     path,
     connection: {
       ...(named ? { name: title } : {}),
       code: input.code,
       ...(lastModified === undefined ? {} : { lastModified }),
+      ...(structuredDataName === undefined ? {} : { structuredDataName }),
     },
   };
 }
@@ -120,9 +124,17 @@ async function record(
   if (call === undefined) return;
   try {
     const row = await readCodePage(ctx, call.path);
-    if (recorded(row, call.connection)) return;
+    // The route tells its page's name in structured data only on the call
+    // that works it out; a head's call, which tells none, keeps the name
+    // kept, so the two calls never rewrite the row in turn.
+    const kept = row?.structuredDataName;
+    const connection =
+      input.structuredDataHints === undefined && kept !== undefined
+        ? { ...call.connection, structuredDataName: kept }
+        : call.connection;
+    if (recorded(row, connection)) return;
     if (!(await mayRecord(ctx, call.path, row))) return;
-    await recordConnection(ctx, call.path, row, call.connection);
+    await recordConnection(ctx, call.path, row, connection);
   } catch (error) {
     // The page's head is answered whatever happens to the record.
     ctx.logger.warn("A page built in code could not be recorded", {

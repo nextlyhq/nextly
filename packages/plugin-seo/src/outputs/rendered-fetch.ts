@@ -88,20 +88,37 @@ async function textWithin(
 }
 
 /**
+ * What rendering a page gave: its copy, or why there is none, in words for
+ * the problem list ("status 500", "timed out after 10 s").
+ */
+export type RenderedPage = { copy: RenderedCopy } | { failed: string };
+
+/** Why a fetch that threw gave no page: the time allowed ran out, or no answer came. */
+function thrownReason(error: unknown): string {
+  return error instanceof Error &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+    ? `timed out after ${RENDER_TIMEOUT_MS / 1000} s`
+    : "the page could not be reached";
+}
+
+/**
  * The page at `address` rendered as the public sees it, as a copy: its
  * head's title and description, and its main content as Markdown, its
- * addresses made whole against `canonical`. None where the page does not
- * answer with HTML (a redirect, an error, a page too large) in time.
- * `owner`, the plugin's context, is the running site the copy is kept for.
+ * addresses made whole against `canonical`. Where the page does not answer
+ * with HTML in time (a redirect, an error, a page too large, one with no
+ * main content), why not. `owner`, the plugin's context, is the running
+ * site the copy is kept for.
  */
 export async function renderedCopyAt(
   owner: object,
   address: string,
   canonical: string
-): Promise<RenderedCopy | null> {
+): Promise<RenderedPage> {
   const kept = keptBy(owner);
   const found = kept.get(address);
-  if (found !== undefined && Date.now() - found.at < KEPT_MS) return found.copy;
+  if (found !== undefined && Date.now() - found.at < KEPT_MS) {
+    return { copy: found.copy };
+  }
   let response: Response;
   try {
     response = await fetch(address, {
@@ -109,18 +126,22 @@ export async function renderedCopyAt(
       redirect: "manual",
       signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
     });
-  } catch {
-    return null;
+  } catch (error) {
+    return { failed: thrownReason(error) };
   }
   const type = response.headers.get("content-type") ?? "";
   const length = Number(response.headers.get("content-length") ?? "0");
-  if (
-    response.status !== 200 ||
-    !type.includes("text/html") ||
-    length > MAX_HTML_BYTES
-  ) {
+  const refused =
+    response.status !== 200
+      ? `status ${response.status}`
+      : !type.includes("text/html")
+        ? "not an HTML page"
+        : length > MAX_HTML_BYTES
+          ? `over ${MAX_HTML_BYTES / (1024 * 1024)} MB`
+          : undefined;
+  if (refused !== undefined) {
     await response.body?.cancel();
-    return null;
+    return { failed: refused };
   }
   // A body that stalls past the time allowed or breaks off midway is a page
   // that did not render, as a failure before its headers is: no copy, so
@@ -128,12 +149,14 @@ export async function renderedCopyAt(
   let html: string | null;
   try {
     html = await textWithin(response, MAX_HTML_BYTES);
-  } catch {
-    return null;
+  } catch (error) {
+    return { failed: thrownReason(error) };
   }
-  if (html === null) return null;
+  if (html === null) {
+    return { failed: `over ${MAX_HTML_BYTES / (1024 * 1024)} MB` };
+  }
   const copy = renderedCopyOf(html, canonical);
-  if (copy.body === "") return null;
+  if (copy.body === "") return { failed: "no main content (<main>)" };
   keep(kept, address, copy);
-  return copy;
+  return { copy };
 }

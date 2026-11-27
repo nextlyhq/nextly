@@ -177,10 +177,24 @@ describe("recording as the head is answered", () => {
     expect(await answering.resolve(entry({ code }))).toEqual({
       title: "Plans and pricing",
     });
+    // No name in structured data: none is kept.
     expect(recorded).toHaveBeenCalledWith(
       ctx,
       { type: "posts", id: "p1", language: "en" },
-      code
+      code,
+      undefined
+    );
+
+    // The name the route gives the page in structured data is kept too.
+    recorded.mockClear();
+    await answering.resolve(
+      entry({ code, structuredDataHints: { name: "Plans" } })
+    );
+    expect(recorded).toHaveBeenCalledWith(
+      ctx,
+      { type: "posts", id: "p1", language: "en" },
+      code,
+      { name: "Plans" }
     );
 
     recorded.mockClear();

@@ -10,7 +10,9 @@
  *   without reading the rest of it;
  * - a page answered with anything but HTML, or with a redirect, has no copy;
  * - a page whose body breaks off after its headers has no copy, rather
- *   than an error the caller would have to catch.
+ *   than an error the caller would have to catch;
+ * - each page with no copy says why, in the words the problem list shows:
+ *   its status, a time-out, its size, or no main content.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,8 +36,12 @@ describe("the rendered page a copy is made from", () => {
           new Response(html, { headers: { "content-type": "text/html" } })
       );
     const owner = {};
-    expect((await renderedCopyAt(owner, PAGE, PAGE))?.body).toBe("Words.");
-    expect((await renderedCopyAt(owner, PAGE, PAGE))?.body).toBe("Words.");
+    const bodyOf = async () => {
+      const rendered = await renderedCopyAt(owner, PAGE, PAGE);
+      return "copy" in rendered ? rendered.copy.body : rendered.failed;
+    };
+    expect(await bodyOf()).toBe("Words.");
+    expect(await bodyOf()).toBe("Words.");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -53,7 +59,9 @@ describe("the rendered page a copy is made from", () => {
       async () =>
         new Response(body, { headers: { "content-type": "text/html" } })
     );
-    expect(await renderedCopyAt({}, PAGE, PAGE)).toBeNull();
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "over 6 MB",
+    });
     expect(pulled).toBeLessThan(12);
   });
 
@@ -62,12 +70,16 @@ describe("the rendered page a copy is made from", () => {
       async () =>
         new Response(null, { status: 307, headers: { location: "/x" } })
     );
-    expect(await renderedCopyAt({}, PAGE, PAGE)).toBeNull();
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "status 307",
+    });
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response("{}", { headers: { "content-type": "application/json" } })
     );
-    expect(await renderedCopyAt({}, PAGE, PAGE)).toBeNull();
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "not an HTML page",
+    });
   });
 
   it("has no copy where the page's body breaks off after its headers", async () => {
@@ -86,6 +98,36 @@ describe("the rendered page a copy is made from", () => {
       async () =>
         new Response(body, { headers: { "content-type": "text/html" } })
     );
-    await expect(renderedCopyAt({}, PAGE, PAGE)).resolves.toBeNull();
+    await expect(renderedCopyAt({}, PAGE, PAGE)).resolves.toEqual({
+      failed: "the page could not be reached",
+    });
+  });
+
+  it("says why a page gave no copy: an error status, a time-out, or no main content", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("<html><body>Oops</body></html>", {
+          status: 500,
+          headers: { "content-type": "text/html" },
+        })
+    );
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "status 500",
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    });
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "timed out after 10 s",
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("<html><body><nav>Menu</nav></body></html>", {
+          headers: { "content-type": "text/html" },
+        })
+    );
+    expect(await renderedCopyAt({}, PAGE, PAGE)).toEqual({
+      failed: "no main content (<main>)",
+    });
   });
 });

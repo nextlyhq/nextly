@@ -30,6 +30,11 @@ export interface CodePageRow {
   /** What the route's code supplied when it last called, as its head used it. */
   code: PageMetadataValues;
   /**
+   * The name the route gives the page in structured data
+   * (`structuredDataHints.name`), which every output names the page by.
+   */
+  structuredDataName?: string;
+  /**
    * When the route says the page last changed, as ISO text, from its
    * `openGraph.modifiedTime` when it last called: the page's sitemap date.
    */
@@ -153,6 +158,10 @@ function codePageRowOf(entry: unknown): CodePageRow {
     code: codeValuesOf(row.codeValues),
     // Kept beside the code values, in the same stored JSON.
     ...optional(
+      "structuredDataName",
+      isRecord(row.codeValues) ? row.codeValues.structuredDataName : undefined
+    ),
+    ...optional(
       "lastModified",
       isRecord(row.codeValues)
         ? isoDateOf(row.codeValues.lastModified)
@@ -274,6 +283,8 @@ export interface Connection {
   code: PageMetadataValues;
   /** When the route says the page last changed, as ISO text. */
   lastModified?: string;
+  /** The name the route gives the page in structured data. */
+  structuredDataName?: string;
 }
 
 /** Whether `row` already says what `connection` would record. */
@@ -286,6 +297,7 @@ export function recorded(
     row.connected &&
     row.name === connection.name &&
     row.lastModified === connection.lastModified &&
+    row.structuredDataName === connection.structuredDataName &&
     sortedJson(row.code) === sortedJson(codeValuesOf(connection.code))
   );
 }
@@ -310,6 +322,9 @@ export async function recordConnection(
       ...(connection.lastModified === undefined
         ? {}
         : { lastModified: connection.lastModified }),
+      ...(connection.structuredDataName === undefined
+        ? {}
+        : { structuredDataName: connection.structuredDataName }),
     },
   });
 }

@@ -16,6 +16,7 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
+import { textOf } from "../plain-values";
 import { singleKey } from "../problems/page-types";
 import { laterListPage } from "../resolver/page-levels";
 
@@ -132,7 +133,18 @@ export function withRouteValues(
       const answer = await resolver.resolve(input);
       try {
         const page = await routeValuesPageOf(ctx, input, types);
-        if (page !== undefined) await recordRouteValues(ctx, page, input.code);
+        // The name the route gives the page in structured data is kept with
+        // its values, so the outputs name the page as structured data does;
+        // only the call that works structured data out tells it.
+        const hints = input.structuredDataHints;
+        if (page !== undefined) {
+          await recordRouteValues(
+            ctx,
+            page,
+            input.code,
+            hints === undefined ? undefined : { name: textOf(hints.name) }
+          );
+        }
       } catch (error) {
         ctx.logger.warn("What a page's route supplies could not be recorded", {
           error,

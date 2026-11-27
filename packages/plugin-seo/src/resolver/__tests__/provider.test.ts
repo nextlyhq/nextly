@@ -175,6 +175,43 @@ describe("one answer for each kind of page", () => {
     expect(answer.canonical).toEqual({ value: "/", from: "address" });
   });
 
+  it("a Single whose title Nextly keeps: {Title} is its own heading, or the field the site chooses", async () => {
+    // A Single made in the Schema Builder, or declaring no title: its
+    // `title` is its label, which Nextly fills.
+    const single = (document: Record<string, unknown>): PageMetadataInput => ({
+      source: { kind: "single", slug: "blog", document },
+      code: {},
+      derived: {},
+    });
+    const rules: SiteRules = {
+      ...RULES,
+      patterns: { "single:blog": { title: "{Title} | {Site name}" } },
+    };
+    const own = await resolveSeo(
+      context(),
+      single({ title: "Blog Page", heading: "Thoughts & Insights" }),
+      async () => rules
+    );
+    expect(own.title?.value).toBe("Thoughts & Insights | Acme");
+    const chosen = await resolveSeo(
+      context(),
+      single({
+        title: "Blog Page",
+        heading: "Thoughts",
+        hero: { lead: "Field <em>notes</em>" },
+      }),
+      async () => ({ ...rules, titleFields: { "single:blog": "hero.lead" } })
+    );
+    expect(chosen.title?.value).toBe("Field notes | Acme");
+    // Nothing else names it: its label still does.
+    const alone = await resolveSeo(
+      context(),
+      single({ title: "Blog Page" }),
+      async () => rules
+    );
+    expect(alone.title?.value).toBe("Blog Page | Acme");
+  });
+
   it("a Page Builder page: its design's rule under what a person typed", async () => {
     const answer = await resolveSeo(
       context(),

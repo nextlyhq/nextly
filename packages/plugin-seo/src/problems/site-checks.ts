@@ -7,6 +7,7 @@
  * @module problems/site-checks
  */
 import { indexNowLine, type ConnectionAttempt } from "../connections/contract";
+import type { CopyFailure } from "../outputs/copy-failures";
 import type { ListingProblem } from "../outputs/listing";
 import type { ProxyStatus } from "../redirects/contract";
 
@@ -304,4 +305,19 @@ export function connectionProblems(report: ConnectionsReport): Problem[] {
     });
   }
   return problems;
+}
+
+/**
+ * Each page whose plain-text copy could not be made from the rendered page,
+ * named by its address, with why: fixed by asking for the copy again once
+ * the page renders, which takes it off the list.
+ */
+export function plainCopyProblems(failures: readonly CopyFailure[]): Problem[] {
+  return failures.map(failure => ({
+    kind: "plainCopy",
+    subject: { label: failure.url, detail: failure.reason },
+    what: `${failure.url}: ${failure.reason}`,
+    action: "Try again",
+    fix: { place: "site", href: failure.retry },
+  }));
 }

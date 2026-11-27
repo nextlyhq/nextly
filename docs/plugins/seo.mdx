@@ -861,9 +861,10 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
 
 - **`/llms.txt`** is a plain list of the site's pages, in the format the
   [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
-  default description beneath it, and each page as a link under its content type, with the
-  title and description its head carries, worked out from what the public may read of the
-  page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
+  default description beneath it, and each page as a link under its content type, by its
+  [own name](#a-pages-own-name) and with the description its head carries, worked out from
+  what the public may read of the page; a page the public may not read is listed by its
+  address alone. It lists exactly the pages the sitemap lists, by
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
   waits for the address record at start, and answers `503` while a real catch-up outlasts that
@@ -874,9 +875,12 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
   escaped so it never becomes a heading.
 - **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
-  llms.txt's head, then every page llms.txt lists, in its order, each as its title, its
-  address (`Source:`) and the words of its plain-text copy. A page the public may not read
-  is named by its address alone. It stops before a page that would take it past 5 MB and
+  llms.txt's head, then every page llms.txt lists, in its order, each as its own name, its
+  address (`Source:`) and the words of its plain-text copy. A page built in code is written
+  from the Markdown `codeAddresses` gives for it, else from the page as it renders, four
+  pages at a time and within 20 seconds for the whole file; a page whose words can't be had
+  (it doesn't render, or the file's time ran out) is written with its description and listed
+  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past 5 MB and
   ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
   part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
   vendor's logs), others read llms.txt and each page's copy instead.
@@ -884,15 +888,21 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.md` for the
   home page (and for any address ending in a slash; `/index.html.md` answers too). The copy
   starts with front matter naming the page (`title` and `description` as its head carries
-  them, `url`, and `last_updated`, as the sitemap dates it), then the page's title as a
-  heading, then the words of its text, long text, rich text and picture fields, in the
-  order its type declares them, those inside its groups and repeaters included. Rich
+  them, `url`, and `last_updated`, as the sitemap dates it), then the page's own name as a
+  heading, then the words of its fields, in the order its type declares them, those inside
+  its groups and repeaters included. Text holding HTML (a site that colours a word with a
+  `<span>`) is written as the words it shows. Rich
   text's headings, lists, links, quotes, code, tables and images are written as Markdown,
   with the bold, italic, struck-through and code a reader sees inside a line; a picture
   field shows its image with its alt text; every link and image written from the site's
   root is made whole (`https://example.com/pricing`). A field group's rich text is read
-  too. A page's SEO fields, its address, fields holding a choice, a number or a date, and
-  other documents read with it, such as an author, are left out. With copies on,
+  too. A fact that means nothing without its name is written beside its field's label: a
+  choice as `Pricing: Free` (the option's label, not its stored value), a ticked box as
+  `Official: yes`, a text field holding only a web or mail address as
+  `Repository: <https://…>`, chips as a list under the label, and another page a
+  relationship names, where the public may read it, as `Author: Sam`, linked to its address
+  where it has one. A page's SEO fields, its address, numbers, dates, code, JSON and
+  pictures drawn in SVG (an icon, a logo) are left out. With copies on,
   `/llms.txt` links each page's copy, and each listed page's head links its copy with
   `<link rel="alternate" type="text/markdown">`.
 
@@ -947,10 +957,42 @@ the site names one; it reads its `<main>` (or its body, without the header and f
 its headings, paragraphs, lists, links, quotes, code, tables and described images as
 Markdown; scripts, styles, navigation, forms, dialogs and anything hidden are left out, and an
 image with no alt text is decoration, said nothing of. Such a copy is kept for five minutes.
-Its front matter is the page's head. Where the page does not answer with HTML in ten seconds,
-a page built in code has no copy, and the request is the site's to answer; a page whose fields
-hold only its title keeps the copy made from them. With copies on, llms.txt links these pages'
-copies too, and their head links them.
+Its front matter is the page's head. Where the page does not answer with HTML in ten seconds
+(an error, a redirect, a page over 6 MB, or one with no main content), its copy is its name
+and its description, never an empty page, and **Problems** lists it as **Plain-text copy
+could not be made**, with why (`status 500`, `timed out after 10 s`) and a **Try again** link
+to where it was asked for: its copy, or llms-full.txt. A copy made with the page's words, once
+it renders or once it has stored words of its own, takes the problem off.
+With copies on, llms.txt links these pages' copies too, and their head links them.
+
+### A page's own name
+
+llms.txt, llms-full.txt and each copy's heading list a page by its own name, the one
+structured data names the page by (`WebPage.name`), with no markup and without the site's
+name its title ends with: `Pricing`, not `Pricing | Acme`. It is the name the page's route
+gives it in structured data where it gives one; else the first of the type's title fields
+with a value; else the title the page's route gives its head; else its head's title. A home
+page is named by its whole title, which is the site's own.
+
+A type's title fields are the field the `titleFields` option names for it, then the field its
+admin names its entries by (`admin.useAsTitle`), then `title`, `name` and `heading`. The same
+fields fill `{Title}` in a [title pattern](#title-patterns).
+
+A Single's `title` is Nextly's own unless the Single declares it: filled from its label, such
+as "Blog Page". It names the page only where nothing else does, so a Single with a heading of
+its own, or a route that gives its head a title, is named by that instead. Name the field
+yourself where neither fits:
+
+```ts
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+seoPlugin({
+  titleFields: { "single:blog": "hero.heading", posts: "headline" },
+});
+```
+
+Keys are a collection's slug or `single:<slug>`; values a field's name or a dotted path into a
+group. A value that is neither is refused when the site starts.
 
 ## Languages
 
@@ -1108,8 +1150,9 @@ starts with `{Title} | {Site name}`, using the separator chosen on General. Each
 Content types holds its pattern: the variables the type offers can be clicked in, and an example
 title from the type's newest page updates as you type.
 
-- `{Title}` is the page's own title, `{Site name}` the site's name, and any other variable one of
-  the type's own text or number fields, such as `{Category}`.
+- `{Title}` is the page's own title, read from the type's
+  [title fields](#a-pages-own-name), `{Site name}` the site's name, and any other variable one
+  of the type's own text or number fields, such as `{Category}`.
 - A pattern naming a variable the type has no field for is refused before it can be saved.
 - A pattern whose variables a page has no value for gives way to the next source in the order
   below, rather than leaving a gap in the title.
