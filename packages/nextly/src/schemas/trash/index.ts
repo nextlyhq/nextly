@@ -10,6 +10,7 @@ import { loadedDialect } from "../../database/dialect-tables";
 
 export { TRASH_TABLE } from "./table-name";
 export type {
+  KeptIncoming,
   KeptLinks,
   KeptRow,
   KeptTableRows,

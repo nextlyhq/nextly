@@ -11,12 +11,16 @@
  *   language;
  * - the many-to-many links it holds, by the ids it links to;
  * - where its translated values came from, the source text they were made
- *   from, and the record of the media its values use.
+ *   from, and the record of the media its values use;
+ * - its pending edits (a published entry's working draft, in each language)
+ *   and its recovery points;
+ * - the pins and "last looked at" markers on its versions, its review state,
+ *   and readers' dashboard pins of it.
  *
- * Links other entries hold to it, and other entries' relation columns
- * pointing at it, belong to those entries: the database removes or clears
- * them at the delete as before, and a restore does not change other entries.
- * Its version history stays in the versions table under its id.
+ * What other entries hold pointing at it, which the database removes or
+ * clears at the delete, is kept too (`capture-incoming`), for a restore to put
+ * back where those entries still are and have not changed it since.
+ * Its durable version history stays in the versions table under its id.
  *
  * @module domains/trash/capture-entry
  */
@@ -27,11 +31,19 @@ import type {
 import { sql } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
+import { DASHBOARD_PINS_TABLE } from "../../schemas/dashboard-pins/table-name";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
+import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
 import { TRANSLATION_SOURCES_TABLE } from "../../schemas/translation-sources/table-name";
-import type { KeptLinks, KeptTableRows } from "../../schemas/trash";
+import type {
+  KeptIncoming,
+  KeptLinks,
+  KeptTableRows,
+} from "../../schemas/trash";
+import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import { usesJunctionTable } from "../schema/field-rules";
 import {
@@ -39,7 +51,11 @@ import {
   junctionTableTo,
 } from "../schema/services/field-column-descriptor";
 
+import { captureIncoming } from "./capture-incoming";
 import { keepRow } from "./kept-values";
+
+/** The table the pins features hold on a document's versions are kept in. */
+const VERSION_PINS_TABLE = "nextly_version_pins";
 
 /** Ids asked about in one statement, as the delete's own walk asks them. */
 const ID_CHUNK = 200;
@@ -70,6 +86,7 @@ export interface CaptureEntryInput {
 export interface CapturedEntry {
   tables: KeptTableRows[];
   links: KeptLinks[];
+  incoming: KeptIncoming[];
 }
 
 /**
@@ -229,16 +246,49 @@ async function linksOf(
 function documentRecordTables(
   input: Pick<CaptureEntryInput, "collection" | "entryId">
 ): { table: string; where: WhereClause }[] {
-  const translationWhere: WhereClause = {
-    and: [
-      { column: "scopeKind", op: "=", value: "collection" },
-      { column: "scopeSlug", op: "=", value: input.collection },
-      { column: "entryId", op: "=", value: input.entryId },
-    ],
-  };
+  // The document, as the translation records and the versions name it.
+  const ofDocument: NonNullable<WhereClause["and"]> = [
+    { column: "scopeKind", op: "=", value: "collection" },
+    { column: "scopeSlug", op: "=", value: input.collection },
+    { column: "entryId", op: "=", value: input.entryId },
+  ];
+  const translationWhere: WhereClause = { and: ofDocument };
+
+  // A document's version rows a delete removes, the same rows the versions
+  // repository's two removals take: the pending edits of a published entry
+  // (its working draft, in each language) and every author's recovery point.
+  // Its durable versions stay where they are and need no copy.
+  const versionsOf = (
+    only: NonNullable<WhereClause["and"]>
+  ): { table: string; where: WhereClause } => ({
+    table: VERSIONS_TABLE,
+    where: { and: [...ofDocument, ...only] },
+  });
   return [
     { table: TRANSLATION_PROVENANCE_TABLE, where: translationWhere },
     { table: TRANSLATION_SOURCES_TABLE, where: translationWhere },
+    versionsOf([
+      { column: "isAutosave", op: "=", value: false },
+      { column: "versionNo", op: "IS NULL" },
+      { column: "status", op: "=", value: "draft" },
+    ]),
+    versionsOf([{ column: "isAutosave", op: "=", value: true }]),
+    // What the delete's sweep removes beside: the pins features hold on its
+    // versions, each person's "last looked at" marker, its review state where
+    // a workflow keeps one, and each reader's dashboard pin of it.
+    { table: VERSION_PINS_TABLE, where: { and: ofDocument } },
+    { table: VERSION_VIEWS_TABLE, where: { and: ofDocument } },
+    { table: REVIEW_STATES_TABLE, where: { and: ofDocument } },
+    {
+      table: DASHBOARD_PINS_TABLE,
+      where: {
+        and: [
+          { column: "targetType", op: "=", value: "collection" },
+          { column: "targetSlug", op: "=", value: input.collection },
+          { column: "entryId", op: "=", value: input.entryId },
+        ],
+      },
+    },
     {
       table: MEDIA_USAGE_TABLE,
       where: {
@@ -290,5 +340,14 @@ export async function captureEntry(
     new Set()
   );
   await keepDocumentRecords(tx, tables, input);
-  return { tables, links: await linksOf(tx, input) };
+  return {
+    tables,
+    links: await linksOf(tx, input),
+    incoming: await captureIncoming(tx, {
+      collection: input.collection,
+      tableName: input.tableName,
+      entryId: input.entryId,
+      tableExists: input.tableExists,
+    }),
+  };
 }

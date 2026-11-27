@@ -43,6 +43,32 @@ export interface KeptLinks {
 }
 
 /**
+ * What other entries held pointing at the trashed one, which the delete
+ * removed or cleared: a many-to-many junction's rows from each of them, or
+ * the relation column of each of them that held its id. A restore puts each
+ * back where the other entry is still there, and, for a column, still holds
+ * nothing, so a later edit is never undone.
+ */
+export type KeptIncoming =
+  | {
+      kind: "links";
+      /** The junction, and its column naming the other entry, then this one. */
+      table: string;
+      sourceColumn: string;
+      targetColumn: string;
+      /** The other entries' table, and their ids. */
+      sourceTable: string;
+      sourceIds: string[];
+    }
+  | {
+      kind: "column";
+      /** The other entries' table, the column, and their ids. */
+      table: string;
+      column: string;
+      ids: string[];
+    };
+
+/**
  * Everything a trashed entry stored, as its rows were: its own row, its rows
  * in each language, its field-group rows at every depth and theirs in each
  * language, the links it held, and where its translated values came from.
@@ -52,6 +78,8 @@ export interface TrashedEntry {
   /** The entry's own table, first, then every other table it had rows in. */
   tables: KeptTableRows[];
   links: KeptLinks[];
+  /** What other entries held pointing at it; absent where none was kept. */
+  incoming?: KeptIncoming[];
   /**
    * The entry in the shape a read gives it, as its deleted event carried it:
    * what a restore's created event carries.

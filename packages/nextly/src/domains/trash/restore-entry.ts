@@ -17,7 +17,6 @@ import type {
   TransactionContext,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { missingSchemaObject } from "../../database/missing-column";
@@ -26,7 +25,6 @@ import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   TRASH_TABLE,
-  type KeptLinks,
   type KeptRow,
   type TrashedEntry,
 } from "../../schemas/trash";
@@ -34,10 +32,19 @@ import { reopenEndedLife } from "../content-events/reopen-life";
 import { recordWriteEvent } from "../content-events/write-event";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import { fieldProducesColumn } from "../schema/field-rules";
+import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
 import { recordMutationEvent } from "../webhooks/record-mutation-event";
 import type { SensitiveFieldSource } from "../webhooks/sensitive-fields";
 
+import { fieldHasReadRule } from "./field-read-rule";
 import { keptColumn, rowGivenBack } from "./kept-values";
+import {
+  idsPresent,
+  putBackIncoming,
+  putBackLinks,
+  relationsGone,
+  relationTargetsOf,
+} from "./put-back-references";
 import { readTrashRecord, type TrashRecord } from "./trash-records";
 
 /** The status a restored entry takes where it had been published. */
@@ -73,8 +80,11 @@ export interface RestoreDeps {
 export interface TrashConflict {
   /** The field whose value is taken. */
   field: string;
-  /** The value the trashed entry held. */
-  value: unknown;
+  /**
+   * The value the trashed entry held; left out where the field has its own
+   * read rule, which a restore cannot judge for a row that is not there.
+   */
+  value?: unknown;
   /** The language the value is in, for a translated field. */
   locale?: string;
 }
@@ -92,8 +102,23 @@ export interface RestoreEntryInput {
   actorName?: string | null;
 }
 
+/**
+ * What a restore could not put back as it was: links to or from entries
+ * deleted since, and its own relation fields whose target was deleted since,
+ * put back empty. Present only where there is any.
+ */
+export interface NotPutBack {
+  links: number;
+  relationsCleared: string[];
+}
+
 export type RestoreEntryResult =
-  | { restored: true; collection: string; id: string }
+  | {
+      restored: true;
+      collection: string;
+      id: string;
+      notPutBack?: NotPutBack;
+    }
   | { restored: false; conflicts: TrashConflict[] };
 
 /** Whether `error` refuses a table this running instance has not registered. */
@@ -106,14 +131,31 @@ function keptRowsOf(stored: TrashedEntry, table: string): KeptRow[] {
   return stored.tables.find(kept => kept.table === table)?.rows ?? [];
 }
 
-/** The fields whose value no two entries may share, by where they live. */
-function uniqueFields(fields: readonly RestoreField[]): RestoreField[] {
-  return fields.filter(
-    field =>
+/** The system slug, which every collection holding it indexes as unique. */
+const SLUG = "slug";
+
+/**
+ * The names of the fields whose value no two entries may share, by where:
+ * on the entry's own row, those declared unique and the slug, whose column
+ * there is unique whatever its field declares; in the language rows, those
+ * declared unique. Fields inside a group with no name are stored on the row
+ * too.
+ */
+function uniqueFieldNames(
+  fields: readonly RestoreField[],
+  onOwnRow: boolean
+): string[] {
+  const names = new Set<string>(onOwnRow ? [SLUG] : []);
+  for (const field of fieldsStoredOnRow(fields)) {
+    if (
       field.unique === true &&
       typeof field.name === "string" &&
       fieldProducesColumn(field)
-  );
+    ) {
+      names.add(field.name);
+    }
+  }
+  return [...names];
 }
 
 /**
@@ -237,10 +279,12 @@ async function conflictsOf(
 ): Promise<TrashConflict[]> {
   const conflicts: TrashConflict[] = [];
   const places = placesOf(record, collection);
-  for (const field of uniqueFields(collection.fields)) {
-    const name = String(field.name);
-    const asked = Object.prototype.hasOwnProperty.call(values, name);
-    for (const place of places) {
+  for (const place of places) {
+    for (const name of uniqueFieldNames(
+      collection.fields,
+      place.locale === undefined
+    )) {
+      const asked = Object.prototype.hasOwnProperty.call(values, name);
       // Asked only of the rows that hold the column: a translated field lives
       // in the language rows, not the entry's own.
       if (!(name in place.row)) continue;
@@ -263,12 +307,15 @@ function rowToPutBack(
   asked: {
     conflicts: readonly TrashConflict[];
     values: Readonly<Record<string, unknown>>;
+    /** The entry's relation fields whose target is gone, put back empty. */
+    cleared: readonly string[];
   }
 ): Record<string, unknown> {
   const row = rowGivenBack(kept);
   const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
   if (table === collection.tableName) {
     if (row.status === PUBLISHED) row.status = DRAFT;
+    for (const field of asked.cleared) row[field] = null;
     return withNewValues(row, asked.conflicts, asked.values, undefined);
   }
   if (table === companion) {
@@ -283,41 +330,35 @@ function rowToPutBack(
   return row;
 }
 
-/** The ids of `table` among `ids` that are there now. */
-async function idsPresent(
-  tx: TransactionContext,
-  table: string,
-  ids: readonly string[]
-): Promise<Set<string>> {
-  if (ids.length === 0) return new Set();
-  try {
-    const rows = await tx.select<{ id: unknown }>(table, {
-      where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
-      columns: ["id"],
-    });
-    return new Set(rows.map(row => String(row.id)));
-  } catch (error) {
-    if (isUnregisteredTable(error)) return new Set();
-    throw error;
-  }
-}
-
 /**
  * The rows of `table` to put back: a media item's use only where the item
- * is still in the library, since its row there is what the use points at.
+ * is still in the library, since its row there is what the use points at,
+ * and no row that is there already.
  */
 async function rowsStillValid(
   tx: TransactionContext,
   table: string,
   rows: Record<string, unknown>[]
 ): Promise<Record<string, unknown>[]> {
-  if (table !== MEDIA_USAGE_TABLE) return rows;
-  const present = await idsPresent(
+  if (table === MEDIA_USAGE_TABLE) {
+    const present = await idsPresent(
+      tx,
+      "media",
+      rows.map(row => String(row.mediaId))
+    );
+    return rows.filter(row => present.has(String(row.mediaId)));
+  }
+  // A field-group row the delete left in place, under a field the
+  // collection has since dropped, is there still: it is not written twice.
+  if (table.startsWith("nextly_") || rows.some(row => !("id" in row))) {
+    return rows;
+  }
+  const there = await idsPresent(
     tx,
-    "media",
-    rows.map(row => String(row.mediaId))
+    table,
+    rows.map(row => String(row.id))
   );
-  return rows.filter(row => present.has(String(row.mediaId)));
+  return rows.filter(row => !there.has(String(row.id)));
 }
 
 /**
@@ -368,43 +409,62 @@ async function putBackTable(
   }
 }
 
-/**
- * Put back the links one many-to-many field held, to the entries still
- * there, as the relationship service writes a link.
- */
-async function putBackLinks(
-  tx: TransactionContext,
-  deps: RestoreDeps,
-  links: KeptLinks,
-  entryId: string,
-  targetTable: string | undefined
-): Promise<void> {
-  if (targetTable === undefined) return;
-  if (!(await deps.adapter.tableExistsThrough(tx, links.table))) return;
-  const present = await idsPresent(tx, targetTable, links.targetIds);
-  const { dialect } = deps.adapter.getCapabilities();
-  const idColumn = sql.identifier("id");
-  for (const targetId of links.targetIds) {
-    if (!present.has(targetId)) continue;
-    // SQLite keeps the junction's time as whole seconds; the others take a
-    // date, as the relationship service binds it.
-    const createdAt =
-      dialect === "sqlite" ? Math.floor(Date.now() / 1000) : new Date();
-    const conflict =
-      dialect === "mysql"
-        ? sql`ON DUPLICATE KEY UPDATE ${idColumn} = ${idColumn}`
-        : sql`ON CONFLICT DO NOTHING`;
-    await tx.runStatement(
-      sql`INSERT INTO ${sql.identifier(links.table)} (${idColumn}, ${sql.identifier(links.sourceColumn)}, ${sql.identifier(links.targetColumn)}, ${sql.identifier("created_at")}) VALUES (${crypto.randomUUID()}, ${entryId}, ${targetId}, ${createdAt}) ${conflict}`
-    );
-  }
-}
-
 /** The entry as its created event carries it: as it was, now a draft. */
-function documentAsRestored(record: TrashRecord): Record<string, unknown> {
+function documentAsRestored(
+  record: TrashRecord,
+  cleared: readonly string[]
+): Record<string, unknown> {
   const document = { ...record.stored.document };
   if (document.status === PUBLISHED) document.status = DRAFT;
+  for (const field of cleared) document[field] = null;
   return document;
+}
+
+/**
+ * The collections a restore reads before its transaction: the tables the
+ * entry's links and relation fields point into, each read on the pool.
+ */
+async function targetTablesOf(
+  deps: RestoreDeps,
+  record: TrashRecord,
+  targets: ReadonlyMap<string, string>
+): Promise<Map<string, string | undefined>> {
+  const tables = new Map<string, string | undefined>();
+  const slugs = [
+    ...record.stored.links.map(links => links.targetSlug),
+    ...targets.values(),
+  ];
+  for (const slug of slugs) {
+    if (!tables.has(slug)) {
+      tables.set(slug, (await deps.collectionOf(slug))?.tableName);
+    }
+  }
+  return tables;
+}
+
+/**
+ * The conflicts as the caller is answered: a value is left out where its
+ * field has its own read rule, which no row is there to judge.
+ */
+function conflictsAnswered(
+  collection: string,
+  conflicts: readonly TrashConflict[],
+  fields: readonly RestoreField[]
+): TrashConflict[] {
+  const byName = new Map(
+    fieldsStoredOnRow(fields)
+      .filter(field => typeof field.name === "string")
+      .map(field => [String(field.name), field] as const)
+  );
+  return conflicts.map(conflict => {
+    if (
+      !fieldHasReadRule(collection, conflict.field, byName.get(conflict.field))
+    ) {
+      return conflict;
+    }
+    const { value: _hidden, ...rest } = conflict;
+    return rest;
+  });
 }
 
 /**
@@ -433,15 +493,8 @@ export async function restoreTrashedEntry(
       logContext: { trashId: input.trashId, table: ownTable },
     });
   }
-  const targetTables = new Map<string, string | undefined>();
-  for (const links of first.stored.links) {
-    if (!targetTables.has(links.targetSlug)) {
-      targetTables.set(
-        links.targetSlug,
-        (await deps.collectionOf(links.targetSlug))?.tableName
-      );
-    }
-  }
+  const targets = relationTargetsOf(collection.fields);
+  const targetTables = await targetTablesOf(deps, first, targets);
   const values = input.values ?? {};
 
   return deps.adapter.transaction(async tx => {
@@ -461,9 +514,23 @@ export async function restoreTrashedEntry(
     // Asked with the new values put in: a value still taken, the entry's
     // own or a new one, is asked for again, and nothing is written.
     const conflicts = await conflictsOf(tx, record, collection, values);
-    if (conflicts.length > 0) return { restored: false, conflicts };
+    if (conflicts.length > 0) {
+      return {
+        restored: false,
+        conflicts: conflictsAnswered(
+          record.scopeSlug,
+          conflicts,
+          collection.fields
+        ),
+      };
+    }
     // Where the entry's own values are taken: where the new ones go.
     const taken = await conflictsOf(tx, record, collection, {});
+    const own = keptRowsOf(record.stored, collection.tableName)[0];
+    const cleared =
+      own === undefined
+        ? []
+        : await relationsGone(tx, rowGivenBack(own), targets, targetTables);
 
     for (const kept of record.stored.tables) {
       await putBackTable(
@@ -474,19 +541,27 @@ export async function restoreTrashedEntry(
           rowToPutBack(kept.table, row, collection, {
             conflicts: taken,
             values,
+            cleared,
           })
         )
       );
     }
+    let linksLeftOut = 0;
     for (const links of record.stored.links) {
-      await putBackLinks(
+      linksLeftOut += await putBackLinks(
         tx,
-        deps,
+        deps.adapter,
         links,
         record.itemId,
         targetTables.get(links.targetSlug)
       );
     }
+    linksLeftOut += await putBackIncoming(
+      tx,
+      deps.adapter,
+      record.stored.incoming ?? [],
+      record.itemId
+    );
     await tx.delete(TRASH_TABLE, {
       and: [{ column: "id", op: "=", value: record.id }],
     });
@@ -511,7 +586,8 @@ export async function restoreTrashedEntry(
       }
     );
     // The site's created event, marked as a restore, in the same
-    // transaction, so it is recorded exactly when the entry is back.
+    // transaction, so it is recorded exactly when the entry is back. The
+    // document was kept without its sensitive values.
     await recordMutationEvent(tx, {
       type: "entry.created",
       resource: {
@@ -519,7 +595,7 @@ export async function restoreTrashedEntry(
         collection: record.scopeSlug,
         id: record.itemId,
       },
-      data: documentAsRestored(record),
+      data: documentAsRestored(record, cleared),
       previous: null,
       fields: collection.fields,
       actor: input.actor,
@@ -529,6 +605,9 @@ export async function restoreTrashedEntry(
       restored: true,
       collection: record.scopeSlug,
       id: record.itemId,
+      ...(linksLeftOut > 0 || cleared.length > 0
+        ? { notPutBack: { links: linksLeftOut, relationsCleared: cleared } }
+        : {}),
     } as const;
   });
 }

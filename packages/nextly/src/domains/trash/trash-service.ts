@@ -7,7 +7,7 @@
  *   gone, so a read rule that needs the row admits super-admin authority
  *   alone, as a deleted document's history does.
  * - Restoring needs that, and `restore-<collection>`.
- * - Emptying needs `empty-trash-<collection>` for each collection emptied;
+ * - Emptying needs `empty-<collection>` for each collection emptied;
  *   emptying with no collection named empties those the caller may.
  *
  * An entry the caller may not read is answered as one not in the trash.
@@ -45,7 +45,7 @@ import {
 
 /** The two permissions the trash adds to every collection. */
 const RESTORE_ACTION = "restore";
-const EMPTY_TRASH_ACTION = "empty-trash";
+const EMPTY_ACTION = "empty";
 
 /** Who is asking, as every collection operation takes it. */
 export interface TrashCaller {
@@ -182,6 +182,29 @@ async function collectionOf(
   };
 }
 
+/**
+ * Refuses a new value that is not a plain one (text, a number, a boolean or
+ * nothing): a restore replaces a taken value, such as a slug, and an object
+ * would be written to its column unchecked.
+ */
+function refuseNonPlainValues(
+  values: Readonly<Record<string, unknown>> | undefined
+): void {
+  const plain = (value: unknown): boolean =>
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean";
+  const errors = Object.entries(values ?? {})
+    .filter(([, value]) => !plain(value))
+    .map(([field]) => ({
+      path: `values.${field}`,
+      code: "invalid_type",
+      message: "A new value is text, a number, a boolean or null.",
+    }));
+  if (errors.length > 0) throw NextlyError.validation({ errors });
+}
+
 /** What a restore names: a trash record, or a trashed entry by its id. */
 export type TrashItemRef =
   | { trashId: string }
@@ -245,6 +268,7 @@ export async function restoreFor(
   ref: TrashItemRef,
   values?: Readonly<Record<string, unknown>>
 ): Promise<RestoreEntryResult> {
+  refuseNonPlainValues(values);
   await requireTrash();
   const record = await recordFor(caller, ref);
   if (!(await holds(caller, RESTORE_ACTION, record.scopeSlug))) {
@@ -294,7 +318,7 @@ export async function emptyTrashFor(
 
 /**
  * The collections an emptying takes: every one for trusted code (undefined),
- * else those the caller may see and holds `empty-trash` on. A collection
+ * else those the caller may see and holds `empty` on. A collection
  * named that the caller may not see is not found; one they see but may not
  * empty is refused.
  */
@@ -306,13 +330,13 @@ async function collectionsToEmpty(
   if (visible === undefined) return undefined;
   const allowed: string[] = [];
   for (const slug of visible) {
-    if (await holds(caller, EMPTY_TRASH_ACTION, slug)) allowed.push(slug);
+    if (await holds(caller, EMPTY_ACTION, slug)) allowed.push(slug);
   }
   if (named === undefined || allowed.length > 0) return allowed;
   if (visible.length === 0) {
     throw NextlyError.notFound({ logContext: { collection: named } });
   }
   throw NextlyError.forbidden({
-    logContext: { reason: "empty-trash-not-granted", collection: named },
+    logContext: { reason: "empty-not-granted", collection: named },
   });
 }

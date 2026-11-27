@@ -164,7 +164,7 @@ export const ROLE_PRESETS: RolePreset[] = [
         "unpublish",
         "manage",
         "restore",
-        "empty-trash",
+        "empty",
       ].includes(action);
     },
   },

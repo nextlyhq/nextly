@@ -16,8 +16,15 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { TRASH_TABLE } from "../../schemas/trash";
+import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
+import { sanitizedChange } from "../webhooks/envelope";
+import {
+  sensitiveFieldPaths,
+  type SensitiveFieldSource,
+} from "../webhooks/sensitive-fields";
 
 import { captureEntry, type CapturedField } from "./capture-entry";
+import { fieldHasReadRule } from "./field-read-rule";
 import { trashActorColumns } from "./trash-actor";
 
 /** How long an item stays in the trash before it leaves for good. */
@@ -44,6 +51,12 @@ export interface MoveEntryToTrashInput {
   tableName: string;
   entryId: string;
   fields: readonly CapturedField[];
+  /**
+   * The schema with its field groups expanded, as the deleted event reads it:
+   * the document is kept without the values it strips (hidden and password
+   * fields, at any depth), so a restore's event can never carry them.
+   */
+  sensitiveFields: readonly SensitiveFieldSource[];
   /** The entry in the shape a read gives it, as its deleted event carries it. */
   document: Record<string, unknown>;
   /** Who deleted it, as the delete records it. */
@@ -62,11 +75,23 @@ export type MoveEntryToTrashResult =
 let warnedNoTrash = false;
 
 /**
- * What a list names the item by: its title, else its slug, as text, cut to
- * the column's length.
+ * What a list names the item by: its title, else its name, else its slug,
+ * as text, cut to the column's length. A field with a read rule of its own
+ * is passed over: the list is shown to whoever may read the collection, and
+ * the rule cannot be judged for a row that is gone.
  */
-function trashLabelOf(document: Record<string, unknown>): string | null {
+function trashLabelOf(
+  collection: string,
+  document: Record<string, unknown>,
+  fields: readonly CapturedField[]
+): string | null {
+  const byName = new Map(
+    fieldsStoredOnRow(fields)
+      .filter(field => typeof field.name === "string")
+      .map(field => [String(field.name), field] as const)
+  );
   for (const key of ["title", "name", "slug"]) {
+    if (fieldHasReadRule(collection, key, byName.get(key))) continue;
     const value = document[key];
     if (typeof value === "string" && value.trim() !== "") {
       return value.length > MAX_LABEL ? value.slice(0, MAX_LABEL) : value;
@@ -119,8 +144,14 @@ export async function moveEntryToTrash(
     kind: "entry",
     scopeSlug: input.collection,
     itemId: input.entryId,
-    label: trashLabelOf(input.document),
-    stored: { ...captured, document: input.document },
+    label: trashLabelOf(input.collection, input.document, input.fields),
+    stored: {
+      ...captured,
+      document: sanitizedChange({
+        data: input.document,
+        sensitiveFields: sensitiveFieldPaths(input.sensitiveFields),
+      }).data,
+    },
     storageKey: null,
     madePrivate: false,
     ...trashActorColumns(input.actor, input.actorName ?? null),

@@ -378,5 +378,16 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
         overrideAccess: false,
       })
     ).toMatchObject({ restored: true, id });
+
+    // Deleted again: the Editor empties it, by the permission the presets
+    // grant, as `empty-<collection>`.
+    await t.nextly.delete({ collection: POSTS, id });
+    const { removed } = await t.nextly.trash.empty({
+      collection: POSTS,
+      user: { id: editor },
+      overrideAccess: false,
+    });
+    expect(removed.map(item => item.itemId)).toEqual([id]);
+    expect(await trashed(t, id)).toBe(0);
   });
 });

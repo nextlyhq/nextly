@@ -2660,6 +2660,8 @@ export class CollectionMutationService extends BaseService {
       tableName: string;
       entryId: string;
       fields: readonly FieldConfig[];
+      /** The schema with field groups expanded, as the deleted event reads it. */
+      eventFields: readonly SensitiveFieldSource[];
       document: Record<string, unknown>;
       actor: RequestActor;
       actorName: string | null;
@@ -2673,6 +2675,7 @@ export class CollectionMutationService extends BaseService {
         tableName: args.tableName,
         entryId: args.entryId,
         fields: args.fields,
+        sensitiveFields: args.eventFields,
         document: args.document,
         actor: args.actor,
         actorName: args.actorName,
@@ -22865,6 +22868,7 @@ export class CollectionMutationService extends BaseService {
             tableName,
             entryId: params.entryId,
             fields: collectionFields,
+            eventFields: webhookFields,
             document: deletedDocument,
             actor: actorForWrite(params.actor, params.user),
             actorName: params.user?.name ?? null,
@@ -26271,6 +26275,15 @@ export class CollectionMutationService extends BaseService {
       // locale's page (reads are id-tagged), so localized slug tags are omitted
       // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
+      // The schema with its field groups expanded, on this transaction's
+      // connection: what the deleted event strips sensitive values by, and the
+      // trash copy of the document too. Expanded whatever the webhook opt-out,
+      // for the in-process event announced either way.
+      const deleteEventFields = await this.webhookFieldTree(
+        snapshotFields,
+        tx.getDrizzle()
+      );
+
       // Every row the entry stores is copied to the trash before the removal
       // below, which then goes on as before.
       const trashed = await this.moveDeletedEntryToTrash(tx, {
@@ -26278,6 +26291,7 @@ export class CollectionMutationService extends BaseService {
         tableName,
         entryId,
         fields: collectionFields,
+        eventFields: deleteEventFields,
         document: deletedDocument,
         actor: actorForWrite(params.actor, params.user),
         actorName: params.user?.name ?? null,
@@ -26364,14 +26378,8 @@ export class CollectionMutationService extends BaseService {
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
-      // single-delete path. Resolve component schemas on this transaction's
-      // connection to avoid taking a second pooled connection. `locale` is set
-      // only for a localized collection. Expanded whatever the webhook
-      // opt-out, for the in-process event announced either way.
-      const deleteEventFields = await this.webhookFieldTree(
-        snapshotFields,
-        tx.getDrizzle()
-      );
+      // single-delete path, its fields expanded above. `locale` is set only for
+      // a localized collection.
       const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {

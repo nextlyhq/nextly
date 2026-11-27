@@ -23,6 +23,7 @@ import {
   apiKeyScopeFrom,
   type AuthenticatedScope,
 } from "../../auth/authenticated-scope";
+import { validateOrigin } from "../../auth/csrf/validate";
 import { actorFromAuthContext } from "../../auth/request-actor";
 import { buildUserContext } from "../../auth/user-context";
 import {
@@ -31,7 +32,9 @@ import {
   restoreFor,
   type TrashCaller,
 } from "../../domains/trash/trash-service";
+import { NextlyError } from "../../errors";
 import { getCachedNextly } from "../../init";
+import { env } from "../../lib/env";
 import { resolveRoleSlugs } from "../../services/lib/permissions";
 import { readJsonBody } from "../read-json-body";
 import {
@@ -56,7 +59,13 @@ const RestoreBody = z
     id: z.string().min(1).optional(),
     collection: z.string().min(1).optional(),
     trashId: z.string().min(1).optional(),
-    values: z.record(z.string(), z.unknown()).optional(),
+    // Plain values only: a new slug, title or number, never an object.
+    values: z
+      .record(
+        z.string().min(1),
+        z.union([z.string(), z.number(), z.boolean(), z.null()])
+      )
+      .optional(),
   })
   .refine(body => (body.id === undefined) !== (body.trashId === undefined), {
     message: "Name the entry by `id`, or its trash record by `trashId`.",
@@ -74,11 +83,28 @@ function parsed<T>(schema: z.ZodType<T>, input: unknown): T {
   throw nextlyValidationFromZod(result.error);
 }
 
-/** Who is asking, resolved as every read resolves its caller. */
-async function callerOf(request: Request): Promise<TrashCaller> {
+/**
+ * Who is asking, resolved as every read resolves its caller. A change
+ * (`writes`) made with a browser's session cookie must come from the site's
+ * own origin, as every other cookie-authenticated change must; an API key
+ * carries no cookie a cross-site page could borrow.
+ */
+async function callerOf(
+  request: Request,
+  writes = false
+): Promise<TrashCaller> {
   // Authenticated first: the route handler registers services on a cold
   // worker only for a request that carries credentials.
   const auth = await requireRouteAuthentication(request);
+  if (
+    writes &&
+    auth.authMethod !== "api-key" &&
+    !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
+  ) {
+    throw NextlyError.originRefused({
+      logContext: { reason: "trash-change-origin-mismatch" },
+    });
+  }
   await getCachedNextly();
   // Role slugs, so a code-defined rule judges the caller it would on any
   // other read; an API key is judged by its own scope.
@@ -121,7 +147,7 @@ export const listTrashRoute = privateToSession(
 
 export const restoreFromTrashRoute = privateToSession(
   withErrorHandler(async (request: Request): Promise<Response> => {
-    const caller = await callerOf(request);
+    const caller = await callerOf(request, true);
     const body = parsed(RestoreBody, await bodyOf(request));
     const result = await restoreFor(
       caller,
@@ -154,7 +180,7 @@ export const restoreFromTrashRoute = privateToSession(
 
 export const emptyTrashRoute = privateToSession(
   withErrorHandler(async (request: Request): Promise<Response> => {
-    const caller = await callerOf(request);
+    const caller = await callerOf(request, true);
     const body = parsed(EmptyBody, await bodyOf(request));
     const removed = await emptyTrashFor(caller, body);
     return respondAction(

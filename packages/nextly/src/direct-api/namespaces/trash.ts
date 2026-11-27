@@ -47,7 +47,7 @@ export type TrashRestoreArgs = DirectAPIConfig & {
    * New values for fields whose value another entry has taken since, by
    * field name, as a refused restore listed them.
    */
-  values?: Record<string, unknown>;
+  values?: Record<string, string | number | boolean | null>;
 };
 
 /** What `trash.empty` takes. */
