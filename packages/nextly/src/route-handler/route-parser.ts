@@ -3343,6 +3343,31 @@ function parseWebhookRoutes(
 // ============================================================================
 
 /**
+ * Parse the AI routes.
+ *
+ *   GET /api/ai/status → getAIStatus
+ *
+ * The handler owns its own auth: any signed-in caller, judged on their own
+ * grants.
+ */
+function parseAIRoutes(
+  id: string | undefined,
+  extra: readonly unknown[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Only the documented path: a trailing segment is a different path.
+  if (extra.some(segment => segment !== undefined)) return null;
+  if (httpMethod !== "GET" || id !== "status") return null;
+  return {
+    service: "ai",
+    operation: "single",
+    method: "getAIStatus",
+    routeParams,
+  };
+}
+
+/**
  * Parse the notices routes: the signed-in person's own notices.
  *
  *   GET  /api/notices        → getNotices
@@ -3986,6 +4011,17 @@ export function parseRestRoute(
   // Handle the background job trigger
   if (resource === "jobs") {
     const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle the AI routes
+  if (resource === "ai") {
+    const result = parseAIRoutes(
+      id,
+      [subresource, subId, ...additionalParams],
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

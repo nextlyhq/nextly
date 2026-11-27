@@ -270,6 +270,9 @@ function buildNextlyInstance(
     files: directAPI.files,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
+    // AI: run, stream, embed, status and the usage hook, forwarded for the
+    // same reason.
+    ai: directAPI.ai,
 
     // A translated field and its source, forwarded for the same reason.
     translations: directAPI.translations,

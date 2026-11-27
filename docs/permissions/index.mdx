@@ -661,6 +661,11 @@ Field-level rules behave differently: they run whenever `overrideAccess` is `fal
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal
 code that genuinely needs to write a protected field says so with `overrideAccess: true`.
 
+`nextly.ai` is the exception: its calls are checked unless the call itself passes
+`overrideAccess: true`, whatever the instance's default, because an AI run sends content to
+an outside service and spends the site's money. An instance made with `overrideAccess: true`,
+such as a script's or a test's, is still checked here. A call that names no `user` is refused.
+
 ## Limits
 
 - **A grant covers a whole collection or Single.** Grants are per resource and action. To

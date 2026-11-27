@@ -38,6 +38,7 @@ import {
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
 
+import { getAIStatus } from "./api/ai-status";
 import {
   listApiKeys,
   getApiKeyById,
@@ -440,6 +441,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "releases",
   "workflows",
   "notices",
+  "ai",
   "jobs",
   "generalSettings",
   "languages",
@@ -598,6 +600,27 @@ async function handleDocumentLockRequest(
       // `{ error }` body is unreadable exactly when someone is debugging.
       throw NextlyError.notFound({
         logContext: { service: "documentLock", method },
+      });
+  }
+}
+
+// ============================================================================
+// AI Direct Dispatch
+// ============================================================================
+
+/** The AI routes. */
+async function handleAIRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getAIStatus":
+      return getAIStatus(req);
+    default:
+      // Thrown, so the shared handler supplies the canonical envelope.
+      throw NextlyError.notFound({
+        message: `Unknown AI operation: ${method}`,
+        logContext: { reason: "unknown-ai-operation", method },
       });
   }
 }
@@ -1833,6 +1856,13 @@ async function serveServiceRequest(
   // body, so it intercepts before `req.text()` for the reason dashboard does.
   if (service === "notices") {
     return handleNoticesRequest(req, method);
+  }
+
+  // ==================== AI DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication) and is read-only, so it intercepts
+  // before `req.text()`, as notices does.
+  if (service === "ai") {
+    return handleAIRequest(req, method);
   }
 
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================

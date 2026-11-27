@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { AINamespace } from "../direct-api/namespaces/ai";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
 import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FilesNamespace } from "../direct-api/namespaces/files";
@@ -1153,6 +1154,23 @@ export interface Nextly {
    * ```
    */
   notices: NoticesNamespace;
+
+  /**
+   * AI: run a task, stream its text, embed text, report what AI can do here
+   * for a person, and hear every run's usage. Checked unless a call passes
+   * `overrideAccess: true`.
+   *
+   * @experimental With the AI contract.
+   *
+   * @example
+   * ```typescript
+   * const status = await nextly.ai.status({ user: { id: userId } });
+   * if (status.configured) {
+   *   // draw AI controls
+   * }
+   * ```
+   */
+  ai: AINamespace;
 
   /**
    * @experimental A translated field and its source: what changed in the source since the

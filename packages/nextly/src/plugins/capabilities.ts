@@ -17,6 +17,8 @@
  */
 import { z } from "zod";
 
+import { AI_CAPABILITY, AI_SERVICE } from "../domains/ai/ai-contract";
+import { forgetAILock, recordAILock } from "../domains/ai/ai-switch";
 import { SCHEMA_VERSION_SHAPE } from "../domains/schema/migrate/plugin/schema-version-shape";
 import {
   PAGE_METADATA_CAPABILITY,
@@ -691,6 +693,8 @@ const globalForCapabilityProviders = globalThis as unknown as {
  *
  * @throws NextlyError for a page-metadata provider that contributes no
  * resolver service: the route helpers would ask it for every page.
+ * @throws NextlyError for an AI provider that contributes no `ai` service:
+ * every AI run and status would ask it.
  */
 export function recordCapabilityProviders(started: PluginDefinition[]): void {
   const provided = resolveProvides(started);
@@ -712,7 +716,23 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
       );
     }
   }
+  const ai = provided.get(AI_CAPABILITY);
+  if (ai !== undefined) {
+    const definition = started.find(candidate => candidate.name === ai.plugin);
+    // Read, not resolved, for the reason page metadata's is: resolving runs
+    // the plugin's factory, which belongs to the first AI call.
+    if (typeof definition?.contributes?.services?.[AI_SERVICE] !== "function") {
+      throw resolutionError(
+        "ai-service-missing",
+        `Plugin "${ai.plugin}" provides "${AI_CAPABILITY}" but contributes no "${AI_SERVICE}" service to answer it.`,
+        { plugin: ai.plugin, capability: AI_CAPABILITY }
+      );
+    }
+  }
   globalForCapabilityProviders.__nextly_capabilityProviders = provided;
+  // The AI lock is decided by the same boot step, once, so the answer every
+  // AI check reads is this boot's and cannot change under a running site.
+  recordAILock({ environment: process.env });
 }
 
 /**
@@ -723,6 +743,7 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
  */
 export function forgetCapabilityProviders(): void {
   globalForCapabilityProviders.__nextly_capabilityProviders = undefined;
+  forgetAILock();
 }
 
 /**
