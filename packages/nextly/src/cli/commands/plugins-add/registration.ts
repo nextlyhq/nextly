@@ -30,49 +30,21 @@
  *
  * @module cli/commands/plugins-add/registration
  */
-import { z } from "zod";
-
+import type { PluginPackageInstallOption } from "../../../plugins/declaration/format";
+import { readPluginPackageDeclaration } from "../../../plugins/declaration/read";
+import { registrationTargetProblem } from "../../../plugins/declaration/registration-target";
 import {
+  pluginDeclarationFormatNewer,
   pluginDeclarationInvalid,
+  pluginDeclarationMalformed,
   pluginOptionInvalid,
   pluginOptionMissing,
   pluginRegistrationUnknown,
 } from "../../errors/areas/plugins";
 import { isPluginDefinition } from "../plugin-definition-shape";
 
-/** A JavaScript name an import can bind and an object literal can key. */
-const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
-
-const OPTION = z
-  .object({
-    description: z.string().trim().min(1),
-    format: z.enum(["text", "url"]).optional(),
-  })
-  .strict();
-
-const DECLARATION = z
-  .object({
-    export: z
-      .string()
-      .regex(IDENTIFIER, "`export` must be a JavaScript name, or `default`"),
-    call: z.boolean().optional(),
-    options: z
-      .record(
-        z.string().regex(IDENTIFIER, "each option must be a JavaScript name"),
-        OPTION
-      )
-      .optional(),
-  })
-  .strict()
-  .refine(
-    declared =>
-      declared.call === true ||
-      Object.keys(declared.options ?? {}).length === 0,
-    "`options` are given to a call, so they need `call: true`"
-  );
-
-/** An option the install asks for. */
-export type InstallOption = z.infer<typeof OPTION>;
+/** An option the install asks for, as the declaration's format describes it. */
+export type InstallOption = PluginPackageInstallOption;
 
 /** What goes into the config for a package: which export, bound to what, and how it is called. */
 export interface Registration {
@@ -115,7 +87,14 @@ function registrationOf(
   };
 }
 
-/** The `nextly.plugin` declaration in a package's manifest: absent, read, or why it cannot be. */
+/**
+ * The registration part of a package's declaration: absent, read, or why it
+ * cannot be. Read through the declaration's own reader, so `plugins add` and
+ * every other reader of the `nextly` key agree on what it says, and a package
+ * with only today's `nextly.plugin` block is read as it always was. A
+ * declaration in a format this Nextly does not read is refused here, before
+ * anything in it is used.
+ */
 export function readDeclaration(manifest: {
   name?: unknown;
   nextly?: unknown;
@@ -123,33 +102,47 @@ export function readDeclaration(manifest: {
   | { kind: "none" }
   | { kind: "declared"; registration: Registration }
   | { kind: "invalid"; problem: string } {
-  const nextly = manifest.nextly;
-  const declared =
-    typeof nextly === "object" && nextly !== null
-      ? (nextly as { plugin?: unknown }).plugin
-      : undefined;
-  if (declared === undefined) return { kind: "none" };
-  const parsed = DECLARATION.safeParse(declared);
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map(
-      issue =>
-        `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`
-    );
-    return {
-      kind: "invalid",
-      problem: `Its \`nextly.plugin\` does not parse: ${issues.join("; ")}`,
-    };
-  }
   const name = typeof manifest.name === "string" ? manifest.name : "";
-  return {
-    kind: "declared",
-    registration: registrationOf(
-      name,
-      parsed.data.export,
-      parsed.data.call === true,
-      parsed.data.options ?? {}
-    ),
-  };
+  const reading = readPluginPackageDeclaration(manifest);
+  switch (reading.kind) {
+    case "none":
+      return { kind: "none" };
+    case "newer-format":
+      throw pluginDeclarationFormatNewer(name, reading.format, reading.core);
+    case "invalid":
+      // A declaration with a format that does not hold to it has a refusal
+      // of its own; today's block alone is refused in the words, and under
+      // the code, it always was, each problem named within the block.
+      if (reading.of === "declaration") {
+        throw pluginDeclarationMalformed(name, reading.problems);
+      }
+      return {
+        kind: "invalid",
+        problem: `Its \`nextly.plugin\` does not parse: ${reading.problems
+          .map(problem => problem.replace(/^nextly\.plugin(?:\.|: )/, ""))
+          .join("; ")}`,
+      };
+    case "registration":
+    case "declared": {
+      const declared =
+        reading.kind === "registration"
+          ? reading.registration
+          : reading.declaration.plugin;
+      // A declaration may leave its registration out: the package is then
+      // registered by the one plugin its entry exports, as a package that
+      // declares nothing is.
+      if (declared === undefined) return { kind: "none" };
+      return {
+        kind: "declared",
+        registration: registrationOf(
+          name,
+          declared.export,
+          declared.call === true,
+          declared.options ?? {}
+        ),
+      };
+    }
+  }
 }
 
 /** A plugin definition, as far as the command reads one: its name, which the install takes. */
@@ -342,21 +335,16 @@ export async function pluginFrom(
   registration: Registration,
   values: Record<string, string>
 ): Promise<PluginShape> {
+  // The same question a plugin's own suite asks of its entry, in the same
+  // words: whether the export is there, and a function when it is called.
+  const problem = registrationTargetProblem(
+    { export: registration.exportName, call: registration.call },
+    exports
+  );
+  if (problem !== undefined) throw pluginDeclarationInvalid(pkg, problem);
   const exported = exports[registration.exportName];
-  if (exported === undefined) {
-    throw pluginDeclarationInvalid(
-      pkg,
-      `It names the export ${registration.exportName}, which its entry does not have`
-    );
-  }
   let made: unknown = exported;
   if (registration.call) {
-    if (typeof exported !== "function") {
-      throw pluginDeclarationInvalid(
-        pkg,
-        `It says ${registration.exportName} is called, and it is not a function`
-      );
-    }
     const options = Object.keys(registration.options).length > 0;
     try {
       made = await (exported as (options?: unknown) => unknown)(

@@ -269,6 +269,38 @@ export { resolvedCollectionView } from "nextly";
 export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 
 /**
+ * A plugin package's declaration: what the plugin needs, said in the `nextly`
+ * key of its package.json so it can be read before any of its code runs.
+ * `PluginPackageDeclaration` is its type and
+ * `pluginPackageDeclarationJsonSchema()` its JSON Schema.
+ * `checkPluginPackageDeclaration(manifest, plugin)` compares it with the
+ * plugin's own definition and returns each difference in plain words, so a
+ * plugin's suite reads its package.json, parses it, and asserts
+ * `checkPluginPackageDeclaration(manifest, myPlugin())` is empty: it cannot
+ * then be published with a declaration that disagrees with its code. The
+ * Plugin start's `src/declaration.test.ts` is a complete example. (No import
+ * lines here: the root entry's import guard reads them in comments too.)
+ *
+ * @experimental Intended to be stable once Nextly's own plugins are added
+ *   through the declaration in a release; until then the format may change,
+ *   and a change is a new format number.
+ */
+export {
+  PLUGIN_DATABASE_KINDS,
+  PLUGIN_PACKAGE_DECLARATION_FORMAT,
+  checkPluginPackageDeclaration,
+  pluginPackageDeclarationJsonSchema,
+  readPluginPackageDeclaration,
+  type CheckPluginPackageDeclarationOptions,
+  type PluginContentTarget,
+  type PluginDatabaseKind,
+  type PluginPackageDeclaration,
+  type PluginPackageDeclarationReading,
+  type PluginPackageInstallOption,
+  type PluginPackageRegistration,
+} from "nextly";
+
+/**
  * Which `locale` values are instructions rather than languages.
  * @experimental `isLocaleSelector` — a route that forwards `?locale=` into
  *   `ctx.services` has to tell a visitor's language from the wildcards the
