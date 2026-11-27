@@ -52,40 +52,79 @@ export interface OperationListSources {
 }
 
 /**
- * Whether `value` is data a declaration holds and the list copies: any array
- * or object, a class instance included, so a fact declared as one is
- * snapshotted like a literal. Functions are not objects here and stay as given.
+ * How a copy treats an object that is not an array:
+ * - `facts`: every object becomes plain data, its own fields copied and its
+ *   class dropped, for the fields the checks judge (doors, effects,
+ *   permission, ...). The list reads these as data, so a class instance there
+ *   is snapshotted rather than left as the declarer's live object.
+ * - `values`: only object literals are copied; any other object (a Date, a
+ *   Map, a Set, a typed array, a schema, a class with private fields) is kept
+ *   as given, for the fields that carry values rather than state facts
+ *   (examples and raise rules). Such objects keep their data in internal slots
+ *   or private fields that no copy of their own fields carries, so a copy would
+ *   answer nothing: the example would no longer parse, or a raise rule's
+ *   `applies` would throw.
  */
-function isPlainData(value: unknown): value is object {
-  return typeof value === "object" && value !== null;
+type CopyMode = "facts" | "values";
+
+/** Whether `value` was written as an object literal, or made with no prototype. */
+function isObjectLiteral(value: object): boolean {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * A frozen deep copy of data: arrays and objects, at every depth. A copy keeps
- * its original's prototype, so a class instance's methods still answer while
- * its own fields are fixed. Functions are kept as they are, since the list
- * calls them rather than reading them.
+ * Whether a copy by `mode` keeps the object `value` as given: as `values`, any
+ * object that is neither an array nor a literal.
  */
-function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
-  if (!isPlainData(value)) return value;
-  const done = copies.get(value);
+function keptAsGiven(value: object, mode: CopyMode): boolean {
+  return mode === "values" && !Array.isArray(value) && !isObjectLiteral(value);
+}
+
+/**
+ * The empty copy `value`'s fields are put into: an array for an array; for a
+ * literal, an object with its prototype (Object's, or none); and for a class
+ * instance in a fact, a plain object.
+ */
+function emptyCopyOf(value: object): Record<string, unknown> | unknown[] {
+  if (Array.isArray(value)) return [];
+  return isObjectLiteral(value)
+    ? (Object.create(Object.getPrototypeOf(value) as object | null) as Record<
+        string,
+        unknown
+      >)
+    : {};
+}
+
+/**
+ * A frozen deep copy of `value` by `mode`, at every depth. Anything that is not
+ * an object is kept as it is (a function included, which the list calls rather
+ * than reads), and so is an object `keptAsGiven` keeps.
+ */
+function frozenCopy<T>(
+  value: T,
+  mode: CopyMode,
+  copies = new Map<object, object>()
+): T {
+  if (typeof value !== "object" || value === null) return value;
+  if (keptAsGiven(value, mode)) return value;
+  const source: object = value;
+  const done = copies.get(source);
   if (done) return done as T;
-  const copy: Record<string, unknown> | unknown[] = Array.isArray(value)
-    ? []
-    : Object.create(Object.getPrototypeOf(value) as object | null);
-  copies.set(value, copy);
-  if (Array.isArray(value) && Array.isArray(copy)) {
+  const copy = emptyCopyOf(source);
+  copies.set(source, copy);
+  if (Array.isArray(source) && Array.isArray(copy)) {
     // Every index, holes included: a hole becomes `undefined`, which the
     // checks then refuse like any other missing entry.
-    for (let index = 0; index < value.length; index++) {
-      copy.push(frozenCopy<unknown>(value[index], copies));
+    for (let index = 0; index < source.length; index++) {
+      copy.push(frozenCopy<unknown>(source[index], mode, copies));
     }
   } else {
-    for (const [key, entry] of Object.entries(value)) {
+    for (const [key, entry] of Object.entries(source)) {
       // Defined rather than assigned, so a key such as `__proto__` stays a
       // key of its own instead of reaching the object's prototype.
       Object.defineProperty(copy, key, {
-        value: frozenCopy(entry, copies),
+        value: frozenCopy(entry, mode, copies),
         enumerable: true,
       });
     }
@@ -96,19 +135,28 @@ function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
 /** The two fields that hold schemas, kept as given whatever they are made of. */
 const SCHEMA_FIELDS: ReadonlySet<string> = new Set(["input", "output"]);
 
+/** The fields that carry values rather than state facts, copied as `values`. */
+const VALUE_FIELDS: ReadonlySet<string> = new Set(["examples", "raise"]);
+
 /**
  * A declaration as the list checks and serves it: a frozen copy of its own
- * fields, made whatever kind of object it was declared as, with its schemas
- * kept as given (their marker may not be a property a copy would carry over)
- * and every other field deep-copied. A declarer that keeps its object and
- * changes it later (pushing a door, say) changes nothing the checks passed.
+ * fields, made whatever kind of object it was declared as. Its schemas are
+ * kept as given (their marker may not be a property a copy would carry over),
+ * its examples and raise rules are copied as `values`, and every other field
+ * is copied as `facts`. A declarer that keeps its object and changes it later
+ * (pushing a door, say) changes nothing the checks passed.
  */
 function copyDeclaration(op: unknown): unknown {
   if (typeof op !== "object" || op === null) return op;
   const copy: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(op)) {
     Object.defineProperty(copy, key, {
-      value: SCHEMA_FIELDS.has(key) ? entry : frozenCopy<unknown>(entry),
+      value: SCHEMA_FIELDS.has(key)
+        ? entry
+        : frozenCopy<unknown>(
+            entry,
+            VALUE_FIELDS.has(key) ? "values" : "facts"
+          ),
       enumerable: true,
     });
   }

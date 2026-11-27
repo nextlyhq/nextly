@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The operation list holds its facts fixed: the risk levels, doors and shared exit codes it judges declarations by are frozen, a fact declared as a class instance is copied when the list is assembled like any other, and a door that is not text is named in a refusal rather than stopping the check.
+The operation list holds its facts fixed: the risk levels, doors, shared exit codes and deploy-door operations it judges declarations by are frozen, and a fact declared as a class instance is listed as frozen plain data like any other, while examples and raise rules keep values such as dates, maps, sets and schemas as given so they still parse and answer. A door that is not text is named in a refusal rather than stopping the check.

@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
-import type { Door, OperationDefinition } from "../definition";
+import type { Door, OperationDefinition, OperationRun } from "../definition";
+import { levelForRun } from "../levels";
 import { assembleOperationList, type OperationListSources } from "../list";
 
 import { readOperation, settingsSetLike, writeOperation } from "./fixtures";
@@ -923,7 +924,7 @@ describe("values plain JavaScript can still slip past a message", () => {
 });
 
 describe("a nested fact declared as a class instance", () => {
-  it("is copied, so changing it afterwards changes nothing listed", async () => {
+  it("is listed as frozen plain data, so changing it afterwards changes nothing listed", async () => {
     class Effects {
       destroys = false;
       idempotent = true;
@@ -935,6 +936,103 @@ describe("a nested fact declared as a class instance", () => {
       core: [readOperation({ effects })],
     });
     effects.destroys = true;
-    expect(list.byId("posts.list")?.effects.destroys).toBe(false);
+    const listed = list.byId("posts.list")?.effects;
+    expect(listed).toEqual({
+      destroys: false,
+      idempotent: true,
+      outside: false,
+      spendsAi: false,
+    });
+    // The fact itself, not a stand-in sharing the declarer's class: frozen, and plain.
+    expect(Object.isFrozen(listed)).toBe(true);
+    expect(Object.getPrototypeOf(listed)).toBe(Object.prototype);
+  });
+});
+
+/**
+ * The values a declaration carries rather than states: examples, which are
+ * parsed by the operation's input schema and shown in the reference, and raise
+ * rules, whose `applies` the run calls. A copy of an object that keeps its data
+ * in internal slots or private fields (a Date, a Map, a Set, a typed array, a
+ * class with `#fields`) answers nothing, so these keep such objects as given.
+ */
+describe("values a declaration carries keep working once listed", () => {
+  it("a raise rule holding a Set still answers", async () => {
+    // An object literal, so the list copies it; its Set is read through
+    // `this`, so the copy must still hold the Set itself.
+    const rule = {
+      when: "a post in a listed set",
+      level: "critical" as const,
+      ids: new Set(["1"]),
+      applies(run: OperationRun<{ id?: unknown }>): boolean {
+        return this.ids.has(String(run.input.id));
+      },
+    };
+    const list = await assembleOperationList({
+      core: [writeOperation({ raise: [rule] })],
+    });
+    const op = list.byId("posts.publish");
+    expect(op && levelForRun(op, { input: { id: "1" } }).level).toBe(
+      "critical"
+    );
+  });
+
+  it("a raise rule that is a class with a private field still answers", async () => {
+    class OverLimit {
+      readonly #limit = 5;
+      readonly when = "more than five";
+      readonly level = "critical" as const;
+      applies(run: { input: { n?: unknown } }): boolean {
+        return Number(run.input.n) > this.#limit;
+      }
+    }
+    const list = await assembleOperationList({
+      core: [writeOperation({ raise: [new OverLimit()] })],
+    });
+    const op = list.byId("posts.publish");
+    expect(op && levelForRun(op, { input: { n: 9 } }).level).toBe("critical");
+  });
+
+  it("an example holding a Date is checked by its schema and shown as a date", async () => {
+    const list = await assembleOperationList({
+      core: [
+        readOperation({
+          input: z.object({ since: z.date() }),
+          examples: [{ summary: "Since", input: { since: new Date(0) } }],
+        }),
+      ],
+    });
+    const examples = list.byId("posts.list")?.examples;
+    expect(JSON.stringify(examples)).toBe(
+      '[{"summary":"Since","input":{"since":"1970-01-01T00:00:00.000Z"}}]'
+    );
+  });
+
+  it("an example holding a Map or a typed array is checked by its schema", async () => {
+    const list = await assembleOperationList({
+      core: [
+        readOperation({
+          input: z.object({
+            counts: z.map(z.string(), z.number()),
+            bytes: z.instanceof(Uint8Array),
+          }),
+          examples: [
+            {
+              summary: "Counts",
+              input: {
+                counts: new Map([["a", 1]]),
+                bytes: new Uint8Array([1, 2]),
+              },
+            },
+          ],
+        }),
+      ],
+    });
+    const input = list.byId("posts.list")?.examples[0].input as {
+      counts: Map<string, number>;
+      bytes: Uint8Array;
+    };
+    expect(input.counts.get("a")).toBe(1);
+    expect(input.bytes.length).toBe(2);
   });
 });

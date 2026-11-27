@@ -58,8 +58,10 @@ const DOORS_WITHOUT_PERMISSION: Readonly<
  * The only operations that may run on the deploy door, where the CLI acts as
  * the deployment against a live database: those that bring its schema up to
  * the code, or check that it is. A deploy pipeline may run nothing else.
+ * A frozen array rather than a Set, since freezing a Set leaves its `add`
+ * working: nothing that imports it can widen what the deploy door accepts.
  */
-export const DEPLOY_DOOR_OPERATIONS: ReadonlySet<string> = new Set([
+export const DEPLOY_DOOR_OPERATIONS: readonly string[] = Object.freeze([
   "migrate",
   "migrations.status",
   "migrations.check",
@@ -360,9 +362,9 @@ const deployDoorProblems: DefinitionCheck = op => {
   if (op.source?.kind !== "core") {
     return ["a plugin's operation may not run on the deploy door"];
   }
-  if (!DEPLOY_DOOR_OPERATIONS.has(op.id)) {
+  if (!DEPLOY_DOOR_OPERATIONS.includes(op.id)) {
     return [
-      `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`,
+      `it runs on the deploy door, which only ${DEPLOY_DOOR_OPERATIONS.join(", ")} may`,
     ];
   }
   // The deployment acts as itself, holding no person's stored permissions,
