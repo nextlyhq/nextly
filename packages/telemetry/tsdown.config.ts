@@ -5,8 +5,10 @@ import { defineConfig } from "tsdown";
 // as runtime dependencies.
 // `src/ci.ts` is its own entry (`@nextlyhq/telemetry/ci`) so a caller that
 // only asks "is this CI?" loads that check and not the client.
+// `src/settings-folder.ts` is one too (`@nextlyhq/telemetry/settings-folder`),
+// for code that only needs the person's Nextly settings folder.
 export default defineConfig({
-  entry: ["src/index.ts", "src/ci.ts"],
+  entry: ["src/index.ts", "src/ci.ts", "src/settings-folder.ts"],
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
   // oxc writes the declarations from the source's own annotations
