@@ -20,5 +20,7 @@ export function aiTurnedOff(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): boolean {
   const value = env[AI_OFF_SWITCH]?.trim().toLowerCase();
-  return value !== undefined && value !== "" && value !== "0" && value !== "false";
+  return (
+    value !== undefined && value !== "" && value !== "0" && value !== "false"
+  );
 }

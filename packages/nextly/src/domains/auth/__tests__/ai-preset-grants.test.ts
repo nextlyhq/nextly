@@ -33,7 +33,9 @@ function aiSlugsFor(presetSlug: string): string[] {
   const preset = ROLE_PRESETS.find(p => p.slug === presetSlug);
   if (preset === undefined) throw new Error(`no preset ${presetSlug}`);
   return resolvePreset(preset, PERMISSIONS, OPEN_TO_EVERY_PRESET)
-    .filter(p => p.owner === null && AI_ROWS.some(ai => ai.resource === p.resource))
+    .filter(
+      p => p.owner === null && AI_ROWS.some(ai => ai.resource === p.resource)
+    )
     .map(p => `${p.action}-${p.resource}`)
     .sort();
 }
@@ -49,9 +51,12 @@ describe("the AI permissions' preset grants", () => {
     );
   });
 
-  it.each(["editor", "author"])("gives %s Use AI and nothing else of AI", slug => {
-    expect(aiSlugsFor(slug)).toEqual([AI_PERMISSIONS.use.slug]);
-  });
+  it.each(["editor", "author"])(
+    "gives %s Use AI and nothing else of AI",
+    slug => {
+      expect(aiSlugsFor(slug)).toEqual([AI_PERMISSIONS.use.slug]);
+    }
+  );
 
   it("gives Viewer none", () => {
     expect(aiSlugsFor("viewer")).toEqual([]);

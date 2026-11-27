@@ -66,9 +66,9 @@ describe("nextly's package", () => {
   });
 
   it("would catch one", () => {
-    expect(["ai", "@ai-sdk/openai", "@langchain/core", "openai"].every(isAILibrary)).toBe(
-      true
-    );
+    expect(
+      ["ai", "@ai-sdk/openai", "@langchain/core", "openai"].every(isAILibrary)
+    ).toBe(true);
     expect(["aim", "zod", "@aws-sdk/client-s3"].some(isAILibrary)).toBe(false);
   });
 });

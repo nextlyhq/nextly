@@ -41,7 +41,9 @@ const USAGE = {
 
 /** A provider that records what it was asked, with every role mapped. */
 function stubProvider(roles: Partial<Record<string, boolean>> = {}) {
-  const settings = { roles: { vision: true, writer: true, embedding: true, ...roles } };
+  const settings = {
+    roles: { vision: true, writer: true, embedding: true, ...roles },
+  };
   const asked: AIProviderRunRequest[] = [];
   const provider = {
     settings,
@@ -124,7 +126,10 @@ async function refusal(promise: Promise<unknown>): Promise<NextlyError> {
 describe("the AI contract against a stub provider", () => {
   it("runs a task, handing the provider the task, input, target, person and agent", async () => {
     const provider = stubProvider();
-    const { service } = setup({ provider, targets: ["read-posts", "update-posts"] });
+    const { service } = setup({
+      provider,
+      targets: ["read-posts", "update-posts"],
+    });
 
     const result = await service.run(person("ana"), {
       task: { owner: "@nextlyhq/ai", name: "alt-text" },
@@ -187,7 +192,12 @@ describe("the AI contract against a stub provider", () => {
       },
       permissions: { use: true, bulk: false, manage: false },
       tasks: [
-        { owner: "@nextlyhq/ai", name: "alt-text", role: "vision", available: true },
+        {
+          owner: "@nextlyhq/ai",
+          name: "alt-text",
+          role: "vision",
+          available: true,
+        },
         {
           owner: "plugin-seo",
           name: "summary",
@@ -417,7 +427,10 @@ describe("bulk jobs", () => {
 });
 
 describe("one usage event per run", () => {
-  const summary = { task: { owner: "plugin-seo", name: "summary" }, input: "x" };
+  const summary = {
+    task: { owner: "plugin-seo", name: "summary" },
+    input: "x",
+  };
 
   it("records a finished run's task, model, tokens, cost, person, agent and result", async () => {
     const { service, events } = setup({ provider: stubProvider() });
@@ -439,7 +452,11 @@ describe("one usage event per run", () => {
     const { service, events } = setup({ provider: stubProvider(), held: [] });
     await refusal(service.run(person(), summary));
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ result: "refused", tokensIn: 0, model: null });
+    expect(events[0]).toMatchObject({
+      result: "refused",
+      tokensIn: 0,
+      model: null,
+    });
   });
 
   it("records a run the provider failed as failed, and passes its error on", async () => {
@@ -456,19 +473,29 @@ describe("one usage event per run", () => {
       // read every chunk
     }
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "stream", result: "succeeded", ...USAGE });
+    expect(events[0]).toMatchObject({
+      kind: "stream",
+      result: "succeeded",
+      ...USAGE,
+    });
   });
 
   it("records a stream left early as cancelled", async () => {
     const { service, events } = setup({ provider: stubProvider() });
     for await (const _chunk of await service.stream(person(), summary)) break;
-    expect(events.map(e => [e.kind, e.result])).toEqual([["stream", "cancelled"]]);
+    expect(events.map(e => [e.kind, e.result])).toEqual([
+      ["stream", "cancelled"],
+    ]);
   });
 
   it("records an embedding with no task", async () => {
     const { service, events } = setup({ provider: stubProvider() });
     await service.embed(person(), { texts: ["x"] });
-    expect(events[0]).toMatchObject({ kind: "embed", task: null, result: "succeeded" });
+    expect(events[0]).toMatchObject({
+      kind: "embed",
+      task: null,
+      result: "succeeded",
+    });
   });
 });
 

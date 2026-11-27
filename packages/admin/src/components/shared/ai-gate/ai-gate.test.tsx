@@ -33,7 +33,12 @@ const CONFIGURED: AIStatus = {
   roles: { ...NO_ROLES, vision: true },
   permissions: { use: true, bulk: false, manage: false },
   tasks: [
-    { owner: "@nextlyhq/ai", name: "alt-text", role: "vision", available: true },
+    {
+      owner: "@nextlyhq/ai",
+      name: "alt-text",
+      role: "vision",
+      available: true,
+    },
     {
       owner: "plugin-seo",
       name: "summary",
@@ -112,7 +117,9 @@ describe("the AI gate", () => {
         </AIGate>
       </>
     );
-    expect(await screen.findByRole("button", { name: "Alt text" })).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Alt text" })
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Summary" })).toBeNull();
   });
 

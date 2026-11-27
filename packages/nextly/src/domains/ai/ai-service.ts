@@ -119,10 +119,9 @@ const NO_USAGE: AIRunUsage = {
 
 /** Every role, none with a model: the answer while AI is not configured. */
 function noRoles(): Record<AIModelRole, boolean> {
-  return Object.fromEntries(AI_MODEL_ROLES.map(role => [role, false])) as Record<
-    AIModelRole,
-    boolean
-  >;
+  return Object.fromEntries(
+    AI_MODEL_ROLES.map(role => [role, false])
+  ) as Record<AIModelRole, boolean>;
 }
 
 /**
@@ -142,7 +141,10 @@ function notConfiguredError(reason: AINotConfiguredReason): NextlyError {
 /** The refusal for a caller who lacks one of the three permissions. */
 function missingPermissionError(key: AIPermissionKey): NextlyError {
   return NextlyError.forbidden({
-    publicData: { reason: "no-permission", permission: AI_PERMISSIONS[key].slug },
+    publicData: {
+      reason: "no-permission",
+      permission: AI_PERMISSIONS[key].slug,
+    },
     logContext: { reason: `ai-missing-${AI_PERMISSIONS[key].slug}` },
   });
 }
@@ -187,7 +189,10 @@ export function createAIService(deps: AIServiceDeps): AIService {
     return provider;
   }
 
-  async function holds(caller: AICaller, key: AIPermissionKey): Promise<boolean> {
+  async function holds(
+    caller: AICaller,
+    key: AIPermissionKey
+  ): Promise<boolean> {
     return caller === null || deps.holds(caller, AI_PERMISSIONS[key]);
   }
 
@@ -379,7 +384,14 @@ export function createAIService(deps: AIServiceDeps): AIService {
       try {
         admitted = await admitTask(caller, args);
       } catch (error) {
-        await emitEnd("stream", caller, args.task, args.agent, NO_USAGE, "refused");
+        await emitEnd(
+          "stream",
+          caller,
+          args.task,
+          args.agent,
+          NO_USAGE,
+          "refused"
+        );
         throw error;
       }
       let stream: AIProviderStream;
@@ -388,7 +400,14 @@ export function createAIService(deps: AIServiceDeps): AIService {
           providerRequest(caller, args, admitted.task)
         );
       } catch (error) {
-        await emitEnd("stream", caller, args.task, args.agent, NO_USAGE, "failed");
+        await emitEnd(
+          "stream",
+          caller,
+          args.task,
+          args.agent,
+          NO_USAGE,
+          "failed"
+        );
         throw error;
       }
       return streamed(caller, args, stream);

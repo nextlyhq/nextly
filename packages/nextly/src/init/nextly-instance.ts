@@ -14,12 +14,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { AINamespace } from "../direct-api/namespaces/ai";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
 import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FilesNamespace } from "../direct-api/namespaces/files";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
-import type { AINamespace } from "../direct-api/namespaces/ai";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
 import type {
   AccessNamespace,

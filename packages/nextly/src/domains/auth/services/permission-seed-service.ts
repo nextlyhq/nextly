@@ -20,6 +20,7 @@ import {
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { AI_PERMISSIONS } from "../../ai/ai-contract";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
@@ -36,8 +37,6 @@ import {
   type PermissionDeclaration,
   type PermissionRow,
 } from "./permission-service";
-import { AI_PERMISSIONS } from "../../ai/ai-contract";
-
 import { RolePermissionService } from "./role-permission-service";
 
 /**

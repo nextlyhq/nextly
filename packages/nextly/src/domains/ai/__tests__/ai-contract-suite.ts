@@ -32,7 +32,9 @@ import {
 } from "../ai-contract";
 import { recordAITasks } from "../ai-task-list";
 
-const AI_SLUGS = Object.values(AI_PERMISSIONS).map(p => p.slug).sort();
+const AI_SLUGS = Object.values(AI_PERMISSIONS)
+  .map(p => p.slug)
+  .sort();
 const AI_RESOURCES = Object.values(AI_PERMISSIONS).map(p => p.resource);
 
 /** Writes its result onto the target, so running it needs `update` there. */
@@ -153,7 +155,11 @@ async function permissionIds(t: TestNextly, slugs: readonly string[]) {
 }
 
 /** A person holding a new role made of exactly these permissions. */
-async function personWith(t: TestNextly, name: string, slugs: readonly string[]) {
+async function personWith(
+  t: TestNextly,
+  name: string,
+  slugs: readonly string[]
+) {
   const services = new ServiceContainer(t.adapter);
   const role = await t.nextly.roles.create({
     data: { name, slug: name, permissionIds: await permissionIds(t, slugs) },
@@ -199,200 +205,242 @@ async function refusal(promise: Promise<unknown>): Promise<NextlyError> {
 
 export function describeAIContract(dialect: TestDialect): void {
   const configured = getConfiguredTestDialects().includes(dialect);
-  (configured ? describe : describe.skip)(`the AI contract (${dialect})`, () => {
-    describe("on a fresh site with no AI package", () => {
-      let t: TestNextly;
-      beforeAll(async () => {
-        t = await boot(dialect);
-      }, 120_000);
-      afterAll(async () => {
-        await t?.destroy();
-      });
-
-      it("seeds the three AI permissions with their verbs and names", async () => {
-        expect(await storedAIPermissions(t)).toEqual([
-          { slug: "manage-ai-settings", action: "manage", resource: "ai-settings" },
-          { slug: "run-bulk-ai-jobs", action: "run", resource: "bulk-ai-jobs" },
-          { slug: "use-ai", action: "use", resource: "ai" },
-        ]);
-      });
-
-      it("grants super admins and Admin all three, Editor and Author Use AI, Viewer none", async () => {
-        // A super admin holds every permission by being one, whenever the
-        // role was made; asked as they are judged.
-        const superAdmin = await t.nextly.ai.status({ user: { id: ownerOf(t) } });
-        expect(superAdmin.permissions).toEqual({ use: true, bulk: true, manage: true });
-        expect(await aiGrantsOf(t, "admin")).toEqual(AI_SLUGS);
-        expect(await aiGrantsOf(t, "editor")).toEqual(["use-ai"]);
-        expect(await aiGrantsOf(t, "author")).toEqual(["use-ai"]);
-        expect(await aiGrantsOf(t, "viewer")).toEqual([]);
-      });
-
-      it("reports AI not configured and refuses a run with the setup message", async () => {
-        const editor = await personInRole(t, "nopkg-editor", await roleId(t, "editor"));
-        const status = await t.nextly.ai.status({ user: { id: editor } });
-        expect(status).toMatchObject({
-          configured: false,
-          reason: "no-ai-package",
-          permissions: { use: true, bulk: false, manage: false },
+  (configured ? describe : describe.skip)(
+    `the AI contract (${dialect})`,
+    () => {
+      describe("on a fresh site with no AI package", () => {
+        let t: TestNextly;
+        beforeAll(async () => {
+          t = await boot(dialect);
+        }, 120_000);
+        afterAll(async () => {
+          await t?.destroy();
         });
-        recordAITasks([ALT_TEXT]);
-        try {
+
+        it("seeds the three AI permissions with their verbs and names", async () => {
+          expect(await storedAIPermissions(t)).toEqual([
+            {
+              slug: "manage-ai-settings",
+              action: "manage",
+              resource: "ai-settings",
+            },
+            {
+              slug: "run-bulk-ai-jobs",
+              action: "run",
+              resource: "bulk-ai-jobs",
+            },
+            { slug: "use-ai", action: "use", resource: "ai" },
+          ]);
+        });
+
+        it("grants super admins and Admin all three, Editor and Author Use AI, Viewer none", async () => {
+          // A super admin holds every permission by being one, whenever the
+          // role was made; asked as they are judged.
+          const superAdmin = await t.nextly.ai.status({
+            user: { id: ownerOf(t) },
+          });
+          expect(superAdmin.permissions).toEqual({
+            use: true,
+            bulk: true,
+            manage: true,
+          });
+          expect(await aiGrantsOf(t, "admin")).toEqual(AI_SLUGS);
+          expect(await aiGrantsOf(t, "editor")).toEqual(["use-ai"]);
+          expect(await aiGrantsOf(t, "author")).toEqual(["use-ai"]);
+          expect(await aiGrantsOf(t, "viewer")).toEqual([]);
+        });
+
+        it("reports AI not configured and refuses a run with the setup message", async () => {
+          const editor = await personInRole(
+            t,
+            "nopkg-editor",
+            await roleId(t, "editor")
+          );
+          const status = await t.nextly.ai.status({ user: { id: editor } });
+          expect(status).toMatchObject({
+            configured: false,
+            reason: "no-ai-package",
+            permissions: { use: true, bulk: false, manage: false },
+          });
+          recordAITasks([ALT_TEXT]);
+          try {
+            const error = await refusal(
+              t.nextly.ai.run({
+                user: { id: editor },
+                task: { owner: "@test/ai", name: "alt-text" },
+                input: {},
+                target: { collection: "posts" },
+              })
+            );
+            expect(error.code).toBe("SERVICE_UNAVAILABLE");
+            expect(error.publicMessage).toContain("@nextlyhq/ai");
+          } finally {
+            recordAITasks([]);
+          }
+        });
+      });
+
+      describe("on an upgraded site with a custom role", () => {
+        let t: TestNextly;
+        beforeAll(async () => {
+          t = await boot(dialect);
+        }, 120_000);
+        afterAll(async () => {
+          await t?.destroy();
+        });
+
+        it("grants the built-in roles as on a fresh site and the custom role none", async () => {
+          // The site as it was before AI: no AI permission, and a custom role
+          // an administrator made then.
+          const ids = await permissionIds(t, AI_SLUGS);
+          for (const id of ids) {
+            await t.adapter.executeQuery(
+              `DELETE FROM role_permissions WHERE permission_id = '${id}'`
+            );
+            await t.adapter.executeQuery(
+              `DELETE FROM permissions WHERE id = '${id}'`
+            );
+          }
+          expect(await storedAIPermissions(t)).toEqual([]);
+          await t.nextly.roles.create({
+            data: {
+              name: "Reviewer",
+              slug: "reviewer",
+              permissionIds: await permissionIds(t, ["read-posts"]),
+            },
+          });
+
+          // The upgraded release's first start.
+          await seedPermissionsAndRolePresets();
+
+          expect((await storedAIPermissions(t)).map(p => p.slug)).toEqual(
+            AI_SLUGS
+          );
+          expect(await aiGrantsOf(t, SUPER_ADMIN_SLUG)).toEqual(AI_SLUGS);
+          expect(await aiGrantsOf(t, "admin")).toEqual(AI_SLUGS);
+          expect(await aiGrantsOf(t, "editor")).toEqual(["use-ai"]);
+          expect(await aiGrantsOf(t, "author")).toEqual(["use-ai"]);
+          expect(await aiGrantsOf(t, "viewer")).toEqual([]);
+          expect(await aiGrantsOf(t, "reviewer")).toEqual([]);
+        });
+      });
+
+      describe("with an AI provider", () => {
+        let t: TestNextly;
+        let ai: ReturnType<typeof stubAI>;
+        beforeAll(async () => {
+          ai = stubAI();
+          t = await boot(dialect, [ai.plugin]);
+          recordAITasks([ALT_TEXT]);
+        }, 120_000);
+        afterEach(() => {
+          delete process.env[AI_OFF_SWITCH];
+          ai.asked.length = 0;
+        });
+        afterAll(async () => {
+          recordAITasks([]);
+          await t?.destroy();
+        });
+
+        const altText = (userId: string) => ({
+          user: { id: userId },
+          task: { owner: "@test/ai", name: "alt-text" },
+          input: { image: "m1" },
+          target: { collection: "posts" },
+        });
+
+        it("refuses a person who may use AI and read the target but not edit it", async () => {
+          const reader = await personWith(t, "ai-reader", [
+            "use-ai",
+            "read-posts",
+          ]);
+          const error = await refusal(t.nextly.ai.run(altText(reader)));
+          expect(error.code).toBe("FORBIDDEN");
+          expect(ai.asked).toEqual([]);
+
+          // The same person given the edit runs it: the refusal was the edit.
+          const writer = await personWith(t, "ai-writer", [
+            "use-ai",
+            "read-posts",
+            "update-posts",
+          ]);
+          await expect(t.nextly.ai.run(altText(writer))).resolves.toMatchObject(
+            {
+              output: { alt: "A red bicycle" },
+            }
+          );
+          expect(ai.asked.map(r => r.personId)).toEqual([writer]);
+        });
+
+        it("refuses an agent acting for an Author that starts a bulk job, and lets one acting for an Admin", async () => {
+          const author = await personInRole(
+            t,
+            "ai-author",
+            await roleId(t, "author")
+          );
           const error = await refusal(
-            t.nextly.ai.run({
-              user: { id: editor },
-              task: { owner: "@test/ai", name: "alt-text" },
-              input: {},
-              target: { collection: "posts" },
+            t.nextly.ai.checkBulkJob({
+              user: { id: author },
+              agent: { id: "agent-1", name: "Agent" },
             })
           );
-          expect(error.code).toBe("SERVICE_UNAVAILABLE");
-          expect(error.publicMessage).toContain("@nextlyhq/ai");
-        } finally {
-          recordAITasks([]);
-        }
-      });
-    });
+          expect(error.code).toBe("FORBIDDEN");
+          expect(error.publicData).toEqual({
+            reason: "no-permission",
+            permission: "run-bulk-ai-jobs",
+          });
 
-    describe("on an upgraded site with a custom role", () => {
-      let t: TestNextly;
-      beforeAll(async () => {
-        t = await boot(dialect);
-      }, 120_000);
-      afterAll(async () => {
-        await t?.destroy();
-      });
-
-      it("grants the built-in roles as on a fresh site and the custom role none", async () => {
-        // The site as it was before AI: no AI permission, and a custom role
-        // an administrator made then.
-        const ids = await permissionIds(t, AI_SLUGS);
-        for (const id of ids) {
-          await t.adapter.executeQuery(
-            `DELETE FROM role_permissions WHERE permission_id = '${id}'`
+          const admin = await personInRole(
+            t,
+            "ai-admin",
+            await roleId(t, "admin")
           );
-          await t.adapter.executeQuery(
-            `DELETE FROM permissions WHERE id = '${id}'`
+          await expect(
+            t.nextly.ai.checkBulkJob({
+              user: { id: admin },
+              agent: { id: "agent-1", name: "Agent" },
+            })
+          ).resolves.toBeUndefined();
+        });
+
+        it("turns off with the environment switch and back on with every setting as it was", async () => {
+          const admin = await personInRole(
+            t,
+            "ai-switch",
+            await roleId(t, "admin")
           );
-        }
-        expect(await storedAIPermissions(t)).toEqual([]);
-        await t.nextly.roles.create({
-          data: {
-            name: "Reviewer",
-            slug: "reviewer",
-            permissionIds: await permissionIds(t, ["read-posts"]),
-          },
+          const before = structuredClone(ai.settings);
+          const on = await t.nextly.ai.status({ user: { id: admin } });
+          expect(on.configured).toBe(true);
+
+          process.env[AI_OFF_SWITCH] = "1";
+          expect(
+            await t.nextly.ai.status({ user: { id: admin } })
+          ).toMatchObject({
+            configured: false,
+            reason: "turned-off",
+          });
+          const error = await refusal(t.nextly.ai.run(altText(admin)));
+          expect(error.publicMessage).toContain(AI_OFF_SWITCH);
+          expect(ai.asked).toEqual([]);
+
+          delete process.env[AI_OFF_SWITCH];
+          expect(ai.settings).toEqual(before);
+          expect(await t.nextly.ai.status({ user: { id: admin } })).toEqual(on);
+          expect(await storedAIPermissions(t)).toHaveLength(3);
         });
 
-        // The upgraded release's first start.
-        await seedPermissionsAndRolePresets();
-
-        expect((await storedAIPermissions(t)).map(p => p.slug)).toEqual(AI_SLUGS);
-        expect(await aiGrantsOf(t, SUPER_ADMIN_SLUG)).toEqual(AI_SLUGS);
-        expect(await aiGrantsOf(t, "admin")).toEqual(AI_SLUGS);
-        expect(await aiGrantsOf(t, "editor")).toEqual(["use-ai"]);
-        expect(await aiGrantsOf(t, "author")).toEqual(["use-ai"]);
-        expect(await aiGrantsOf(t, "viewer")).toEqual([]);
-        expect(await aiGrantsOf(t, "reviewer")).toEqual([]);
-      });
-    });
-
-    describe("with an AI provider", () => {
-      let t: TestNextly;
-      let ai: ReturnType<typeof stubAI>;
-      beforeAll(async () => {
-        ai = stubAI();
-        t = await boot(dialect, [ai.plugin]);
-        recordAITasks([ALT_TEXT]);
-      }, 120_000);
-      afterEach(() => {
-        delete process.env[AI_OFF_SWITCH];
-        ai.asked.length = 0;
-      });
-      afterAll(async () => {
-        recordAITasks([]);
-        await t?.destroy();
-      });
-
-      const altText = (userId: string) => ({
-        user: { id: userId },
-        task: { owner: "@test/ai", name: "alt-text" },
-        input: { image: "m1" },
-        target: { collection: "posts" },
-      });
-
-      it("refuses a person who may use AI and read the target but not edit it", async () => {
-        const reader = await personWith(t, "ai-reader", ["use-ai", "read-posts"]);
-        const error = await refusal(t.nextly.ai.run(altText(reader)));
-        expect(error.code).toBe("FORBIDDEN");
-        expect(ai.asked).toEqual([]);
-
-        // The same person given the edit runs it: the refusal was the edit.
-        const writer = await personWith(t, "ai-writer", [
-          "use-ai",
-          "read-posts",
-          "update-posts",
-        ]);
-        await expect(t.nextly.ai.run(altText(writer))).resolves.toMatchObject({
-          output: { alt: "A red bicycle" },
+        it("refuses a checked call that names nobody", async () => {
+          const error = await refusal(
+            t.nextly.ai.run({
+              task: { owner: "@test/ai", name: "alt-text" },
+              input: {},
+            })
+          );
+          expect(error.code).toBe("AUTH_REQUIRED");
+          expect(ai.asked).toEqual([]);
         });
-        expect(ai.asked.map(r => r.personId)).toEqual([writer]);
       });
-
-      it("refuses an agent acting for an Author that starts a bulk job, and lets one acting for an Admin", async () => {
-        const author = await personInRole(t, "ai-author", await roleId(t, "author"));
-        const error = await refusal(
-          t.nextly.ai.checkBulkJob({
-            user: { id: author },
-            agent: { id: "agent-1", name: "Agent" },
-          })
-        );
-        expect(error.code).toBe("FORBIDDEN");
-        expect(error.publicData).toEqual({
-          reason: "no-permission",
-          permission: "run-bulk-ai-jobs",
-        });
-
-        const admin = await personInRole(t, "ai-admin", await roleId(t, "admin"));
-        await expect(
-          t.nextly.ai.checkBulkJob({
-            user: { id: admin },
-            agent: { id: "agent-1", name: "Agent" },
-          })
-        ).resolves.toBeUndefined();
-      });
-
-      it("turns off with the environment switch and back on with every setting as it was", async () => {
-        const admin = await personInRole(t, "ai-switch", await roleId(t, "admin"));
-        const before = structuredClone(ai.settings);
-        const on = await t.nextly.ai.status({ user: { id: admin } });
-        expect(on.configured).toBe(true);
-
-        process.env[AI_OFF_SWITCH] = "1";
-        expect(await t.nextly.ai.status({ user: { id: admin } })).toMatchObject({
-          configured: false,
-          reason: "turned-off",
-        });
-        const error = await refusal(t.nextly.ai.run(altText(admin)));
-        expect(error.publicMessage).toContain(AI_OFF_SWITCH);
-        expect(ai.asked).toEqual([]);
-
-        delete process.env[AI_OFF_SWITCH];
-        expect(ai.settings).toEqual(before);
-        expect(await t.nextly.ai.status({ user: { id: admin } })).toEqual(on);
-        expect(await storedAIPermissions(t)).toHaveLength(3);
-      });
-
-      it("refuses a checked call that names nobody", async () => {
-        const error = await refusal(
-          t.nextly.ai.run({
-            task: { owner: "@test/ai", name: "alt-text" },
-            input: {},
-          })
-        );
-        expect(error.code).toBe("AUTH_REQUIRED");
-        expect(ai.asked).toEqual([]);
-      });
-    });
-  });
+    }
+  );
 }

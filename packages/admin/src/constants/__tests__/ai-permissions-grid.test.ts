@@ -22,7 +22,9 @@ function aiRow(resource: string, action: string): Permission {
     resource,
     action,
     slug: `${resource}.${action}`,
-    category: SYSTEM_RESOURCE_SET.has(resource) ? "settings" : "collection-types",
+    category: SYSTEM_RESOURCE_SET.has(resource)
+      ? "settings"
+      : "collection-types",
   };
 }
 

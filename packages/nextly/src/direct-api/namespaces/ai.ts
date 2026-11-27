@@ -68,7 +68,9 @@ export interface AINamespace {
     args: Omit<AIRunArgs, "agent"> & AICallerArgs
   ): Promise<AsyncIterable<string>>;
   /** Embed text: one vector per text, in order. */
-  embed(args: Omit<AIEmbedArgs, "agent"> & AICallerArgs): Promise<AIEmbedOutput>;
+  embed(
+    args: Omit<AIEmbedArgs, "agent"> & AICallerArgs
+  ): Promise<AIEmbedOutput>;
   /**
    * Refuse a caller who may not start, cancel or resume a bulk AI job:
    * "Use AI" and "Run bulk AI jobs", both the person's own.

@@ -38,6 +38,7 @@ import {
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
 
+import { getAIStatus } from "./api/ai-status";
 import {
   listApiKeys,
   getApiKeyById,
@@ -83,7 +84,6 @@ import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { withLanguageCodeDeprecation } from "./api/language-code-deprecation";
 import { changeLanguages, getLanguages } from "./api/languages";
-import { getAIStatus } from "./api/ai-status";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
 import {
@@ -609,7 +609,10 @@ async function handleDocumentLockRequest(
 // ============================================================================
 
 /** The AI routes. */
-async function handleAIRequest(req: Request, method: string): Promise<Response> {
+async function handleAIRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
   switch (method) {
     case "getAIStatus":
       return getAIStatus(req);

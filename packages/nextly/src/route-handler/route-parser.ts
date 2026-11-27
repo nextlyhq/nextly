@@ -3359,7 +3359,12 @@ function parseAIRoutes(
   // Only the documented path: a trailing segment is a different path.
   if (extra.some(segment => segment !== undefined)) return null;
   if (httpMethod !== "GET" || id !== "status") return null;
-  return { service: "ai", operation: "single", method: "getAIStatus", routeParams };
+  return {
+    service: "ai",
+    operation: "single",
+    method: "getAIStatus",
+    routeParams,
+  };
 }
 
 /**
