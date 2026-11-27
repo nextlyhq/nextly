@@ -64,17 +64,22 @@ function versionOf(type: string): number {
   return coreBlocks.find(each => each.name === type)?.version ?? 1;
 }
 
-/** A Box arranged as given, holding one Button. */
-function pageOf(parentStyles: Record<string, string>): BlockDocument {
+/** A Box (or another container) arranged as given, holding one Button. */
+function pageOf(
+  parentStyles: Record<string, string>,
+  parentType = "core/box"
+): BlockDocument {
+  const example = coreBlocks.find(each => each.name === parentType)?.example;
   return {
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
     nodes: [
       {
         id: "box",
-        type: "core/box",
-        version: versionOf("core/box"),
-        props: { as: "div" },
+        type: parentType,
+        version: versionOf(parentType),
+        props:
+          parentType === "core/box" ? { as: "div" } : (example?.props ?? {}),
         styles: { base: { base: parentStyles } },
         slots: {
           children: [
@@ -107,8 +112,11 @@ function Host({ page }: { page: BlockDocument }): React.JSX.Element {
 }
 
 /** The Button selected under a parent so arranged, Inside its parent open. */
-function mount(parentStyles: Record<string, string>): void {
-  render(<Host page={pageOf(parentStyles)} />);
+function mount(
+  parentStyles: Record<string, string>,
+  parentType?: string
+): void {
+  render(<Host page={pageOf(parentStyles, parentType)} />);
   act(() => editor().select("button"));
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
   const header = document.querySelector<HTMLElement>(
@@ -266,5 +274,118 @@ describe("a block taken out of the flow", () => {
     act(() => editor().select("button"));
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
     expect(document.querySelector('[data-control="inside-parent"]')).toBeNull();
+  });
+});
+
+/** Closes an open tooltip, so the next hover opens its own. */
+function cleanupTooltip(): void {
+  fireEvent.keyDown(document.body, { key: "Escape" });
+}
+
+describe("Align, for a Fit or Fixed block", () => {
+  const CENTRED_COLUMN = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+  };
+  const align = () =>
+    within(fields()).queryByRole("radiogroup", { name: "Align" });
+  const choices = () =>
+    within(align()!)
+      .getAllByRole("radio")
+      .map(radio => ({
+        name: radio.textContent,
+        on: radio.getAttribute("aria-checked") === "true",
+      }));
+
+  it("offers the parent's place, chosen, then Left, Center and Right", () => {
+    mount(CENTRED_COLUMN);
+    choose("Width", "Fit");
+    expect(choices()).toEqual([
+      { name: "Box's", on: true },
+      { name: "Left", on: false },
+      { name: "Center", on: false },
+      { name: "Right", on: false },
+    ]);
+    // The parent keeps the block centred: no place of its own is written.
+    expect(stored()).toEqual({ width: "fit-content" });
+  });
+
+  it("names the first choice after the parent", () => {
+    for (const [type, name] of [
+      ["core/section", "Section's"],
+      ["core/column", "Column's"],
+      ["core/card", "Card's"],
+    ] as const) {
+      mount(CENTRED_COLUMN, type);
+      choose("Width", "Fixed");
+      expect(choices()[0]?.name).toBe(name);
+      cleanup();
+    }
+    mount({ display: "grid" }, "core/box");
+    choose("Width", "Fit");
+    expect(choices()[0]).toEqual({ name: "Box's", on: true });
+  });
+
+  it("places this block only with Left, Center or Right, and gives it back with the first", () => {
+    mount(CENTRED_COLUMN);
+    choose("Width", "Fit");
+    choose("Align", "Left");
+    expect(stored()).toEqual({ width: "fit-content", alignSelf: "flex-start" });
+    expect(choices()[1]).toEqual({ name: "Left", on: true });
+    choose("Align", "Right");
+    expect(stored().alignSelf).toBe("flex-end");
+    choose("Align", "Box's");
+    expect(stored()).toEqual({ width: "fit-content" });
+  });
+
+  it("shows the CSS each choice writes on hover, the parent's as the clear it is", async () => {
+    mount(CENTRED_COLUMN);
+    choose("Width", "Fit");
+    const hintOf = async (name: string): Promise<string> => {
+      fireEvent.pointerMove(within(align()!).getByRole("radio", { name }));
+      const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+      const text = tip.textContent ?? "";
+      fireEvent.pointerLeave(within(align()!).getByRole("radio", { name }));
+      cleanupTooltip();
+      return text;
+    };
+    expect(await hintOf("Box's")).toBe("align-self: auto");
+    expect(await hintOf("Left")).toBe("align-self: flex-start");
+    expect(await hintOf("Center")).toBe("align-self: center");
+    expect(await hintOf("Right")).toBe("align-self: flex-end");
+  });
+
+  it("isn't offered while the width is Fill, nor under a Row", () => {
+    mount(CENTRED_COLUMN);
+    choose("Width", "Fill");
+    expect(align()).toBeNull();
+    cleanup();
+    mount({ display: "flex" });
+    choose("Width", "Fit");
+    expect(align()).toBeNull();
+  });
+
+  it("reads a block stored with the old left pin as Align: Left", () => {
+    mount(CENTRED_COLUMN);
+    act(() => {
+      const node = findNode(editor().document.nodes, "button")!;
+      editor().apply({
+        kind: "update",
+        id: "button",
+        patch: {
+          styles: {
+            ...(node.styles ?? {}),
+            base: { base: { alignSelf: "flex-start" } },
+          },
+        },
+      } as never);
+    });
+    expect(
+      within(within(fields()).getByRole("radiogroup", { name: "Width" }))
+        .getByRole("radio", { name: "Fit" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    expect(choices()[1]).toEqual({ name: "Left", on: true });
   });
 });

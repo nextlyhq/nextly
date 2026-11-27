@@ -4,22 +4,30 @@
  * "Inside its parent": how a block takes its place in its parent, in plain
  * words. Width: Fill, Fit or Fixed, and Height the same under a Row or a
  * Grid, each with the line that says what it does and the CSS it writes on
- * hover.
+ * hover. A Fit or Fixed block also gets Align: where the parent puts its
+ * blocks, or this block's own Left, Center or Right.
  *
  * Read and written through `plain-layout` by the parent's arrangement at the
  * device being edited: a Row stacked here is a column, and offers no Height.
  *
  * @module plain-parent-controls
  */
+import { locateNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { blockLabel } from "../../panels/add/inserter";
 import {
   childAxisRows,
+  childPlaceHint,
   offersChildAxis,
+  offersChildPlace,
+  planChildPlace,
   planChildSize,
+  readChildPlace,
   readChildSize,
   type ChildAxis,
   type ChildFit,
+  type ChildPlace,
   type ChildSize,
   type LayoutTiers,
   type LayoutWrite,
@@ -46,6 +54,8 @@ interface ParentSizing {
   readonly parent: ParentArrangement;
   readonly tiers: LayoutTiers;
   readonly items: ParentItems;
+  /** The parent block's name, as the Layers panel and Add panel give it. */
+  readonly parentName: string;
 }
 
 /**
@@ -61,10 +71,16 @@ function useParentSizing(
   const target = React.useContext(StyleTargetContext);
   const tiers = useLayoutTiers(surroundings);
   if (layout === undefined || target.kind === "shared") return undefined;
+  const holder = locateNode(
+    surroundings.editor.document.nodes,
+    surroundings.nodeId
+  )?.parent;
   return {
     parent: layout.arrangement,
     tiers,
     items: { alignItems: layout.alignItems, justifyItems: layout.justifyItems },
+    // A block at the top of the page sits in the page itself.
+    parentName: holder === undefined ? "Page" : blockLabel(holder.type),
   };
 }
 
@@ -119,9 +135,14 @@ export function InsideParentFields({
   const target = React.useContext(StyleTargetContext);
   const apply = useApply(surroundings, target);
   if (sizing === undefined) return null;
-  const { parent, tiers, items } = sizing;
+  const { parent, tiers, items, parentName } = sizing;
   const editing = surroundings.breakpoint;
   const width = axisOf(tiers, editing, parent, "width", items);
+  // Where a Fit or Fixed block sits: none while it fills, or under a Row,
+  // whose Spread places its blocks.
+  const place = offersChildPlace(parent, tiers.flow)
+    ? readChildPlace(tiers, editing, parent, items)
+    : undefined;
   // A Row or a Grid sizes its blocks across too; a column's height is its
   // blocks' own, set in Size.
   const height = offersChildAxis(parent, "height", tiers.flow)
@@ -131,6 +152,16 @@ export function InsideParentFields({
     <div className="nx-inside-parent" data-control="inside-parent">
       <SettingSlot tab="style" ids={[CHILD_SIZE_IDS.width]}>
         <AxisRow axis={width} apply={apply} />
+        {place === undefined ? null : (
+          <PlaceRow
+            place={place}
+            parentName={parentName}
+            hint={choice => childPlaceHint(parent, choice, tiers.flow)}
+            onChoose={choice =>
+              apply(planChildPlace(tiers, editing, parent, choice))
+            }
+          />
+        )}
       </SettingSlot>
       {height === undefined ? null : (
         <SettingSlot tab="style" ids={[CHILD_SIZE_IDS.height]}>
@@ -216,6 +247,56 @@ function AxisRow({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+const PLACES = ["parent", "left", "center", "right"] as const;
+
+/**
+ * Align, under a Fit or Fixed Width: the parent's place first, named after
+ * the parent ("Section's"), then this block's own Left, Center and Right,
+ * each with the CSS it writes on hover.
+ */
+function PlaceRow({
+  place,
+  parentName,
+  hint,
+  onChoose,
+}: {
+  place: ChildPlace;
+  parentName: string;
+  hint: (choice: ChildPlace) => LayoutWrite[];
+  onChoose: (choice: ChildPlace) => void;
+}): React.JSX.Element {
+  const labelId = React.useId();
+  const labels = {
+    parent: `${parentName}'s`,
+    left: "Left",
+    center: "Center",
+    right: "Right",
+  };
+  const writes = {
+    parent: layoutWritesText(hint("parent")),
+    left: layoutWritesText(hint("left")),
+    center: layoutWritesText(hint("center")),
+    right: layoutWritesText(hint("right")),
+  };
+  // Its name above its four choices, which take the panel's whole width: the
+  // parent's name ("Section's") beside the label column squeezed the label.
+  return (
+    <div className="nx-inspector__field nx-inspector__field--stacked">
+      <span className="nx-inspector__field-name" id={labelId}>
+        Align
+      </span>
+      <SegmentChoices
+        options={PLACES}
+        on={place}
+        labels={labels}
+        labelId={labelId}
+        writes={writes}
+        onChoose={onChoose}
+      />
     </div>
   );
 }
