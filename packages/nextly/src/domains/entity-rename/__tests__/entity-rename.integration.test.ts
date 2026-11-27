@@ -445,6 +445,23 @@ async function seedHistory(
     fieldPath: "image",
     locale: "",
   });
+  // A deleted entry of the entity, waiting in the trash under its slug.
+  await adapter.insert("nextly_trash", {
+    id: randomUUID(),
+    kind: "entry",
+    scopeSlug: slug,
+    itemId: randomUUID(),
+    label: "Deleted",
+    stored: { tables: [], links: [], document: {} },
+    storageKey: null,
+    madePrivate: false,
+    trashedByKind: "system",
+    trashedById: null,
+    trashedByName: null,
+    deletedEventId: null,
+    trashedAt: now,
+    purgeAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+  });
   return { releaseId: release.id };
 }
 
