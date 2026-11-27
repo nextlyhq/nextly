@@ -38,6 +38,6 @@ Typing finds collections, Singles, pages and actions, each under its own heading
 - **Pages:** the Dashboard, every Settings and Builders page, Account settings, and every page a plugin adds to the menus.
 - **Actions:** "New <type>" for each type the person may create (it was "Create <type>"), Create user and Create role for people who may create them, and Open documentation, GitHub and Discord, minus any a plugin hides with `header.hide`.
 
-Picking a collection opens its list and a Single opens where the Content menu would open it. Inside the Page Builder's editor, ⌘K still opens the editor's own search, and the rail's Search button opens the admin's.
+Picking a collection opens its list and a Single opens where the Content menu would open it. Inside the Page Builder's editor, which takes the whole window, ⌘K still opens the editor's own search; once you leave the editor by its back arrow, ⌘K and the rail's Search button open the admin's.
 
 If your app mounts `<CommandPalette />` itself, remove that mount: the admin mounts its own now. If you leave it, it draws nothing while the admin's palette is mounted, so there is still one palette and one answer to ⌘K. `CommandPalette` stays exported.
