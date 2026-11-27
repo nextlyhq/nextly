@@ -182,6 +182,20 @@ describe("single-document releases in the day's list", () => {
     ).toBeNull();
   });
 
+  it("names a single-document release's link with its mark, as the list's row is named", () => {
+    held = [
+      { ...release(1), title: "Opening hours", kind: "single" },
+      release(2),
+    ];
+    renderSheet();
+    // The list's row is one link holding the title and the mark, so a screen
+    // reader hears both; the day's link must be heard the same way.
+    expect(
+      screen.getByRole("link", { name: "Opening hours Single document" })
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Launch 02" })).toBeTruthy();
+  });
+
   it("asks for ordinary releases only while single documents are hidden", () => {
     render(
       <ReleaseCalendarDaySheet
