@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The SEO plugin's sitemap.xml and llms.txt no longer answer 503 for ever after a migration on a serverless host, nor once on every new server. The address record's catch-up now stops and resumes between pages, and a request that needs the record runs it itself, awaited, for a few seconds, so it finishes where nothing runs between requests. A server just started waits for its quick check of the stored fingerprint instead of answering 503. While a real catch-up runs, the sitemap and the llms files are served from the copy kept from their last answer.
+The SEO plugin's sitemap.xml and llms.txt no longer answer 503 for ever after a migration on a serverless host, nor once on every new server. The address record's catch-up now stops and resumes between pages, and a request that needs the record runs it itself, awaited, for a few seconds, so it finishes where nothing runs between requests. A server just started waits for its quick check of the stored fingerprint instead of answering 503. While a real catch-up runs, the sitemap is served from the copy kept from its last answer.

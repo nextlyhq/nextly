@@ -247,18 +247,15 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       "list of pages",
       config,
       rules => rules.llmsTxt === true,
-      llmsTxtOf,
-      true
+      llmsTxtOf
     ),
-    // Every listed page's words in one file: only beside llms.txt. Never
-    // kept: a copy would go on serving words the public may no longer read.
+    // Every listed page's words in one file: only beside llms.txt.
     llmsRoute(
       "/llms-full.txt",
       "file of every page",
       config,
       rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
-      llmsFullTxtOf,
-      false
+      llmsFullTxtOf
     )
   );
   return routes;
@@ -267,8 +264,9 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
 /**
  * A route serving one of the llms files, only once switched on in the SEO
  * settings, so it is not found until then; it lists what the sitemap lists,
- * narrowed as it is. Where `keep`, its last good answer is kept, to be served
- * while the address record catches up.
+ * narrowed as it is. No copy of it is kept to serve while the address record
+ * catches up: it carries pages' titles, descriptions or words, which a kept
+ * copy would go on serving after the public may no longer read them.
  */
 function llmsRoute(
   path: string,
@@ -280,8 +278,7 @@ function llmsRoute(
     origin: string,
     outputs: AiOutputsConfig,
     rules: SiteRules
-  ) => Promise<string | null>,
-  keep: boolean
+  ) => Promise<string | null>
 ): PluginRoute {
   return {
     method: "GET",
@@ -291,16 +288,14 @@ function llmsRoute(
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
       if (!on(rules)) return notFound();
-      const site = await originOf(
+      const waiting = await catchingUp(ctx, what, undefined);
+      if (waiting !== null) return waiting;
+      const { origin, headers } = await originOf(
         req,
         ctx,
         config,
         "text/plain; charset=utf-8"
       );
-      const { origin, headers } = site;
-      const file = keep ? fileName(path, site) : undefined;
-      const waiting = await catchingUp(ctx, what, file);
-      if (waiting !== null) return waiting;
       const body = await write(
         ctx,
         origin,
@@ -315,7 +310,7 @@ function llmsRoute(
         },
         rules
       );
-      return answered(ctx, file, body, headers);
+      return answered(ctx, undefined, body, headers);
     },
   };
 }

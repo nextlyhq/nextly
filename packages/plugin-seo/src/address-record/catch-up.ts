@@ -313,7 +313,7 @@ interface CatchUpOptions {
   /**
    * Whether the run stops before its next step, unfinished: asked before
    * each page's change. Where unset, once the run's deadline has passed and
-   * it has made its first change.
+   * it has changed the record.
    */
   stopNow?: () => boolean;
 }
@@ -350,16 +350,18 @@ async function caughtUp(
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const { ctx } = run;
-  // Past the run's deadline, it stops before its next change, but never
-  // before its first: every run moves the record on by at least one page,
-  // so requests whose deadline the listing alone outlasts still finish it.
-  let asked = false;
-  const pastDeadline = () => {
-    const stop = asked && Date.now() >= run.stopAt;
-    asked = true;
-    return stop;
+  // Past the run's deadline, it stops before its next change, but only once
+  // it has moved the record on: every run moves it by at least a page, so
+  // requests whose deadline the listing alone outlasts still finish it, and
+  // a page refused its address again, which changes nothing, never uses up
+  // a run.
+  let movedOn = false;
+  const steps: Steps = {
+    stopNow: options.stopNow ?? (() => movedOn && Date.now() >= run.stopAt),
+    moved: () => {
+      movedOn = true;
+    },
   };
-  const stopNow = options.stopNow ?? pastDeadline;
   running += 1;
   try {
     // Every transaction it opens bounded by the database: a run started at a
@@ -370,7 +372,7 @@ async function caughtUp(
     const report = await ctx.db.withTransactionBounds(
       CATCH_UP_TRANSACTION_BOUNDS,
       async () => {
-        const done = await runCatchUp(ctx, options, stopNow);
+        const done = await runCatchUp(ctx, options, steps);
         if (done.lost.length > 0) await problemsOutOfDate(ctx);
         return done;
       }
@@ -437,8 +439,13 @@ async function storedGate(ctx: PluginContext): Promise<{
   };
 }
 
-/** Whether the run is to stop before its next step, unfinished. */
-type StopNow = () => boolean;
+/** How a run is told when to stop, and tells what it has changed. */
+interface Steps {
+  /** Whether the run is to stop before its next change, unfinished. */
+  stopNow(): boolean;
+  /** Says a change has reached the record, moving it on. */
+  moved(): void;
+}
 
 /** What a step answers where the run stopped before it was done. */
 const STOPPED = "stopped";
@@ -497,6 +504,7 @@ async function moveIfCurrent(
   ctx: PluginContext,
   update: HeldAddressUpdate,
   expected: Expected,
+  steps: Steps,
   alongside?: (transaction: Transaction) => Promise<void>
 ): Promise<
   { refused: { address: HeldAddress; heldBy: AddressHolder }[] } | "overtaken"
@@ -514,7 +522,12 @@ async function moveIfCurrent(
     }
   );
   if (outcome === "overtaken") expected.delete(key);
-  else if (outcome.refused.length === 0) expected.set(key, [...update.holds]);
+  else if (outcome.refused.length === 0) {
+    // A change only where the page now holds other than it did: one asked
+    // to hold what it already holds moves nothing on.
+    if (!sameHolds(before, update.holds)) steps.moved();
+    expected.set(key, [...update.holds]);
+  }
   return outcome;
 }
 
@@ -533,18 +546,29 @@ async function claim(
   ctx: PluginContext,
   update: HeldAddressUpdate,
   expected: Expected,
-  lost: LostAddress[]
+  lost: LostAddress[],
+  steps: Steps
 ): Promise<boolean> {
   let holds = [...update.holds];
   for (;;) {
-    const outcome = await moveIfCurrent(ctx, { ...update, holds }, expected);
+    const outcome = await moveIfCurrent(
+      ctx,
+      { ...update, holds },
+      expected,
+      steps
+    );
     if (outcome === "overtaken") return false;
     const first = outcome.refused[0];
     if (first === undefined) {
       if (holds.length === 0 || (await stillExists(ctx, update.holder))) {
         return true;
       }
-      await moveIfCurrent(ctx, { holder: update.holder, holds: [] }, expected);
+      await moveIfCurrent(
+        ctx,
+        { holder: update.holder, holds: [] },
+        expected,
+        steps
+      );
       return false;
     }
     lost.push({
@@ -585,7 +609,7 @@ async function keepWhatStands(
   pages: readonly HeldAddressUpdate[],
   was: ReadonlyMap<string, { holds: HeldAddress[] }>,
   expected: Expected,
-  stopNow: StopNow
+  steps: Steps
 ): Promise<Map<string, HeldAddress[]> | typeof STOPPED> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
@@ -597,7 +621,7 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
-      if (stopNow()) return STOPPED;
+      if (steps.stopNow()) return STOPPED;
       // The route has moved with the deploy: each address let go of is kept
       // on the same transaction, owed a redirect to the page's new one once
       // every claim stands.
@@ -608,6 +632,7 @@ async function keepWhatStands(
         ctx,
         { holder: page.holder, holds: keep },
         expected,
+        steps,
         transaction => keepPending(ctx, transaction, page.holder, released)
       );
     }
@@ -687,18 +712,23 @@ async function letGoOfTheGone(
   kept: ReadonlyMap<string, unknown>,
   expected: Expected,
   types: { now: ReadonlySet<string>; before: ReadonlySet<string> },
-  stopNow: StopNow
+  steps: Steps
 ): Promise<boolean> {
   for (const [key, entry] of was) {
     if (kept.has(key)) continue;
-    if (stopNow()) return false;
+    if (steps.stopNow()) return false;
     const { collection } = entry.holder;
     const removed = types.before.has(collection) && !types.now.has(collection);
     const gone =
       removed ||
       (types.now.has(collection) && (await entryIsGone(ctx, entry.holder)));
     if (gone) {
-      await moveIfCurrent(ctx, { holder: entry.holder, holds: [] }, expected);
+      await moveIfCurrent(
+        ctx,
+        { holder: entry.holder, holds: [] },
+        expected,
+        steps
+      );
     }
   }
   return true;
@@ -715,7 +745,7 @@ async function claimTheNew(
   pages: readonly HeldAddressUpdate[],
   kept: ReadonlyMap<string, HeldAddress[]>,
   expected: Expected,
-  stopNow: StopNow
+  steps: Steps
 ): Promise<{ recorded: number; lost: LostAddress[]; finished: boolean }> {
   let recorded = 0;
   let finished = true;
@@ -723,11 +753,11 @@ async function claimTheNew(
   for (const page of pages) {
     const keep = kept.get(holderKey(page.holder)) ?? [];
     if (page.holds.length === keep.length) continue;
-    if (stopNow()) {
+    if (steps.stopNow()) {
       finished = false;
       break;
     }
-    if (await claim(ctx, page, expected, lost)) recorded += 1;
+    if (await claim(ctx, page, expected, lost, steps)) recorded += 1;
   }
   for (const each of lost) {
     ctx.logger.warn(
@@ -746,7 +776,7 @@ async function claimTheNew(
  */
 async function redirectOwedMoves(
   ctx: PluginContext,
-  stopNow: StopNow
+  steps: Steps
 ): Promise<boolean> {
   const owed = new Map<string, PendingMove[]>();
   for (const move of await pendingMoves(ctx)) {
@@ -756,7 +786,7 @@ async function redirectOwedMoves(
   for (const moves of owed.values()) {
     const [first] = moves;
     if (first === undefined) continue;
-    if (stopNow()) return false;
+    if (steps.stopNow()) return false;
     await redirectDeployMove(
       ctx,
       first.holder,
@@ -767,19 +797,20 @@ async function redirectOwedMoves(
       ctx,
       moves.map(move => move.key)
     );
+    steps.moved();
   }
   return true;
 }
 
 /**
- * One run of the catch-up. Where `stopNow` says so before a step, it stops
+ * One run of the catch-up. Where `steps` says so before a change, it stops
  * there, unfinished, and stores no fingerprint: what it changed stands, and
  * the next run, finding the stored notes still behind, goes on from it.
  */
 async function runCatchUp(
   ctx: PluginContext,
   options: CatchUpOptions,
-  stopNow: StopNow
+  steps: Steps
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
   // Skipped on its inputs alone, never on what the record holds: a site none
@@ -803,7 +834,7 @@ async function runCatchUp(
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
-  const kept = await keepWhatStands(ctx, pages, was, expected, stopNow);
+  const kept = await keepWhatStands(ctx, pages, was, expected, steps);
   if (kept === STOPPED) return unfinished(0, []);
   const letGo = await letGoOfTheGone(
     ctx,
@@ -811,7 +842,7 @@ async function runCatchUp(
     kept,
     expected,
     { now: new Set(siteTypes), before: typesIn(stored.siteTypes) },
-    stopNow
+    steps
   );
   if (!letGo) return unfinished(0, []);
   // The redirects that process saved or removed, once every page has let go
@@ -827,10 +858,10 @@ async function runCatchUp(
     pages,
     kept,
     expected,
-    stopNow
+    steps
   );
   if (!finished) return unfinished(recorded, lost);
-  if (!(await redirectOwedMoves(ctx, stopNow))) {
+  if (!(await redirectOwedMoves(ctx, steps))) {
     return unfinished(recorded, lost);
   }
   await storeNote(

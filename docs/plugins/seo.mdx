@@ -451,7 +451,8 @@ the catch-up still finishes. Until it does, the sitemap is served from the copy 
 last answer, with `Last-Modified` and `cache-control: public, max-age=60`; with no copy kept
 yet, it answers `503` with `Retry-After: 120` and `cache-control: no-store`, so no crawler or
 cache keeps a list that leaves out pages whose addresses are not recorded yet. A copy is kept
-only for the site's own address (`baseUrl` or its production addresses).
+only for the site's own address (`baseUrl` or its production addresses), and only of the
+sitemap, a list of addresses.
 
 Each entry carries:
 
@@ -804,9 +805,10 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
-  waits for the address record at start, and while the record catches up it is served from
-  the copy kept from its last answer, or answers `503` where none is kept. `llms-full.txt`,
-  which carries the pages' words, is never kept: it answers `503` while the record catches up.
+  waits for the address record at start, and answers `503` while a real catch-up outlasts that
+  wait. No copy of it, or of `llms-full.txt`, is kept to serve meanwhile: they carry pages'
+  titles, descriptions and words, which a kept copy would go on serving after the public may
+  no longer read them.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
   escaped so it never becomes a heading.

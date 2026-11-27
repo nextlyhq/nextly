@@ -14,7 +14,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -52,12 +52,16 @@ afterEach(async () => {
  */
 const clock = { ticking: false, perClaimMs: 2000, slowReads: false };
 
+/** The test plugin's context, to move addresses directly. */
+const mover: { ctx?: PluginContext } = {};
+
 /** A plugin taking part in the address record, moving the clock on each claim. */
 const slowPages = definePlugin({
   name: "@test/slow-pages",
   version: "1.0.0",
   nextly: ">=0.0.0",
   init(ctx) {
+    mover.ctx = ctx;
     ctx.publicAddresses.participate({
       holderOf: async () => null,
       record: async () => {
@@ -203,6 +207,47 @@ describe.each(getConfiguredTestDialects())(
       }
       expect(addressRecordReady()).toBe(true);
       expect(await recordedRows()).toEqual(whole);
+    });
+
+    it("is not held up by a page refused its address on every run", async () => {
+      const whole = await behindSite(dialect);
+      const { ctx } = mover;
+      if (ctx === undefined) throw new Error("the test plugin never started");
+      // The oldest page's address held by a page of another plugin, which
+      // keeps it: every run tries that page first, and it is refused.
+      const other = { collection: "other-plugin", id: "1" };
+      await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [{ holder: other, holds: [{ locale: "en", path: "/a" }] }],
+          tx
+        )
+      );
+      await catchUp({ stopNow: () => true });
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      clock.slowReads = true;
+      try {
+        // Past the deadline from the listing on: the refusal changes
+        // nothing, so the run goes on to the next page, which it claims.
+        // (The report counts the refused page among those it recorded, so
+        // the record itself is read.)
+        expect(await addressRecordReadyWithin(RECORD_WAIT_MS)).toBe(false);
+        const pagesRecorded = Object.values(await recordedRows()).filter(
+          holder => holder.startsWith("pages:")
+        );
+        expect(pagesRecorded).toHaveLength(1);
+        for (let left = SLUGS.length; left > 0; left -= 1) {
+          if (await addressRecordReadyWithin(RECORD_WAIT_MS)) break;
+        }
+      } finally {
+        clock.slowReads = false;
+      }
+      expect(addressRecordReady()).toBe(true);
+      const { "en|/a": _taken, ...rest } = whole;
+      expect(await recordedRows()).toEqual({
+        ...rest,
+        "en|/a": "other-plugin:1",
+      });
     });
   }
 );

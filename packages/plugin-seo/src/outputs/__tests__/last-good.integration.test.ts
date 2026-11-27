@@ -74,7 +74,26 @@ describe.each(getConfiguredTestDialects())(
         "<urlset><url/></urlset>"
       );
       // Each file is kept under its own name.
-      expect(await keptCopy(seo, "llms.txt")).toBeUndefined();
+      expect(await keptCopy(seo, "other")).toBeUndefined();
+    });
+
+    it("keeps a file larger than one MySQL TEXT column holds, whole, and a shorter one after it", async () => {
+      await boot(dialect);
+      const seo = seoContext();
+      // Over 64 KB in UTF-8 many times over, with characters of two, three
+      // and four bytes, one of them written as two halves (a surrogate
+      // pair) that a part must never split.
+      const line = "<url><loc>https://acme.example/é/€/😀</loc></url>\n";
+      const large = `<urlset>${line.repeat(8000)}</urlset>`;
+      expect(Buffer.byteLength(large, "utf8")).toBeGreaterThan(5 * 65_535);
+      await keepCopy(seo, "sitemap", { body: large, contentType: XML });
+      expect((await keptCopy(seo, "sitemap"))?.body).toBe(large);
+
+      // A shorter copy after it is read back as itself, not with the longer
+      // copy's last parts.
+      const small = `<urlset>${line}</urlset>`;
+      await keepCopy(seo, "sitemap", { body: small, contentType: XML });
+      expect((await keptCopy(seo, "sitemap"))?.body).toBe(small);
     });
   }
 );

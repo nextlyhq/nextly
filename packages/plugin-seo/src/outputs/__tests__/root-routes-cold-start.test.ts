@@ -137,12 +137,12 @@ describe("the copies kept to serve while the record catches up", () => {
     return stored.written - before;
   }
 
-  it("keeps the sitemap and llms.txt, which list pages", async () => {
+  it("keeps the sitemap, a list of addresses", async () => {
     expect(await keptBy("/sitemap.xml")).toBeGreaterThan(0);
-    expect(await keptBy("/llms.txt")).toBeGreaterThan(0);
   });
 
-  it("never keeps llms-full.txt, which carries pages' words", async () => {
+  it("never keeps the llms files, which carry pages' titles and words", async () => {
+    expect(await keptBy("/llms.txt")).toBe(0);
     expect(await keptBy("/llms-full.txt")).toBe(0);
   });
 });
