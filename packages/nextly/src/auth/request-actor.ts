@@ -12,6 +12,7 @@
  * @module auth/request-actor
  */
 
+import type { ActorAttribution } from "../domains/audit/attribution";
 import type { PrincipalRef } from "../plugins/principals/types";
 
 import type { AuthContext } from "./middleware";
@@ -41,6 +42,14 @@ export interface RequestActor {
   id?: string;
   /** The person, for a `principal` actor only. */
   principal?: PrincipalRef;
+  /**
+   * Who stands behind this actor: the agent acting for them, the door, the
+   * credential by id, an approval, a grant, an undo or a deployment. Absent
+   * for a person acting for themselves in the admin. The activity log, the
+   * audit log and the record of content events store it beside the actor,
+   * who stays the person an agent acted for.
+   */
+  attribution?: ActorAttribution;
 }
 
 /** The actor for a write made as a plugin-defined person. */

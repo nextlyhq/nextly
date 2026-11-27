@@ -1,0 +1,193 @@
+/**
+ * How a caller's attribution becomes the columns an activity or audit row
+ * stores: an agent and the person it acted for, the door, the credential by
+ * id, an approval, a grant, an undo, or a deployment.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  attributionColumns,
+  EMPTY_ATTRIBUTION_COLUMNS,
+  type ActorAttribution,
+} from "../attribution";
+
+const PASS_ID = "5f0c2a8e-3d41-4b7a-9c55-1e2f3a4b5c6d";
+
+describe("attribution columns", () => {
+  it("stores nothing for a caller with no attribution", () => {
+    expect(attributionColumns(undefined)).toEqual({
+      columns: EMPTY_ATTRIBUTION_COLUMNS,
+      refused: [],
+    });
+    expect(attributionColumns({})).toEqual({
+      columns: EMPTY_ATTRIBUTION_COLUMNS,
+      refused: [],
+    });
+  });
+
+  it.each([
+    { door: "local", credential: "pass" },
+    { door: "command", credential: "pass" },
+    { door: "chat-app", credential: "connection" },
+    { door: "rest-key", credential: "key" },
+  ] as const)(
+    "stores an agent acting through the $door door with its $credential by id",
+    ({ door }) => {
+      const { columns, refused } = attributionColumns({
+        door,
+        agent: { name: "Claude Code", sessionId: "sess-1" },
+        credentialId: PASS_ID,
+      });
+      expect(refused).toEqual([]);
+      expect(columns).toEqual({
+        ...EMPTY_ATTRIBUTION_COLUMNS,
+        agentName: "Claude Code",
+        agentSessionId: "sess-1",
+        door,
+        credentialId: PASS_ID,
+      });
+    }
+  );
+
+  it("stores the approval, the grant and the undo on the same row", () => {
+    const { columns } = attributionColumns({
+      door: "command",
+      agent: { name: "Claude Code", sessionId: "sess-1" },
+      credentialId: PASS_ID,
+      approval: { requestId: "req-1", approvedBy: "user-1", via: "phone" },
+      grantId: "grant-1",
+      undoesSessionId: "sess-0",
+    });
+    expect(columns).toMatchObject({
+      approvalRequestId: "req-1",
+      approvedByUserId: "user-1",
+      approvedVia: "phone",
+      grantId: "grant-1",
+      undoesSessionId: "sess-0",
+    });
+  });
+
+  it("stores a pipeline deployment by host and commit, through the deploy door", () => {
+    expect(
+      attributionColumns({
+        deployment: { pipeline: "Vercel build", commit: "3f2a1c9" },
+      }).columns
+    ).toEqual({
+      ...EMPTY_ATTRIBUTION_COLUMNS,
+      door: "deploy",
+      deploymentHost: "Vercel build",
+      deploymentCommit: "3f2a1c9",
+    });
+    // A pipeline whose host gives no commit is still recorded, as one with
+    // no commit, which the wording says is unknown.
+    expect(
+      attributionColumns({
+        deployment: { pipeline: "GitHub Actions", commit: null },
+      }).columns
+    ).toMatchObject({
+      door: "deploy",
+      deploymentHost: "GitHub Actions",
+      deploymentCommit: null,
+    });
+  });
+
+  it("stores a deployment from a machine through the local door, by the machine's name", () => {
+    expect(
+      attributionColumns({ deployment: { machine: "studio-mac" } }).columns
+    ).toEqual({
+      ...EMPTY_ATTRIBUTION_COLUMNS,
+      door: "local",
+      deploymentHost: "studio-mac",
+    });
+  });
+
+  it("refuses a door that contradicts the deployment's own", () => {
+    const { columns, refused } = attributionColumns({
+      door: "command",
+      deployment: { pipeline: "Vercel build", commit: "3f2a1c9" },
+    });
+    expect(refused).toEqual(["door"]);
+    expect(columns.door).toBe("deploy");
+  });
+
+  describe("never stores a token", () => {
+    // 🔴 Each is a secret a caller might pass where an id belongs: a whole
+    // API key, a signed token, an authorization header's value. A plain
+    // length or "non-empty" check accepts every one of them.
+    const SECRETS = [
+      "nx_live_0123456789abcdef01234567_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eA",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+      "Bearer 5f0c2a8e-3d41-4b7a-9c55-1e2f3a4b5c6d",
+    ];
+
+    it.each(SECRETS)(
+      "refuses %s as any id, keeping the rest of the row",
+      secret => {
+        const attribution: ActorAttribution = {
+          door: "command",
+          agent: { name: "Claude Code", sessionId: secret },
+          credentialId: secret,
+          approval: { requestId: secret, approvedBy: secret, via: "phone" },
+          grantId: secret,
+          undoesSessionId: secret,
+        };
+        const { columns, refused } = attributionColumns(attribution);
+        expect(refused.sort()).toEqual(
+          [
+            "agent.sessionId",
+            "approval.approvedBy",
+            "approval.requestId",
+            "credentialId",
+            "grantId",
+            "undoesSessionId",
+          ].sort()
+        );
+        expect(Object.values(columns)).not.toContain(secret);
+        // The facts that are not ids still land.
+        expect(columns).toMatchObject({
+          agentName: "Claude Code",
+          door: "command",
+          approvedVia: "phone",
+        });
+      }
+    );
+
+    it("accepts a key's own id and a uuid", () => {
+      const { refused } = attributionColumns({
+        door: "rest-key",
+        credentialId: "0123456789abcdef01234567",
+        agent: { name: "Cursor", sessionId: PASS_ID },
+      });
+      expect(refused).toEqual([]);
+    });
+  });
+
+  it("refuses an empty or overlong agent name, and a malformed commit", () => {
+    expect(attributionColumns({ agent: { name: "   " } }).refused).toEqual([
+      "agent.name",
+    ]);
+    expect(
+      attributionColumns({ agent: { name: "x".repeat(192) } }).refused
+    ).toEqual(["agent.name"]);
+    const commit = attributionColumns({
+      deployment: { pipeline: "Vercel build", commit: "not a sha" },
+    });
+    expect(commit.refused).toEqual(["deployment.commit"]);
+    expect(commit.columns.deploymentCommit).toBeNull();
+  });
+
+  it("refuses a door or an approval place it does not know", () => {
+    const { columns, refused } = attributionColumns({
+      door: "fax" as never,
+      approval: {
+        requestId: "req-1",
+        approvedBy: "user-1",
+        via: "pager" as never,
+      },
+    });
+    expect(refused.sort()).toEqual(["approval.via", "door"]);
+    expect(columns.door).toBeNull();
+    expect(columns.approvedVia).toBeNull();
+    expect(columns.approvalRequestId).toBe("req-1");
+  });
+});

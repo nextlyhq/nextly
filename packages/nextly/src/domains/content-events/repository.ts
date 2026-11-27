@@ -61,6 +61,8 @@ export interface ContentEventRecord {
   actorId: string | null;
   actorPrincipalKind: string | null;
   actorName: string | null;
+  /** The agent that acted for the actor, by name; NULL when none did. */
+  actorAgentName: string | null;
   occurredAt: Date;
   fromState: string | null;
   toState: string | null;
@@ -111,6 +113,8 @@ export interface ContentEventProducer {
   actorId: string | null;
   actorPrincipalKind: string | null;
   actorName: string | null;
+  /** The agent that acted for the actor, by name; NULL when none did. */
+  actorAgentName: string | null;
 }
 
 /**
@@ -209,6 +213,7 @@ export class ContentEventsRepository extends BaseService {
             actorId: e.actorId,
             actorPrincipalKind: e.actorPrincipalKind,
             actorName: e.actorName,
+            actorAgentName: e.actorAgentName,
           })
           .from(e)
           .where(
@@ -330,6 +335,7 @@ export class ContentEventsRepository extends BaseService {
       actorId: e.actorId,
       actorPrincipalKind: e.actorPrincipalKind,
       actorName: e.actorName,
+      actorAgentName: e.actorAgentName,
       occurredAt: e.occurredAt,
       fromState: e.fromState,
       toState: e.toState,

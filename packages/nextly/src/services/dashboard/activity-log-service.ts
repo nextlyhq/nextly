@@ -24,6 +24,10 @@ import { toDbError } from "../../database/errors";
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
+import {
+  storedAttribution,
+  type ActorAttribution,
+} from "../../domains/audit/attribution";
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { effectiveWidgetLimit } from "../../domains/widgets/query-limits";
 import { NextlyError } from "../../errors";
@@ -179,6 +183,12 @@ export interface LogActivityInput {
    */
   subjectKind?: ActivitySubjectKind | null;
   metadata?: Record<string, unknown>;
+  /**
+   * Who stands behind the actor: an agent acting for them, the door, the
+   * credential by id, an approval, a grant, an undo or a deployment. Stored
+   * in the row's attribution columns; the actor stays the person.
+   */
+  attribution?: ActorAttribution;
 }
 
 /**
@@ -1201,6 +1211,9 @@ export class ActivityLogService extends BaseService {
       subjectKind: input.subjectKind ?? null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt,
+      // Nothing here is personal: the person an agent acted for is the
+      // actor above, erased through the identity columns as ever.
+      ...storedAttribution(input.attribution, "activity"),
     };
   }
 

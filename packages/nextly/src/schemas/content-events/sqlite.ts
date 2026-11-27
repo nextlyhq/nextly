@@ -39,6 +39,11 @@ export const nextlyContentEventsSqlite = sqliteTable(
     actorId: text("actor_id"),
     actorPrincipalKind: text("actor_principal_kind"),
     actorName: text("actor_name"),
+    // The agent that acted for this actor ("Claude Code"), beside the person
+    // it acted for, who stays the actor above: erasing that person blanks
+    // their name and keeps this one, which names software, not a person.
+    // NULL when no agent acted, and on every event before it existed.
+    actorAgentName: text("actor_agent_name"),
 
     // Seconds, as every timestamp here: the adapter writes a Date as epoch
     // seconds. Order within a second comes from the time-ordered id.
