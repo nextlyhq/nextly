@@ -116,6 +116,7 @@ import {
 } from "@admin/components/features/entries/EntryForm/useVersionConflict";
 import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
+import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { smartPublishHandler } from "@admin/components/features/entries/publish-parts/smart-publish-handler";
@@ -401,6 +402,29 @@ function singleFormDefaults(
   if (fixed.has("title")) values.title = schema.label;
   if (fixed.has("slug")) values.slug = schema.slug;
   return values;
+}
+
+/**
+ * An author's own `slug` field, drawn under the title. The body never draws a
+ * field named slug (it is an identity field for every other entity), so the
+ * Single's editor draws it here, through the field's own control: its type,
+ * its `admin` gates (hidden, a condition, read-only, disabled) and its
+ * validation message are the field renderer's, as for any other field.
+ */
+function OwnSlugField({
+  field,
+  readOnly,
+  disabled,
+}: {
+  field: FieldConfig;
+  readOnly: boolean;
+  disabled: boolean;
+}): React.JSX.Element {
+  return (
+    <div className={cn("pt-4", DOCUMENT_COLUMN_INSET)}>
+      <FieldRenderer field={field} readOnly={readOnly} disabled={disabled} />
+    </div>
+  );
 }
 
 /**
@@ -2094,9 +2118,9 @@ export function SingleForm({
                                   own field. No slug line where the config fixes
                                   the slug too, as it is not part of the
                                   Single's address on most sites; an author's
-                                  own slug is content, drawn under the title to
-                                  be edited as an entry's is, since the body
-                                  never draws a field named slug. */}
+                                  own slug is content, drawn under the title by
+                                  its own field control (`OwnSlugField`), since
+                                  the body never draws a field named slug. */}
                                     <DocumentTitleBlock
                                       mode="edit"
                                       titleField={titleField}
@@ -2107,15 +2131,21 @@ export function SingleForm({
                                       // holds the title read-only through the lock
                                       // instead.
                                       isSubmitting={writePending}
-                                      slug={
-                                        slugField && !fixedIdentity.has("slug")
-                                          ? {
-                                              field: slugField,
-                                              locked: lock.readOnly,
-                                            }
-                                          : undefined
-                                      }
                                     />
+                                    {slugField && !fixedIdentity.has("slug") ? (
+                                      <OwnSlugField
+                                        field={slugField}
+                                        // Held with the title: by a colleague's
+                                        // claim or a reader's access, and while a
+                                        // past version is on screen, where an edit
+                                        // would reach the live form.
+                                        readOnly={
+                                          lock.readOnly ||
+                                          viewingVersion !== null
+                                        }
+                                        disabled={writePending}
+                                      />
+                                    ) : null}
                                     <ReviewStatusLine
                                       status={editedStatus.status}
                                       hasWorkingDraft={

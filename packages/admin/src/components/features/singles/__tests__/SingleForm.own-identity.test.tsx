@@ -166,12 +166,39 @@ describe("SingleForm, a Single with its own title and slug", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: "Edit address" }));
-    await user.type(screen.getByRole("textbox", { name: "Address" }), "notes");
-    await user.keyboard("{Enter}");
+    await user.type(screen.getByRole("textbox", { name: /path/i }), "notes");
     const sent = await save(onSubmit);
 
     expect(sent).toMatchObject({ title: HEADING, slug: "notes" });
+  });
+
+  it("draws its own slug through the field's own gates: none where it is hidden", () => {
+    // Drawn by the field's own control, so its `admin` gates hold as they do
+    // for any other field; a hidden slug keeps its stored value unseen.
+    const hiddenSlug = {
+      ...ownSchema,
+      fields: [
+        { type: "text", name: "title", label: "Heading", required: true },
+        {
+          type: "text",
+          name: "slug",
+          label: "Path",
+          admin: { hidden: true },
+        },
+      ],
+    } as unknown as SingleSchema;
+    render(
+      <SingleForm schema={hiddenSlug} document={stored} onSubmit={vi.fn()} />
+    );
+
+    expect(screen.queryByRole("textbox", { name: /path/i })).toBeNull();
+    // CONTROL: the same slug, not hidden, is drawn.
+    render(
+      <SingleForm schema={ownSchema} document={stored} onSubmit={vi.fn()} />
+    );
+    expect(screen.getByRole("textbox", { name: /path/i })).toHaveValue(
+      "writing"
+    );
   });
 });
 
