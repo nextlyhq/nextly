@@ -9,6 +9,7 @@ vi.mock("node:dns/promises", () => ({ lookup }));
 
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../plugin-context";
+import { checkPluginPackageDeclaration } from "../declaration";
 import { createPluginFetchFor } from "../plugin-fetch-provider";
 
 function plugin(outbound: string[]): PluginDefinition {
@@ -103,4 +104,36 @@ describe("the development-only loopback exception", () => {
       );
     }
   );
+});
+
+describe("a package declaration that claims more than the definition", () => {
+  it("does not widen the hosts ctx.fetch may reach", async () => {
+    // The declaration is a promise compared with the definition, never a
+    // grant: `ctx.fetch` is made from the definition alone, so a host only
+    // the package.json names stays refused, and the comparison names it.
+    const definition = plugin(["api.example.com"]);
+    const manifest = {
+      name: "@acme/p",
+      nextly: {
+        format: 1,
+        core: ">=0.0.1",
+        databases: ["sqlite"],
+        access: { outbound: ["api.example.com", "evil.example.org"] },
+      },
+    };
+    expect(checkPluginPackageDeclaration(manifest, definition)).toEqual([
+      'The declaration lists the outbound host "evil.example.org", which the plugin\'s definition does not have.',
+    ]);
+
+    lookup.mockRejectedValue(dnsError("ENOTFOUND"));
+    const fetch = createPluginFetchFor(definition);
+    expect(await reasonOf(fetch!("https://evil.example.org/x"))).toBe(
+      "outbound-host-not-declared"
+    );
+    // The control: the host both sides name gets past the host check to
+    // name resolution, so the refusal above is the host check's.
+    expect(await reasonOf(fetch!("https://api.example.com/x"))).toBe(
+      "outbound-unresolved"
+    );
+  });
 });
