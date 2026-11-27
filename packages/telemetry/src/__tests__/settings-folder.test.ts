@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,5 +34,14 @@ describe("the settings-folder entry", () => {
     expect(nextlySettingsFolder()).toBe(
       expected[process.platform] ?? join(base, "xdg", "nextly-nodejs")
     );
+  });
+
+  it("answers an absolute folder when the environment names a relative one", async () => {
+    const { nextlySettingsFolder } = await import("../settings-folder.js");
+    // conf resolves its folder against the working directory; so does this.
+    vi.stubEnv("XDG_CONFIG_HOME", join("relative", "xdg"));
+    vi.stubEnv("APPDATA", join("relative", "appdata"));
+
+    expect(isAbsolute(nextlySettingsFolder())).toBe(true);
   });
 });

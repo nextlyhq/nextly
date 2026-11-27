@@ -3,7 +3,7 @@ import { writeFileSync } from "fs";
 
 import Conf from "conf";
 
-import { CONF_PROJECT_NAME } from "./constants.js";
+import { CONF_PROJECT_NAME, CONF_PROJECT_SUFFIX } from "./constants.js";
 
 export interface ConsentState {
   anonymousId: string; // 64 hex chars
@@ -58,6 +58,7 @@ export function createConsentStore(
 ): ConsentStore {
   const conf = new Conf<Schema>({
     projectName: CONF_PROJECT_NAME,
+    projectSuffix: CONF_PROJECT_SUFFIX,
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     // Reset on malformed JSON instead of crashing. Matches Next.js / Astro behavior.
     clearInvalidConfig: true,

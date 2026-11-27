@@ -14,10 +14,14 @@ export const POSTHOG_TOKEN = "phc_Bt3mRoQE9ztCyb6etyvnaGb7hoCYZvhxydaWk9PxGmcX";
 // property shape of any event.
 export const TELEMETRY_SCHEMA_VERSION = 1;
 
-// Name of the conf package "projectName"; resolves config to
-// ~/.config/nextly/config.json (Linux),
-// ~/Library/Preferences/nextly-nodejs/config.json (macOS), etc.
+// The consent store's conf "projectName" and "projectSuffix" (conf's own
+// default suffix, stated so the folder can't move with a conf release). Its
+// file is config.json in the folder env-paths names for "nextly-nodejs":
+// ~/.config/nextly-nodejs (Linux), ~/Library/Preferences/nextly-nodejs
+// (macOS), %APPDATA%\nextly-nodejs\Config (Windows). `nextlySettingsFolder()`
+// names the same folder from the same two values.
 export const CONF_PROJECT_NAME = "nextly";
+export const CONF_PROJECT_SUFFIX = "nodejs";
 
 // Hard cap for shutdown flush in ms. A degraded network should never hang the CLI.
 export const SHUTDOWN_TIMEOUT_MS = 2000;

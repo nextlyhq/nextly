@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "tsdown";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { CONF_PROJECT_NAME } from "../constants.js";
+import { CONF_PROJECT_NAME, CONF_PROJECT_SUFFIX } from "../constants.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -185,7 +185,8 @@ describe("the built settings-folder entry", () => {
       `const m = await import("@nextlyhq/telemetry/settings-folder");
        const { default: Conf } = await import("conf");
        const { dirname } = await import("node:path");
-       const store = new Conf({ projectName: ${JSON.stringify(CONF_PROJECT_NAME)} });
+       const store = new Conf({ projectName: ${JSON.stringify(CONF_PROJECT_NAME)},
+         projectSuffix: ${JSON.stringify(CONF_PROJECT_SUFFIX)} });
        console.log(JSON.stringify({ keys: Object.keys(m),
          folder: m.nextlySettingsFolder(), conf: dirname(store.path) }));`,
       env
@@ -203,6 +204,7 @@ describe("the built settings-folder entry", () => {
   });
 
   it("reaches neither the package root nor the client", () => {
-    expectLight("settings-folder.mjs");
+    // The walk is live: it follows the entry into its shared chunks.
+    expect(expectLight("settings-folder.mjs").length).toBeGreaterThan(1);
   });
 });
