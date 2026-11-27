@@ -37,6 +37,9 @@ export type ServiceType =
   | "files"
   | "translations"
   | "notices"
+  // Whether AI is configured and what the caller may do with it; its handler
+  // owns its auth.
+  | "ai"
   | "email"
   | "schema"
   // A subject's content events read by subject; its handler owns its auth.

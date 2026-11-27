@@ -871,4 +871,41 @@ describe("the providers a boot records", () => {
       )
     ).toBe("capability-provided-twice");
   });
+
+  it("answers which started plugin provides AI", () => {
+    recordCapabilityProviders([
+      plugin({
+        name: "@test/ai",
+        provides: ["ai"],
+        contributes: { services: { ai: () => ({}) } },
+      }),
+    ]);
+    expect(capabilityProvider("ai")).toBe("@test/ai");
+  });
+
+  it("refuses an AI provider that contributes no ai service", () => {
+    // Every AI run and status would ask a provider that cannot answer, so
+    // the boot says so rather than the first run.
+    expect(
+      reasonOf(() =>
+        recordCapabilityProviders([
+          plugin({ name: "@test/ai", provides: ["ai"] }),
+        ])
+      )
+    ).toBe("ai-service-missing");
+  });
+
+  it("refuses two AI providers", () => {
+    const aiPlugin = (name: string) =>
+      plugin({
+        name,
+        provides: ["ai"],
+        contributes: { services: { ai: () => ({}) } },
+      });
+    expect(
+      reasonOf(() =>
+        recordCapabilityProviders([aiPlugin("@test/a"), aiPlugin("@test/b")])
+      )
+    ).toBe("capability-provided-twice");
+  });
 });

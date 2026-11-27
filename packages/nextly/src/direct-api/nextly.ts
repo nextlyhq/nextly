@@ -54,6 +54,7 @@ import type { CredentialDeps } from "../auth/credentials/verify-credentials";
 import { readSessionRoles } from "../auth/session/read-session-roles";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
+import { onAIUsage } from "../domains/ai/ai-usage-events";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
@@ -98,6 +99,7 @@ import * as collectionsNs from "./namespaces/collections";
 import type { DirectLoginDeps, NextlyContext } from "./namespaces/context";
 import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
+  createAINamespace,
   createAccessNamespace,
   createApiKeysNamespace,
   createFilesNamespace,
@@ -119,6 +121,7 @@ import {
   createRolesNamespace,
   createUserFieldsNamespace,
   createUsersNamespace,
+  type AINamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
   type FilesNamespace,
@@ -324,6 +327,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental AI: run, stream, embed, status, and the usage hook. */
+  public readonly ai: AINamespace;
   /** @experimental A translated field and its source. */
   public readonly translations: TranslationsNamespace;
   /** A document's history: list, read, compare, name, restore. */
@@ -375,6 +380,7 @@ export class Nextly implements NextlyContext {
     this.jobs = withLanguagesPinned(createJobsNamespace());
     this.releases = withLanguagesPinned(createReleasesNamespace(this));
     this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.ai = withLanguagesPinned(createAINamespace(this));
     this.translations = withLanguagesPinned(createTranslationsNamespace(this));
     this.versions = withLanguagesPinned(createVersionsNamespace(this));
     this.contentEvents = withLanguagesPinned(
@@ -1196,6 +1202,19 @@ export const nextly = {
     byId: async (kind: string, id: string) =>
       (await requireNextlyOnceStarted()).principals.byId(kind, id),
   },
+
+  // Checked against the namespace's own type, like releases. Listening needs
+  // no started instance: the hook is process-wide.
+  ai: {
+    status: async (args?) => (await requireNextlyOnceStarted()).ai.status(args),
+    tasks: async (args?) => (await requireNextlyOnceStarted()).ai.tasks(args),
+    run: async args => (await requireNextlyOnceStarted()).ai.run(args),
+    stream: async args => (await requireNextlyOnceStarted()).ai.stream(args),
+    embed: async args => (await requireNextlyOnceStarted()).ai.embed(args),
+    checkBulkJob: async (args?) =>
+      (await requireNextlyOnceStarted()).ai.checkBulkJob(args),
+    onUsage: listener => onAIUsage(listener),
+  } satisfies AINamespace,
 
   notices: {
     find: async (args: Parameters<NoticesNamespace["find"]>[0]) =>

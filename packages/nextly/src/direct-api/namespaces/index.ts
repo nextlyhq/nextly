@@ -71,3 +71,8 @@ export {
   type ReleaseCallerArgs,
   type ReleasesNamespace,
 } from "./releases";
+export {
+  createAINamespace,
+  type AICallerArgs,
+  type AINamespace,
+} from "./ai";

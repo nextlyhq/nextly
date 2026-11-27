@@ -80,6 +80,33 @@ export {
 // value can end it.
 export { jsonLdScriptProps, type JsonLdScriptProps } from "./runtime/seo";
 
+// @experimental The AI contract's shapes: what core hands the package that
+// provides the "ai" capability and what it answers, the status, and the
+// usage event every run ends in. Types only; the service is `nextly.ai`.
+// See `domains/ai/ai-contract`.
+export type {
+  AIAgent,
+  AIModelRole,
+  AINotConfiguredReason,
+  AIPermissionKey,
+  AIProvider,
+  AIProviderEmbedOutcome,
+  AIProviderEmbedRequest,
+  AIProviderRunOutcome,
+  AIProviderRunRequest,
+  AIProviderStatus,
+  AIProviderStream,
+  AIRunResult,
+  AIRunTarget,
+  AIRunUsage,
+  AIStatus,
+  AITaskRef,
+  AITaskStatus,
+  AITaskUnavailableReason,
+  AIUsageEvent,
+  AIUsageListener,
+} from "./domains/ai/ai-contract";
+
 // The page-metadata contract: what a plugin that works out a page's head is
 // asked and answers. The route helpers ask it by default; see
 // `runtime/seo/page-metadata-contract`.
