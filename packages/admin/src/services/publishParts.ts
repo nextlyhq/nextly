@@ -43,14 +43,13 @@ export type PartsLanguageOutcome =
   | UnpublishLanguageOutcome;
 
 /**
- * A mark of each part a description describes, and one of the rest of the document: equal in two
- * descriptions where nothing of that part was saved between them.
+ * A mark of each language a description describes, and of the shared fields: equal in two
+ * descriptions where nothing of that part was saved between them. A language it does not describe
+ * has none.
  */
 export interface PartMarks {
   languages: Readonly<Record<string, string>>;
-  /** The shared fields', where they are described. */
-  shared?: string;
-  rest: string;
+  shared: string;
 }
 
 /** What a request did, or would do, to each part it chose. */

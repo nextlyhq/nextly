@@ -100,9 +100,7 @@ function route(choice: PublishPartsChoice): Promise<PublishPartsResult> {
             languages: Object.fromEntries(
               locales.map(code => [code, counterOf(code)])
             ),
-            rest: LANGUAGES.filter(code => !locales.includes(code))
-              .map(counterOf)
-              .join(),
+            shared: "s1",
           },
         }
       : {}),

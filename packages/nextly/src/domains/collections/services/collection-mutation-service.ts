@@ -234,7 +234,9 @@ import {
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
+  mayHideInside,
   reachesFieldGroup,
+  unreadBy,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import {
@@ -385,6 +387,11 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+  type DraftDocumentConfig,
+} from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import {
   evaluateDraftSplitEligibility,
@@ -430,6 +437,7 @@ import {
   sharedFieldsJudged,
   storePartDrafts,
   translatedWhenSharedChanged,
+  withPendingChange,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
@@ -1129,7 +1137,9 @@ interface GoingLiveArgs {
   /** The write's locale split, or `null` for a collection without one. */
   localizedUpdate: {
     writeLocale: string;
+    companionData?: Record<string, unknown>;
     localizedFieldValues?: Record<string, unknown>;
+    sharedStructures?: readonly SharedStructureWritten[];
     hasStatus?: boolean;
   } | null;
 }
@@ -2301,11 +2311,12 @@ interface StructureSelect {
 }
 
 /**
- * `data` with each repeater or group keeping one structure that `split` wrote laid back as written
- * (`localizedFieldValues`), its text with its structure, where the split left the structure alone.
- * `data` as it is where there is no split or none of its fields keeps one structure.
+ * `data` with the translated values `split` wrote laid back as written (`localizedFieldValues`):
+ * each the split took off it, and a repeater or group keeping one structure with its text, where
+ * the split left the structure alone. A value written as `undefined` is none, as a key left out is.
+ * `data` as it is where there is no split.
  */
-function withWrittenStructures(
+function withWrittenTranslations(
   data: Record<string, unknown>,
   split:
     | {
@@ -2316,15 +2327,52 @@ function withWrittenStructures(
     | undefined
 ): Record<string, unknown> {
   const written = split?.localizedFieldValues;
-  if (!written || !split?.sharedStructures?.length) return data;
+  if (!written) return data;
+  const structureColumns = new Map(
+    (split.sharedStructures ?? []).map(({ field, column }) => [field, column])
+  );
   const out = { ...data };
-  for (const structure of split.sharedStructures) {
-    if (!Object.hasOwn(written, structure.field)) continue;
+  for (const [field, value] of Object.entries(written)) {
+    const column = structureColumns.get(field);
     // Held under the field's name; a column of another spelling goes with it.
-    if (structure.column !== structure.field) delete out[structure.column];
-    out[structure.field] = written[structure.field];
+    if (column !== undefined && column !== field) delete out[column];
+    if (column !== undefined || value !== undefined) out[field] = value;
   }
   return out;
+}
+
+/**
+ * `data` with the status the caller's write moves its language to, where the split moved it off
+ * the payload to the language's row: a held change folded into the write is judged, by the rules
+ * and the validators, as the language it is going live, or offline, in, as the same write over
+ * nothing held is. `data` as it is where it names a status of its own, as a write in the default
+ * language does.
+ */
+function withLanguageStatus(
+  data: Record<string, unknown>,
+  split: { companionData?: Record<string, unknown> } | null | undefined
+): Record<string, unknown> {
+  const status = split?.companionData?._status;
+  return typeof status !== "string" || Object.hasOwn(data, "status")
+    ? data
+    : { ...data, status };
+}
+
+/**
+ * A promotion's split, its language going to the status the caller's write names. A pending change
+ * holds no status of its own for it to come from, and the caller's was moved off the payload to the
+ * language's row (`splitLocalizedWriteData`) before the change was folded into it.
+ */
+function withStatusWritten<
+  T extends { companionData: Record<string, unknown> },
+>(
+  split: T | null,
+  callerSplit: { companionData?: Record<string, unknown> } | null | undefined
+): T | null {
+  const status = callerSplit?.companionData?._status;
+  return split === null || typeof status !== "string"
+    ? split
+    : { ...split, companionData: { ...split.companionData, _status: status } };
 }
 
 /**
@@ -4445,7 +4493,12 @@ export class CollectionMutationService extends BaseService {
       args.overrideAccess !== true &&
       (hasFieldAccessRule("collection", args.collectionName, "update") ||
         (anyFieldGroupHasAccessRule("update") &&
-          reachesFieldGroup(args.fields as unknown as FieldConfig[])))
+          reachesFieldGroup(args.fields as unknown as FieldConfig[])) ||
+        mayHideInside(
+          { kind: "collection", slug: args.collectionName },
+          args.fields as unknown as FieldConfig[],
+          args.overrideAccess
+        ))
         ? await this.readCompanionLocalizedValues(
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
@@ -4515,6 +4568,8 @@ export class CollectionMutationService extends BaseService {
       locale?: string;
     };
     executor?: unknown;
+    /** The caller's transaction, whose `executor` it is, for a write made inside one. */
+    tx?: TransactionContext;
     /**
      * The paths that hold a value kept from the stored row because a rule
      * denies it to this writer, with the value each path holds, so the
@@ -4549,6 +4604,15 @@ export class CollectionMutationService extends BaseService {
       data: args.data,
       stored: await storedIn.read(args.params.locale),
       storedIn,
+      unread: await unreadBy({
+        entity: { kind: "collection", slug: args.collectionName },
+        id: args.storedId,
+        stored: () => this.asItsEditorsSeeIt(args),
+        fields: args.fields as unknown as FieldConfig[],
+        source: this.fieldGroupDataService,
+        access,
+        executor: args.executor,
+      }),
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       access,
@@ -4568,6 +4632,54 @@ export class CollectionMutationService extends BaseService {
           grants,
         }),
     });
+  }
+
+  /**
+   * `stored`, the entry in the write's language, with the change its editors
+   * are shown in place of it there, where the collection keeps one. Shown by
+   * the rule every read of "the draft" uses (`resolveDraftOverlay`), so a
+   * pending change no read shows, one the collection can no longer hold, lends
+   * the save nothing its writer was not shown.
+   */
+  private async asItsEditorsSeeIt(args: {
+    stored: Record<string, unknown>;
+    storedId: string;
+    collectionName: string;
+    fields: FieldDefinition[];
+    params: { locale?: string };
+    executor?: unknown;
+    tx?: TransactionContext;
+  }): Promise<Record<string, unknown>> {
+    const collection = (await this.collectionService.getCollection(
+      args.collectionName,
+      args.executor
+    )) as DraftDocumentConfig;
+    if (collection.versions?.drafts?.enabled !== true) return args.stored;
+    const fields = args.fields as unknown as FieldConfig[];
+    const shown = resolveDraftOverlay({
+      ...draftDocumentFacts(collection),
+      entityKind: "collection",
+      fields,
+      componentSchemas: await resolveComponentSchemas(fields, args.executor),
+      includeWorkingDraft: true,
+      // A writer who may update the entry may edit it.
+      callerMayEdit: true,
+      requestLocale: args.params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    if (!shown.overlay) return args.stored;
+    return withPendingChange(
+      new VersionsRepository(args.tx ?? this.adapter),
+      {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.storedId,
+      },
+      shown.draftLocale,
+      args.stored,
+      args.fields,
+      args.executor
+    );
   }
 
   /**
@@ -5424,7 +5536,14 @@ export class CollectionMutationService extends BaseService {
       if (advisoryDraft) {
         promotesDraft = true;
         promoted = this.promotedDocumentOf(
-          args,
+          {
+            ...args,
+            // What the write folds over the draft (`foldWorkingDraft`).
+            finalData: withLanguageStatus(
+              withWrittenTranslations(args.finalData, args.localizedUpdate),
+              args.localizedUpdate
+            ),
+          },
           buildRestorePayload(
             advisoryDraft.snapshot,
             args.fields as unknown as FieldConfig[],
@@ -15288,10 +15407,12 @@ export class CollectionMutationService extends BaseService {
       /** The caller's shaped payload, after its translated values were split off. */
       finalData: Record<string, unknown>;
       /**
-       * The split those values went to: a repeater or group keeping one structure is left in
-       * `finalData` as its structure alone, and is laid back as written from here.
+       * The split those values went to, which are laid back as written from here: each is here
+       * alone, as the language's status is, and a repeater or group keeping one structure is left
+       * in `finalData` as its structure alone.
        */
       callerSplit?: {
+        companionData?: Record<string, unknown>;
         localizedFieldValues?: Record<string, unknown>;
         sharedStructures?: readonly SharedStructureWritten[];
       } | null;
@@ -15319,10 +15440,15 @@ export class CollectionMutationService extends BaseService {
     const { fields, manyToManyFields, componentSchemas, componentFieldData } =
       args;
     const { manyToManyData } = args;
-    // The caller's repeaters and groups keeping one structure as written, their text with them:
-    // the split left each in `finalData` as its structure alone, which would replace the pending
-    // change's whole value and lose both its text and the caller's.
-    const finalData = withWrittenStructures(args.finalData, args.callerSplit);
+    // The caller's translated values as written, over the pending change's: the split moved them
+    // off `finalData`, so folded without them the change would win over what the caller sent. It
+    // left a repeater or group keeping one structure there as its structure alone, which would
+    // replace the change's whole value and lose both its text and the caller's.
+    const finalData = withWrittenTranslations(args.finalData, args.callerSplit);
+    // Judged with the status the write moves its language to, which the split took to the
+    // language's row. It is written there (`withStatusWritten`): the main row's status is the
+    // default language's, which a write in another language leaves as it is.
+    const judgedData = withLanguageStatus(finalData, args.callerSplit);
     const { payload: draftInput } = buildRestorePayload(
       args.snapshot,
       fields as unknown as FieldConfig[],
@@ -15345,7 +15471,7 @@ export class CollectionMutationService extends BaseService {
     const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
       this.assemblePromotedDocument(
         draftInput,
-        finalData,
+        judgedData,
         componentFieldData,
         manyToManyData,
         fields,
@@ -15365,7 +15491,7 @@ export class CollectionMutationService extends BaseService {
     // judges the rest as the pending change holds it. Logical, through the
     // same conversion as the document it is compared against.
     const callerContribution = this.callerContributionOf({
-      finalData,
+      finalData: judgedData,
       componentFieldData,
       manyToManyData,
       fields,
@@ -15438,12 +15564,15 @@ export class CollectionMutationService extends BaseService {
     // Bound to this transaction's executor: the companion metadata read would
     // otherwise take a second pooled connection that this open transaction is
     // holding.
-    const localizedUpdate = await this.splitLocalizedWriteData(
-      args.collectionName,
-      promotedDocument,
-      args.draftLocale ?? args.requestLocale,
-      false,
-      tx.getDrizzle()
+    const localizedUpdate = withStatusWritten(
+      await this.splitLocalizedWriteData(
+        args.collectionName,
+        promotedDocument,
+        args.draftLocale ?? args.requestLocale,
+        false,
+        tx.getDrizzle()
+      ),
+      args.callerSplit
     );
     // Whether the caller's write moves the document off the draft it promotes:
     // the merged document, before access is judged, against the draft alone
@@ -18508,13 +18637,16 @@ export class CollectionMutationService extends BaseService {
             }
           : undefined;
 
+      // Whether this write is in a language whose status is its own companion
+      // `_status` rather than the main row's, whoever makes it.
+      const writesOtherLanguage =
+        localizedUpdate?.hasStatus === true &&
+        localizedUpdate.writeLocale !== this.localization?.defaultLocale;
       // Whether this write targets a non-default locale's companion `_status`
       // (which the in-transaction check below reads under the lock) rather than
       // the main row. A trusted write skips the transition gate entirely.
       const isNonDefaultLocaleStatusWrite =
-        !params.overrideAccess &&
-        localizedUpdate?.hasStatus === true &&
-        localizedUpdate.writeLocale !== this.localization?.defaultLocale;
+        !params.overrideAccess && writesOtherLanguage;
       // The status this write will persist: for a non-default locale it is the
       // companion `_status` the split produced (a string only when one was
       // provided), otherwise the main-row status.
@@ -19111,12 +19243,16 @@ export class CollectionMutationService extends BaseService {
           // locked reads the transition guard uses, so the decision is
           // TOCTOU-safe (a concurrent publish/unpublish committed before the
           // lock is seen). A never-published (`draft`) or per-locale-absent
-          // (`null`) document fails the test and edits in place.
-          const draftLiveStatus = isNonDefaultLocaleStatusWrite
-            ? committedLocaleStatus
-            : (((preUpdateRow as { status?: unknown } | undefined)?.status as
-                | string
-                | undefined) ?? null);
+          // (`null`) document fails the test and edits in place. A trusted write
+          // in another language is held over a published document as well: it
+          // may carry a shared value, which would go live in every language.
+          const draftLiveStatus =
+            isNonDefaultLocaleStatusWrite ||
+            (writesOtherLanguage && committedLocaleStatus === "published")
+              ? committedLocaleStatus
+              : (((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null);
           // The one hold rule, shared with the transaction and batch surfaces.
           // Eligibility is passed in rather than recomputed: it was resolved
           // off the transaction because it reads the component registry, and
@@ -20446,14 +20582,17 @@ export class CollectionMutationService extends BaseService {
                   // Publishing a held draft is a publish though the live row
                   // was published before and after: the move history records
                   // is the draft's, from draft to published, so it names the
-                  // publish and who made it.
+                  // publish and who made it. Taking one language offline folds
+                  // its draft too, and publishes nothing.
                   [
                     ...(companionEncodesMainTransition
                       ? []
                       : [
                           {
                             from:
-                              promotedDraft && mainTo === "published"
+                              promotedDraft &&
+                              promotesShared &&
+                              mainTo === "published"
                                 ? "draft"
                                 : mainFrom,
                             to: mainTo,
@@ -24602,6 +24741,7 @@ export class CollectionMutationService extends BaseService {
           params,
           // Still inside the caller-owned transaction.
           executor: tx.getDrizzle(),
+          tx,
         }
       );
 
