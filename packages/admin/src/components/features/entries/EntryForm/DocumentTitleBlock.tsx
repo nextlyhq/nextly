@@ -124,12 +124,25 @@ export function DocumentTitleBlock({
         />
       </TitleRow>
       <DocumentAddressChip
-        slug={slug}
+        slug={heldWhileReadingHistory(slug, isReadingHistory)}
         address={address}
         published={status === undefined || status.status === "published"}
       />
     </div>
   );
+}
+
+/**
+ * The slug the address chip edits, held read-only while a past version is on
+ * screen. The slug is part of the document too, held with the title, or an
+ * edit made there would reach the live form and be saved after leaving the
+ * version.
+ */
+function heldWhileReadingHistory(
+  slug: DocumentSlug | undefined,
+  isReadingHistory: boolean
+): DocumentSlug | undefined {
+  return slug && isReadingHistory ? { ...slug, locked: true } : slug;
 }
 
 /**

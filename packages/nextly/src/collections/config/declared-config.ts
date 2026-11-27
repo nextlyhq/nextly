@@ -144,10 +144,15 @@ export function ownIdentityFieldNames(
   const onRow = fieldsStoredOnRow(fields);
   const own: Array<"title" | "slug"> = [];
   for (const name of ["title", "slug"] as const) {
+    // A field the author declared that holds the column itself, asked as
+    // `systemFieldsBeside` asks it (`columnsDeclaredBy`): one of the name that
+    // takes no column (a component named `title`) leaves the system field
+    // beside it, and that field, the label and all, stays Nextly's.
     const declared = onRow.some(
       field =>
         (field as { name?: unknown } | null)?.name === name &&
-        !isMarkedSystemField(field)
+        !isMarkedSystemField(field) &&
+        columnsDeclaredBy([field as { name?: unknown }]).has(name)
     );
     if (declared) own.push(name);
   }

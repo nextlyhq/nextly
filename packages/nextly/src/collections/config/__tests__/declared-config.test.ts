@@ -13,6 +13,7 @@ import { copyPlainValues } from "../../../shared/lib/plain-copy";
 import {
   asDeclaredFields,
   ownIdentityFieldNames,
+  systemFieldsBeside,
   toTitleCase,
 } from "../declared-config";
 import { defineCollection } from "../define-collection";
@@ -91,6 +92,20 @@ describe("ownIdentityFieldNames", () => {
     ];
 
     expect(ownIdentityFieldNames(fields)).toEqual(["slug"]);
+  });
+
+  it("names none for a field of the name that takes no column, beside which the system one stays", () => {
+    // A component keeps its values in its own table, so `systemFieldsBeside` still adds the
+    // system `title` beside it; that title is Nextly's, label and all.
+    const fields = [
+      { type: "component", name: "title", component: "hero" },
+      ...systemFieldsBeside([
+        { type: "component", name: "title", component: "hero" },
+      ] as never),
+    ];
+
+    expect(fields.map(field => field.name)).toEqual(["title", "title", "slug"]);
+    expect(ownIdentityFieldNames(fields)).toEqual([]);
   });
 
   it("names none for a Single with no live definition, as a Schema Builder one has", () => {

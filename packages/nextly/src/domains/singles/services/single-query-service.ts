@@ -265,6 +265,23 @@ import {
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
 
 /**
+ * The `title`/`slug` a Single's author declared as fields of their own (`ownIdentityFieldNames`),
+ * with their label/slug seed removed from `defaults`. Such a field is content, not Nextly's
+ * identity: no system field stands in its place, so the seed is not its value. Removed before any
+ * default is resolved, so a function default reading the document built so far never sees the
+ * label as the author's value; the field then takes its own default like any other, and an
+ * optional one starts empty.
+ */
+function withoutOwnIdentitySeeds(
+  defaults: Record<string, unknown>,
+  codeFirstFields: readonly unknown[] | undefined
+): ReadonlySet<string> {
+  const own = new Set<string>(ownIdentityFieldNames(codeFirstFields));
+  for (const name of own) delete defaults[name];
+  return own;
+}
+
+/**
  * A Single's default document, built but not yet written. The read path judges
  * it before deciding whether the read may create the Single, then hands the
  * same draft to the insert so the row written is the one that was judged.
@@ -2615,11 +2632,9 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
-    // The identity fields the author declared as their own (`ownIdentityFieldNames`), which the
-    // label/slug seed above must not fill.
-    const ownIdentity: ReadonlySet<string> = new Set(
-      ownIdentityFieldNames(codeFirstFields)
-    );
+    // The author's own `title`/`slug`, whose label/slug seed is dropped before any default is
+    // resolved (`withoutOwnIdentitySeeds`).
+    const ownIdentity = withoutOwnIdentitySeeds(defaults, codeFirstFields);
     // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
     // name is a column of this row, with a default like one beside the group, and a required one
     // is NOT NULL, so leaving it out of this insert failed the first read.
@@ -2710,15 +2725,6 @@ export class SingleQueryService extends BaseService {
         return;
       }
 
-      // A `title`/`slug` the author declared as a field of their own is content, not Nextly's
-      // identity: no system field stands in its place, so the label/slug seed is not its value.
-      // It takes its own default like any other field (the last branch), and the seed is
-      // dropped, so a field the author left optional starts empty rather than as the label.
-      if (ownIdentity.has(field.name)) {
-        delete defaults[field.name];
-        delete logicalDefaults[field.name];
-      }
-
       // `title`/`slug` are reserved system identity keys, pre-seeded above with
       // the Single's label/slug string. That seed is valid ONLY for a text
       // identity column — or a same-named field that emits no column of its own
@@ -2726,7 +2732,9 @@ export class SingleQueryService extends BaseService {
       // which still needs the label). When a Single redefines `title`/`slug` as a
       // NON-text column, the string seed is invalid regardless of whether the
       // field is required: use its type default when required, otherwise drop the
-      // seed so it is never inserted/seeded into (e.g.) a numeric column.
+      // seed so it is never inserted/seeded into (e.g.) a numeric column. An
+      // author's own `title`/`slug` had its seed dropped above, and takes the
+      // last branch like any other field.
       if (
         SINGLE_IDENTITY_FIELDS.has(field.name) &&
         !ownIdentity.has(field.name)
