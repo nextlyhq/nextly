@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CORE_IMPORTERS,
   checkInstalled,
   checkLockfile,
   describeFinding,
@@ -69,6 +70,10 @@ importers:
       wrapper:
         specifier: ^1.0.0
         version: 1.0.0(peer@2.0.0)
+    optionalDependencies:
+      native:
+        specifier: ^1.0.0
+        version: 1.0.0
     devDependencies:
       vitest:
         specifier: ^5.0.0
@@ -80,7 +85,7 @@ importers:
         specifier: ^3.0.0
         version: 3.0.0
     devDependencies:
-      langchain:
+      bundler:
         specifier: ^1.0.0
         version: 1.0.0
 
@@ -107,7 +112,15 @@ snapshots:
     dependencies:
       renamed: real-name@4.0.0
 
+  bundler@1.0.0: {}
+
   langchain@1.0.0: {}
+
+  native@1.0.0:
+    dependencies:
+      archiver: 7zip-bin@5.2.0
+
+  7zip-bin@5.2.0: {}
 
   peer@2.0.0: {}
 
@@ -183,23 +196,66 @@ describe("the lockfile's resolved tree", () => {
     const tree = walkCoreTree(readLockfile(FIXTURE), nextly);
     expect(tree.libraries).toEqual([]);
     expect(tree.unresolved).toEqual([]);
-    // nextly, the adapter, wrapper, vitest, helper, peer, tiny, real-name.
-    expect(tree.reached).toBe(8);
+    // nextly, the adapter, wrapper, native, vitest, helper, bundler, peer,
+    // 7zip-bin (through an alias whose name starts with a digit), tiny and
+    // real-name.
+    expect(tree.reached).toBe(11);
   });
 
-  it("counts a core package's own development dependencies, not those of what it links", () => {
-    // `langchain` is the adapter's development dependency: it ships with nothing.
-    expect(walkCoreTree(readLockfile(FIXTURE), nextly).libraries).toEqual([]);
-    // Into nextly's own development dependencies, the first such group.
+  it("counts the development dependencies of every workspace package it reaches, since a build may bundle them", () => {
+    // Into the linked adapter's development dependencies, which its build
+    // could inline into what ships.
     const devPlanted = FIXTURE.replace(
-      "    devDependencies:\n      vitest:",
-      "    devDependencies:\n      langchain:\n        specifier: ^1.0.0\n        version: 1.0.0\n      vitest:"
+      "    devDependencies:\n      bundler:",
+      "    devDependencies:\n      langchain:\n        specifier: ^1.0.0\n        version: 1.0.0\n      bundler:"
     );
     expect(
       walkCoreTree(readLockfile(devPlanted), nextly).libraries.map(
         describeFinding
       )
-    ).toEqual(["langchain: packages/nextly > langchain@1.0.0"]);
+    ).toEqual([
+      "langchain: packages/nextly > packages/adapter > langchain@1.0.0",
+    ]);
+  });
+
+  it("counts an importer's optional dependencies", () => {
+    const planted = FIXTURE.replace(
+      "  native@1.0.0:\n    dependencies:",
+      "  native@1.0.0:\n    dependencies:\n      '@openai/agents': 0.1.0"
+    ).replace(
+      "  bundler@1.0.0: {}",
+      "  bundler@1.0.0: {}\n\n  '@openai/agents@0.1.0': {}"
+    );
+    expect(
+      walkCoreTree(readLockfile(planted), nextly).libraries.map(describeFinding)
+    ).toEqual([
+      "@openai/agents: packages/nextly > native@1.0.0 > @openai/agents@0.1.0",
+    ]);
+  });
+
+  it("finds a library hidden behind an alias", () => {
+    const planted = FIXTURE.replace(
+      "      renamed: real-name@4.0.0",
+      "      renamed: real-name@4.0.0\n      llm: openai@4.0.0"
+    ).replace(
+      "  bundler@1.0.0: {}",
+      "  bundler@1.0.0: {}\n\n  openai@4.0.0: {}"
+    );
+    expect(
+      walkCoreTree(readLockfile(planted), nextly).libraries.map(describeFinding)
+    ).toEqual([
+      "openai: packages/nextly > packages/adapter > helper@3.0.0 > openai@4.0.0",
+    ]);
+  });
+
+  it("finds a library a workspace package requires as a peer", () => {
+    const peersOf = importer =>
+      importer === "packages/adapter" ? ["react", "ai"] : [];
+    expect(
+      walkCoreTree(readLockfile(FIXTURE), nextly, { peersOf }).libraries.map(
+        describeFinding
+      )
+    ).toEqual(["ai: packages/nextly > packages/adapter > ai (peer)"]);
   });
 
   it("names a library planted deep in the tree, with the path through a link and an alias", () => {
@@ -249,6 +305,27 @@ describe("this repository's lockfile", () => {
     expect(
       walkCoreTree(lock, ["packages/plugin-mcp"]).libraries.length
     ).toBeGreaterThan(0);
+  });
+
+  it("walks all three of core's packages", () => {
+    expect(CORE_IMPORTERS).toEqual([
+      "packages/nextly",
+      "packages/admin",
+      "packages/plugin-sdk",
+    ]);
+    for (const core of ["packages/admin", "packages/plugin-sdk"]) {
+      const planted = plant(
+        realLockfile,
+        `  ${core}:\n    dependencies:`,
+        "      '@ai-sdk/openai':\n        specifier: ^1.0.0\n        version: 1.0.0"
+      ).replace(
+        "\nsnapshots:\n",
+        "\nsnapshots:\n\n  '@ai-sdk/openai@1.0.0': {}\n"
+      );
+      expect(
+        walkCoreTree(readLockfile(planted)).libraries.map(describeFinding)
+      ).toContain(`@ai-sdk/openai: ${core} > @ai-sdk/openai@1.0.0`);
+    }
   });
 
   it("names a library planted as a direct dependency of nextly", () => {
@@ -327,6 +404,17 @@ describe("installed modules", () => {
         .map(f => f.library)
         .sort()
     ).toEqual(["@ai-sdk/openai", "@modelcontextprotocol/sdk", "ai", "openai"]);
+  });
+
+  it("finds a library installed under another name, by its manifest", () => {
+    const modules = project(["llm"]);
+    writeFileSync(
+      join(modules, "llm", "package.json"),
+      JSON.stringify({ name: "openai" })
+    );
+    expect(findInstalledAILibraries(modules).map(f => f.library)).toEqual([
+      "openai",
+    ]);
   });
 
   it("finds none in a project without them", () => {

@@ -31,7 +31,7 @@
  * @module scripts/check-core-ai-libraries
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Core's packages, by their workspace directory in the lockfile. */
@@ -64,6 +64,14 @@ export const AI_LIBRARIES = [
   "@llamaindex/",
   "@aws-sdk/client-bedrock-runtime",
   "@azure/openai",
+  "@openai/",
+  "@huggingface/inference",
+  "@mastra/",
+  "@google-cloud/vertexai",
+  // MCP servers and adapters outside the protocol's own scope.
+  "mcp-handler",
+  "@vercel/mcp-adapter",
+  "fastmcp",
 ];
 
 /** Whether a package name is one of {@link AI_LIBRARIES}. */
@@ -200,7 +208,9 @@ function resolve(fromImporter, name, version) {
     );
     return { importer: target };
   }
-  if (/^(@[^@/]+\/)?[^@/]+@/.test(version) && !/^\d/.test(version)) {
+  // An alias names the real package before its version (`real@1.0.0`); a
+  // plain version holds an `@` only inside its peer suffix (`1.0.0(p@2)`).
+  if (/^(@[^@/]+\/)?[^@/(]+@/.test(version.split("(")[0])) {
     return { snapshot: version };
   }
   return { snapshot: `${name}@${version}` };
@@ -208,15 +218,18 @@ function resolve(fromImporter, name, version) {
 
 /**
  * Every AI or MCP library in the resolved tree of `roots` (importer paths),
- * each with the path from its root that brought it in, shortest first. The
- * roots' development dependencies count; anything further down counts by
- * what it ships.
+ * each with the path from its root that brought it in, shortest first.
+ * Every workspace package's development dependencies count, not only the
+ * roots': a build bundles what it imports, and a development dependency
+ * inlined into `dist` ships with the package. A workspace package's
+ * required peers, which the lockfile does not record for it, are read from
+ * its manifest through `peersOf` where one is given.
  *
  * `unresolved` lists what the tree points at that the lockfile does not
  * hold. A subtree that cannot be read is one the check cannot vouch for, so
  * the check fails on it rather than passing over it.
  */
-export function walkCoreTree(lock, roots = CORE_IMPORTERS) {
+export function walkCoreTree(lock, roots = CORE_IMPORTERS, { peersOf } = {}) {
   const found = [];
   const unresolved = [];
   const seen = new Set();
@@ -238,6 +251,7 @@ export function walkCoreTree(lock, roots = CORE_IMPORTERS) {
       });
       continue;
     }
+    found.push(...peerLibraries(node, peersOf));
     for (const [name, version] of dependencies) {
       const step = stepTo(node, name, version);
       if (step.library) found.push({ library: step.library, path: step.path });
@@ -247,14 +261,21 @@ export function walkCoreTree(lock, roots = CORE_IMPORTERS) {
   return { libraries: found, unresolved, reached: seen.size };
 }
 
+/**
+ * The AI libraries a workspace package requires as peers, which the
+ * lockfile does not record for it, read through `peersOf`.
+ */
+function peerLibraries(node, peersOf) {
+  if (node.importer === undefined || peersOf === undefined) return [];
+  return peersOf(node.importer)
+    .filter(isAILibrary)
+    .map(peer => ({ library: peer, path: [...node.path, `${peer} (peer)`] }));
+}
+
 const nodeId = node =>
   node.importer !== undefined ? `i:${node.importer}` : `s:${node.snapshot}`;
 
-/**
- * What a node depends on, or undefined when the lockfile does not hold it.
- * A workspace package past a root ships its dependencies, not the tools it
- * is developed with.
- */
+/** What a node depends on, or undefined when the lockfile does not hold it. */
 function dependenciesOf(lock, node) {
   if (node.importer === undefined) {
     const snapshot = lock.snapshots.get(node.snapshot);
@@ -262,9 +283,7 @@ function dependenciesOf(lock, node) {
   }
   const importer = lock.importers.get(node.importer);
   if (importer === undefined) return undefined;
-  return [...importer.groups]
-    .filter(([group]) => node.isRoot || group !== "devDependencies")
-    .flatMap(([, group]) => [...group]);
+  return [...importer.groups].flatMap(([, group]) => [...group]);
 }
 
 /**
@@ -290,13 +309,31 @@ function stepTo(node, name, version) {
 export function findInstalledAILibraries(nodeModules) {
   const found = [];
   const visit = dir => {
-    for (const [name, path] of installedIn(dir)) {
-      if (isAILibrary(name)) found.push({ library: name, path: [path] });
-      else visit(join(path, "node_modules"));
+    for (const [folder, path] of installedIn(dir)) {
+      // An alias installs a package under another folder name
+      // (`"llm": "npm:openai@4"`), so the manifest's name decides.
+      const name = installedName(path) ?? folder;
+      if (isAILibrary(name) || isAILibrary(folder)) {
+        found.push({ library: name, path: [path] });
+      } else {
+        visit(join(path, "node_modules"));
+      }
     }
   };
   visit(nodeModules);
   return found;
+}
+
+/** The `name` an installed package's manifest gives, when it can be read. */
+function installedName(path) {
+  try {
+    const { name } = JSON.parse(
+      readFileSync(join(path, "package.json"), "utf8")
+    );
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The directories under `dir`, skipping files and `.bin`. */
@@ -336,6 +373,22 @@ export function describeFinding({ library, path }) {
   return `${library}: ${path.join(" > ")}`;
 }
 
+/**
+ * A workspace package's peer dependencies, by name, from its manifest: the
+ * lockfile does not record a workspace package's peers, and an installer
+ * that adds required peers would ship one.
+ */
+function peersInManifest(dir) {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(dir, "package.json"), "utf8")
+    );
+    return Object.keys(manifest.peerDependencies ?? {});
+  } catch {
+    return [];
+  }
+}
+
 /** The value after `flag` in `argv`, `missing` when the flag is absent. */
 function option(argv, flag, missing) {
   const at = argv.indexOf(flag);
@@ -361,7 +414,11 @@ export function checkLockfile(lockfile) {
     );
     return 1;
   }
-  const tree = walkCoreTree(readLockfile(readFileSync(lockfile, "utf8")));
+  const tree = walkCoreTree(
+    readLockfile(readFileSync(lockfile, "utf8")),
+    CORE_IMPORTERS,
+    { peersOf: importer => peersInManifest(join(dirname(lockfile), importer)) }
+  );
   if (tree.unresolved.length > 0) {
     console.error(
       "core AI libraries: the lockfile does not hold what these point at, so their trees were not read:"

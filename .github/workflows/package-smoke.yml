@@ -123,7 +123,10 @@ jobs:
       # A project made without the opt-in packages that may hold AI or MCP
       # libraries (@nextlyhq/ai, @nextlyhq/mcp, @nextlyhq/plugin-mcp) installs
       # none of those libraries: nothing else brings one in.
+      # Skipped where the checked-out branch lacks the checker: the nightly
+      # smokes `main`, which receives it only at its next promotion.
       - name: No AI or MCP library without the opt-in packages
+        if: ${{ hashFiles('scripts/check-core-ai-libraries.mjs') != '' }}
         run: |
           mkdir -p /tmp/without-opt-in
           cd /tmp/without-opt-in
