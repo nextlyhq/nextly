@@ -45,8 +45,11 @@ export const SCANNED = [
   "templates",
 ];
 
-/** Files a person or an agent reads: source, tests and docs. */
-const READ_FILE = /\.(?:[cm]?[jt]sx?|mdx?|json)$/;
+/**
+ * Files a person or an agent reads: source, tests, docs, styles and SQL, and
+ * the `.template` files the installer turns into a project's guides.
+ */
+const READ_FILE = /\.(?:[cm]?[jt]sx?|mdx?|json|css|sql|template)$/;
 const SKIPPED_DIR = new Set(["node_modules", "dist", ".turbo", ".next"]);
 
 /**

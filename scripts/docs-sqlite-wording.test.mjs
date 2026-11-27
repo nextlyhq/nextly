@@ -47,10 +47,11 @@ const OLD_WORDINGS = [
 /**
  * Words that pass a verdict on what a database is fit for. Plain
  * "production" is not one: "In production, SQLite runs migrations in one
- * transaction" states a fact; "not for production" judges.
+ * transaction" states a fact, while "not for production" and "production-ready"
+ * judge.
  */
 const VERDICT =
-  /\b(?:demos?|local (?:work|development|only)|serious|recommended|not suitable|single server|vercel|(?:not|never) (?:for|in) production|prototyp\w*|experiments?)\b/gi;
+  /\b(?:demos?|local (?:work|development|only)|serious|recommended|not suitable|single server|vercel|(?:not|never) (?:for|in) production|production[- ]ready|(?:suitable|fit|ready|good|great) for production|prototyp\w*|experiments?)\b/gi;
 
 /** A database's name, as pages spell it in prose, code and addresses. */
 const DATABASE = /(?<![a-z])(sqlite|postgres(?:ql)?|mysql|mariadb)(?![a-z])/gi;
@@ -80,15 +81,24 @@ function readerPages() {
       out.push(`templates/base/${guide}`);
     }
   }
-  for (const base of ["packages", "templates"]) {
-    for (const entry of readdirSync(resolve(repoRoot, base), {
-      withFileTypes: true,
-    })) {
-      const readme = resolve(repoRoot, base, entry.name, "README.md");
-      if (entry.isDirectory() && existsSync(readme)) out.push(repoPath(readme));
-    }
+  for (const entry of readdirSync(resolve(repoRoot, "packages"), {
+    withFileTypes: true,
+  })) {
+    const readme = resolve(repoRoot, "packages", entry.name, "README.md");
+    if (entry.isDirectory() && existsSync(readme)) out.push(repoPath(readme));
   }
-  return out.sort();
+  // Every README a template carries, at any depth: all of it is copied into
+  // the projects made from it.
+  const templateReadmes = abs => {
+    for (const entry of readdirSync(abs, { withFileTypes: true })) {
+      const path = join(abs, entry.name);
+      if (entry.isDirectory() && entry.name !== "node_modules") {
+        templateReadmes(path);
+      } else if (entry.name === "README.md") out.push(repoPath(path));
+    }
+  };
+  templateReadmes(resolve(repoRoot, "templates"));
+  return [...new Set(out)].sort();
 }
 
 const read = file => readFileSync(resolve(repoRoot, file), "utf-8");
@@ -140,29 +150,18 @@ function judgesSqlite(text) {
 }
 
 /**
- * What a sentence says about SQLite, judged in the parts it is made of. A
- * table row whose first cell names SQLite is about SQLite as a whole, so a
- * verdict in any later cell counts; any other row is read cell by cell, so
- * a "recommended" column beside "One of `postgresql`, `mysql`, `sqlite`" is
- * not a verdict on SQLite.
- */
-function partsOf(sentence) {
-  if (!sentence.trimStart().startsWith("|")) return [sentence];
-  const cells = sentence.split("|").filter(cell => cell.trim() !== "");
-  return /sqlite/i.test(cells[0] ?? "") ? [sentence] : cells;
-}
-
-/**
- * The sentences of a page that describe SQLite in other words: read with the
- * agreed wording taken out, they still pass a verdict on SQLite. So a verdict
- * added beside the agreed wording ("…choose PostgreSQL, and SQLite is
- * recommended for production") counts. A sentence ends at a full stop, a
+ * The sentences of a page that describe SQLite in other words: read whole,
+ * with the agreed wording taken out, they still pass a verdict on SQLite. So
+ * a verdict added beside the agreed wording ("…choose PostgreSQL, and SQLite
+ * is recommended for production") counts, and so does one in a table cell
+ * after SQLite's, while a "recommended" column beside "One of `postgresql`,
+ * `mysql`, `sqlite`" lands on PostgreSQL. A sentence ends at a full stop, a
  * question or exclamation mark, or a line break.
  */
 export function otherDescriptionsIn(text) {
   return text
     .split(/(?<=[.!?])\s+|\n/)
-    .filter(sentence => partsOf(withoutSentence(sentence)).some(judgesSqlite))
+    .filter(sentence => judgesSqlite(withoutSentence(sentence)))
     .map(sentence => sentence.trim());
 }
 
@@ -179,7 +178,14 @@ describe("docs: how SQLite is described", () => {
     // outside the list above, and a new page could bring it back anywhere.
     expect(pages.length).toBeGreaterThan(100);
     expect(pages).toEqual(
-      expect.arrayContaining(["README.md", "packages/adapter-sqlite/README.md"])
+      expect.arrayContaining([
+        "README.md",
+        "packages/adapter-sqlite/README.md",
+        "templates/base/AGENTS.md.template",
+        // READMEs below a template's top folder ship with it too.
+        "templates/blank/src/app/(frontend)/components/README.md",
+        "templates/blog/src/endpoints/seed/media/README.md",
+      ])
     );
     expect(pages.flatMap(file => oldWordingsIn(file, read(file)))).toEqual([]);
   });
@@ -260,6 +266,10 @@ describe("docs: how SQLite is described", () => {
     "| SQLite | Local only |",
     `SQLite is ${SENTENCE} (but not in production).`,
     "Pick SQLite only when you are prototyping.",
+    "- SQLite — recommended for production",
+    "| @foo | SQLite | Not for production |",
+    "SQLite is production-ready.",
+    "SQLite is suitable for production.",
   ])("would catch the verdict in %s", line => {
     expect(otherDescriptionsIn(line)).toHaveLength(1);
   });
