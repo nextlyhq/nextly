@@ -26,6 +26,7 @@ import { actionRouteRefusal } from "../../../plugins/routes/action-route-check";
 import {
   installTargetUnclear,
   pluginConfigNotEditable,
+  pluginDeclarationFormatNewer,
   pluginDeclarationInvalid,
   pluginNotFound,
   pluginOptionInvalid,
@@ -147,6 +148,8 @@ export const PLUGIN_CASES = {
   PLUGIN_INSTALL_TARGET_UNCLEAR: () => installTargetUnclear(undefined),
   // As `nextly plugins add` raises each, with the values it passes.
   PLUGIN_PACKAGE_NOT_INSTALLED: () => pluginPackageNotInstalled(PLUGIN),
+  PLUGIN_DECLARATION_FORMAT_NEWER: () =>
+    pluginDeclarationFormatNewer(PLUGIN, 2, "^1.0.0"),
   PLUGIN_DECLARATION_INVALID: () =>
     pluginDeclarationInvalid(
       PLUGIN,

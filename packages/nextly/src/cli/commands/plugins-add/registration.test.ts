@@ -112,6 +112,69 @@ describe("a package's nextly.plugin declaration", () => {
       kind: "invalid",
     });
   });
+
+  it("is read from a full declaration's registration part", () => {
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: {
+          format: 1,
+          core: "^0.0.2-alpha.81",
+          databases: ["sqlite"],
+          plugin: { export: "seoPlugin" },
+          collections: ["redirects"],
+        },
+      })
+    ).toEqual({
+      kind: "declared",
+      registration: {
+        exportName: "seoPlugin",
+        localName: "seoPlugin",
+        call: false,
+        options: {},
+      },
+    });
+  });
+
+  it("is absent from a full declaration that leaves its registration out", () => {
+    // Registered then by the one plugin its entry exports, as a package that
+    // declares nothing is.
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: { format: 1, core: "^1.0.0", databases: ["sqlite"] },
+      })
+    ).toEqual({ kind: "none" });
+  });
+
+  it("is invalid when a full declaration does not parse, naming the field", () => {
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: { format: 1, core: "^1.0.0", databases: [] },
+      })
+    ).toEqual({
+      kind: "invalid",
+      problem: expect.stringContaining("nextly.databases:"),
+    });
+  });
+
+  it("refuses a declaration in a newer format, naming the format and the Nextly it works with", async () => {
+    let refused: unknown;
+    try {
+      readDeclaration({
+        name: PKG,
+        nextly: { format: 2, core: "^3.0.0", plugin: { export: "seoPlugin" } },
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(CliError);
+    const error = refused as CliError;
+    expect(error.code).toBe("PLUGIN_DECLARATION_FORMAT_NEWER");
+    expect(error.what).toContain("format 2");
+    expect(error.why).toContain('works with Nextly "^3.0.0"');
+  });
 });
 
 describe("a package that declares nothing", () => {

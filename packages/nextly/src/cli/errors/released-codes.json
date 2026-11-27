@@ -151,6 +151,7 @@
   "PLUGIN_COLUMN_NOT_MIGRATED": "A column a plugin contributes to a table is not in the database, because the migration that adds it has not been applied.",
   "PLUGIN_COMMAND_FROM_OLDER_RELEASE": "A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing.",
   "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
+  "PLUGIN_DECLARATION_FORMAT_NEWER": "A package declares itself in the `nextly` key of its package.json in a format newer than this Nextly reads.",
   "PLUGIN_DECLARATION_INVALID": "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.",
   "PLUGIN_DEPENDENCY_NOT_INSTALLED": "A plugin to install depends on a plugin that is not installed on this database.",
   "PLUGIN_DISABLED": "The plugin to install or uninstall is disabled in the configuration, so its hooks would not run.",

@@ -11,6 +11,7 @@
  */
 
 import type { NextlyError } from "../../../errors/nextly-error";
+import { newerFormatMessage } from "../../../plugins/declaration/newer-format";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import {
@@ -344,6 +345,10 @@ export const PLUGIN_CODES = defineCodes({
   PLUGIN_DECLARATION_INVALID: {
     cause:
       "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.",
+  },
+  PLUGIN_DECLARATION_FORMAT_NEWER: {
+    cause:
+      "A package declares itself in the `nextly` key of its package.json in a format newer than this Nextly reads.",
   },
   PLUGIN_REGISTRATION_UNKNOWN: {
     cause:
@@ -986,6 +991,26 @@ export function pluginDeclarationInvalid(
     what: `The \`nextly.plugin\` declaration of "${pkg}" cannot be used.`,
     why: `${closed(problem)} The package's package.json declares how it is registered, and that is the plugin's to fix.`,
     next: `Register it by hand as the package's README shows, then run \`nextly plugins install\` with the plugin's name; and tell the plugin's author.`,
+  });
+}
+
+/**
+ * A package declares itself in a format newer than this Nextly reads: refused
+ * before anything in it is used, rather than read as if it meant what this
+ * Nextly's format means.
+ */
+export function pluginDeclarationFormatNewer(
+  pkg: string,
+  format: number,
+  core?: string
+): CliError {
+  return new CliError("PLUGIN_DECLARATION_FORMAT_NEWER", {
+    what: `"${pkg}" declares itself in format ${format}, which this Nextly cannot read.`,
+    why: `${newerFormatMessage(format, core)} The package may already be installed; your configuration was not changed.`,
+    next:
+      core === undefined
+        ? "Upgrade Nextly with `nextly upgrade`, or add a version of the plugin this Nextly reads."
+        : `Upgrade Nextly to a release in "${core}" with \`nextly upgrade\`, or add a version of the plugin this Nextly reads.`,
   });
 }
 

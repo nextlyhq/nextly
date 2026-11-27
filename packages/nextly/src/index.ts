@@ -755,6 +755,26 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+// A plugin package's declaration in its package.json: the format, reading
+// it, and the check a plugin's own tests run against its definition.
+// @experimental while the format settles.
+export {
+  PLUGIN_DATABASE_KINDS,
+  PLUGIN_PACKAGE_DECLARATION_FORMAT,
+  checkPluginPackageDeclaration,
+  comparePluginPackageDeclaration,
+  pluginPackageDeclarationJsonSchema,
+  readPluginPackageDeclaration,
+  type CheckPluginPackageDeclarationOptions,
+  type PluginContentTarget,
+  type PluginDatabaseKind,
+  type PluginDeclarationDifference,
+  type PluginDeclarationDifferenceKind,
+  type PluginPackageDeclaration,
+  type PluginPackageDeclarationReading,
+  type PluginPackageInstallOption,
+  type PluginPackageRegistration,
+} from "./plugins";
 export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
 // What a plugin is told of its queued emails' changes, and reads of them.
 export type {

@@ -173,6 +173,7 @@
     "plugin-install-target-unclear",
     "plugin-package-not-installed",
     "plugin-declaration-invalid",
+    "plugin-declaration-format-newer",
     "plugin-registration-unknown",
     "plugin-option-missing",
     "plugin-option-invalid",
