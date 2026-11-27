@@ -39,6 +39,7 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
+import { ownIdentityFieldNames } from "../../../collections/config/declared-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import {
@@ -2614,6 +2615,11 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // The identity fields the author declared as their own (`ownIdentityFieldNames`), which the
+    // label/slug seed above must not fill.
+    const ownIdentity: ReadonlySet<string> = new Set(
+      ownIdentityFieldNames(codeFirstFields)
+    );
     // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
     // name is a column of this row, with a default like one beside the group, and a required one
     // is NOT NULL, so leaving it out of this insert failed the first read.
@@ -2704,6 +2710,15 @@ export class SingleQueryService extends BaseService {
         return;
       }
 
+      // A `title`/`slug` the author declared as a field of their own is content, not Nextly's
+      // identity: no system field stands in its place, so the label/slug seed is not its value.
+      // It takes its own default like any other field (the last branch), and the seed is
+      // dropped, so a field the author left optional starts empty rather than as the label.
+      if (ownIdentity.has(field.name)) {
+        delete defaults[field.name];
+        delete logicalDefaults[field.name];
+      }
+
       // `title`/`slug` are reserved system identity keys, pre-seeded above with
       // the Single's label/slug string. That seed is valid ONLY for a text
       // identity column — or a same-named field that emits no column of its own
@@ -2712,7 +2727,10 @@ export class SingleQueryService extends BaseService {
       // NON-text column, the string seed is invalid regardless of whether the
       // field is required: use its type default when required, otherwise drop the
       // seed so it is never inserted/seeded into (e.g.) a numeric column.
-      if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+      if (
+        SINGLE_IDENTITY_FIELDS.has(field.name) &&
+        !ownIdentity.has(field.name)
+      ) {
         // A Single's table is built by the same service that builds collections. The question
         // asked here — does this kind store text — is answered the same way whatever built the
         // table, so the builtBy cannot change the outcome; it is stated rather than defaulted so

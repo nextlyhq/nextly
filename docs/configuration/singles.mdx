@@ -205,6 +205,19 @@ Configure how the single appears in the admin panel via the `admin` property.
 
 > **Singles do not support `useAsTitle`, `pagination`, `preview`, or admin-component overrides** — those concepts are collection-specific.
 
+### A Single's title and slug
+
+Every Single has a `title` and a `slug` column. When its `fields` declare
+neither, Nextly adds them: the title is the Single's label and the slug its
+`slug`, the editor shows the title read-only, and every save keeps both as the
+config says.
+
+A Single that declares its own top-level `title` (or `slug`) field gets no
+field of Nextly's in its place. That field is content like any other: the
+editor shows what it stores, lets you edit it, applies its own rules (such as
+`required`), and saves what you typed. Its first value is its own
+`defaultValue`, not the label.
+
 ### Where a Single opens
 
 A Single opens where a collection's entry of the same shape would, by the one

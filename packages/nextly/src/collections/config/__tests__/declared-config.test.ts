@@ -9,7 +9,12 @@ import { describe, expect, it } from "vitest";
 import { defineSingle } from "../../../singles/config/define-single";
 import { text } from "../../fields/helpers";
 import { pluginField } from "../../fields/types/plugin-field";
-import { asDeclaredFields, toTitleCase } from "../declared-config";
+import { copyPlainValues } from "../../../shared/lib/plain-copy";
+import {
+  asDeclaredFields,
+  ownIdentityFieldNames,
+  toTitleCase,
+} from "../declared-config";
 import { defineCollection } from "../define-collection";
 
 describe("toTitleCase", () => {
@@ -45,5 +50,50 @@ describe("asDeclaredFields", () => {
       ["title", "text"],
       ["score", "star-rating"],
     ]);
+  });
+});
+
+describe("ownIdentityFieldNames", () => {
+  it("names a title or slug the Single's author declared, and not the ones defineSingle added", () => {
+    const own = defineSingle({
+      slug: "blog_page",
+      fields: [text({ name: "title" }), text({ name: "intro" })],
+    });
+    const system = defineSingle({
+      slug: "contact_page",
+      fields: [text({ name: "intro" })],
+    });
+
+    expect(ownIdentityFieldNames(own.fields)).toEqual(["title"]);
+    expect(ownIdentityFieldNames(system.fields)).toEqual([]);
+  });
+
+  it("keeps telling the added fields apart through the copies the boot and a setup make", () => {
+    // The boot hands plugins copies of the configuration and goes on with what their setups
+    // return, so the live definition holds copies of the fields defineSingle made. A mark the
+    // copy dropped would read Nextly's own title as the author's.
+    const system = defineSingle({
+      slug: "contact_page",
+      fields: [text({ name: "intro" })],
+    });
+    const copied = copyPlainValues(system.fields, { freeze: true });
+    const spread = system.fields.map(field => ({ ...field }));
+
+    expect(copied[0]).not.toBe(system.fields[0]);
+    expect(ownIdentityFieldNames(copied)).toEqual([]);
+    expect(ownIdentityFieldNames(spread)).toEqual([]);
+  });
+
+  it("reads a field inside a group with no name as one of the row's", () => {
+    const fields = [
+      { type: "row", fields: [text({ name: "slug" })] },
+      text({ name: "intro" }),
+    ];
+
+    expect(ownIdentityFieldNames(fields)).toEqual(["slug"]);
+  });
+
+  it("names none for a Single with no live definition, as a Schema Builder one has", () => {
+    expect(ownIdentityFieldNames(undefined)).toEqual([]);
   });
 });

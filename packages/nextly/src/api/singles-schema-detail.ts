@@ -129,6 +129,9 @@ export const GET = withErrorHandler(
       ...single,
       fields: enrichedFields,
       ...draftSplitResponseFields(draftSplit),
+      // Which of `title` and `slug` are the author's own fields, as the
+      // dispatcher's read names them.
+      ownIdentityFields: registry.getOwnIdentityFields(slug),
       // The workflow that holds this Single's publishing, as the dispatcher's
       // read names it.
       workflow: await shownWorkflowSummary(

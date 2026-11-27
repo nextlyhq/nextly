@@ -6,7 +6,10 @@
  *
  * @module collections/config/declared-config
  */
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import {
+  columnsDeclaredBy,
+  fieldsStoredOnRow,
+} from "../../domains/schema/services/field-column-descriptor";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 /**
@@ -65,23 +68,88 @@ export function systemFieldsBeside(
   const owned = columnsDeclaredBy(fields);
   const systemFields: Array<FieldConfig & { name: string }> = [];
   if (!owned.has("title")) {
-    systemFields.push({
-      type: "text",
-      name: "title",
-      label: "Title",
-      required: true,
-      localized: false,
-    });
+    systemFields.push(
+      markedAsSystem({
+        type: "text",
+        name: "title",
+        label: "Title",
+        required: true,
+        localized: false,
+      })
+    );
   }
   if (!owned.has("slug")) {
-    systemFields.push({
-      type: "text",
-      name: "slug",
-      label: "Slug",
-      required: true,
-      unique: true,
-      localized: false,
-    });
+    systemFields.push(
+      markedAsSystem({
+        type: "text",
+        name: "slug",
+        label: "Slug",
+        required: true,
+        unique: true,
+        localized: false,
+      })
+    );
   }
   return systemFields;
+}
+
+/**
+ * The mark `systemFieldsBeside` leaves on each field it makes. A registered symbol, so a second
+ * copy of this module (the configuration's bundle beside the runtime's) reads the same one;
+ * enumerable, so the copies the boot makes of the configuration for plugins (`copyPlainValues`)
+ * and an object spread keep it. Symbol keys are outside `Object.keys`, JSON and the schema hash,
+ * so no stored definition, comparison of settings or migration sees it.
+ */
+const SYSTEM_FIELD = Symbol.for("nextly.config.systemField");
+
+/** `field`, marked as one `systemFieldsBeside` added rather than one an author declared. */
+function markedAsSystem<T extends object>(field: T): T {
+  Object.defineProperty(field, SYSTEM_FIELD, {
+    value: true,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return field;
+}
+
+/** Whether `field` is one `systemFieldsBeside` added (`markedAsSystem`). */
+function isMarkedSystemField(field: unknown): boolean {
+  return (
+    typeof field === "object" &&
+    field !== null &&
+    (field as Record<symbol, unknown>)[SYSTEM_FIELD] === true
+  );
+}
+
+/**
+ * The identity fields (`title`, `slug`) a Single's author declared as fields of their own, read
+ * from its live definition (`fields`): each top-level field of either name that
+ * `systemFieldsBeside` did not add. Such a field is content: Nextly added none of its own in its
+ * place, so nothing may fill it with the Single's label or slug, and the admin edits and saves it
+ * as any other field. The others are Nextly's, fixed by the Single's config.
+ *
+ * Asked of the live definition because only it carries the mark: a stored definition is the same
+ * JSON either way. A Schema Builder Single has no live definition, and its identity is always
+ * Nextly's, so undefined `fields` names none. Should something rebuild a system field without the
+ * mark (a copy of its string keys alone), it is read as the author's: its value is then kept as
+ * stored rather than replaced, the direction that loses nothing.
+ */
+export function ownIdentityFieldNames(
+  fields: readonly unknown[] | undefined
+): Array<"title" | "slug"> {
+  if (fields === undefined) return [];
+  // At the row's level: a field inside a group with no name is a column of the row, as the
+  // system field would have been.
+  const onRow = fieldsStoredOnRow(fields);
+  const own: Array<"title" | "slug"> = [];
+  for (const name of ["title", "slug"] as const) {
+    const declared = onRow.some(
+      field =>
+        (field as { name?: unknown } | null)?.name === name &&
+        !isMarkedSystemField(field)
+    );
+    if (declared) own.push(name);
+  }
+  return own;
 }
