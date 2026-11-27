@@ -177,6 +177,10 @@ describe("seoPlugin", () => {
       ["GET", "/connections/search-console/callback", undefined, undefined],
       ["POST", "/connections/search-console/disconnect", undefined, undefined],
       ["GET", "/connections/search-console/report", undefined, undefined],
+      // The IndexNow key file at the root, through withNextly's rewrite, and
+      // the Connections tab's check of it.
+      ["GET", "/indexnow-key/:key", "root", true],
+      ["POST", "/connections/indexnow/key-check", undefined, undefined],
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
@@ -297,6 +301,8 @@ describe("seoPlugin", () => {
       "/connections/search-console/callback",
       "/connections/search-console/disconnect",
       "/connections/search-console/report",
+      "/indexnow-key/:key",
+      "/connections/indexnow/key-check",
       "/robots.txt",
       "/llms.txt",
       "/llms-full.txt",
@@ -347,6 +353,8 @@ describe("seoPlugin", () => {
       "/connections/search-console/callback",
       "/connections/search-console/disconnect",
       "/connections/search-console/report",
+      "/indexnow-key/:key",
+      "/connections/indexnow/key-check",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
       "/llms-full.txt",

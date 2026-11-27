@@ -65,6 +65,7 @@ import {
 import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
+  indexNowKeyRoutes,
   watchForIndexNow,
 } from "./connections/indexnow";
 import { INDEXNOW_HOST } from "./connections/indexnow-send";
@@ -127,6 +128,7 @@ import {
   redirectsProxyHandler,
   type GoneAnswerOptions,
 } from "./redirects/proxy-handler";
+import { proxySeenNotes } from "./redirects/proxy-seen";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import type { TitleFields } from "./resolver/own-name";
@@ -171,6 +173,7 @@ import {
 import { shareCardRoute } from "./social/card-route";
 import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
+import { keepStartWork, lastStartWork } from "./start-work";
 import { withStructuredData } from "./structured-data/provider";
 import {
   checkedTypeRules,
@@ -892,6 +895,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();
+  // Notes that the Proxy runs, for every handler the plugin gives it.
+  const proxySeen = proxySeenNotes();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
   const codeBuild = () =>
@@ -1120,11 +1125,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answers, so the order changes nothing a visitor gets.
     // A page's plain-text copy and the IndexNow key, once switched on, are
     // answered here too, each at its own address only.
+    // Each notes that the Proxy runs, through one note-taker, so a Proxy
+    // running any of them is seen, whatever it is matched for.
     proxy: [
-      stagingGuard(readRules),
-      redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
-      plainCopyProxyHandler(plainCopies),
-      indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
+      stagingGuard(readRules, proxySeen),
+      redirectsProxyHandler(redirectKeys, undefined, goneAnswer, proxySeen),
+      plainCopyProxyHandler(plainCopies, proxySeen),
+      indexNowKeyProxyHandler({ readRules, ...siteOrigin }, proxySeen),
     ],
     // The optional connections' own state, their credentials sealed: core
     // encrypts each secret path and never returns it to the admin.
@@ -1254,6 +1261,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
     ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
+    // The IndexNow key file at the site's root, which needs no Proxy, and the
+    // Connections tab's check that it answers.
+    ...indexNowKeyRoutes({ readRules, ...siteOrigin }),
     ...siteFileRoutes(
       options,
       {
@@ -1435,17 +1445,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // forget the catch-up's fingerprint, so the first start after the
     // install records them. A full uninstall drops the record instead.
     //
-    // Each first waits for the catch-up under way: the command that runs the
-    // hook boots the app for it, which starts one, and tears that boot down
-    // once the hook returns. Left running, the catch-up would read services
-    // the teardown has taken away, store its fingerprint after the hook
-    // forgot it, or write to a record an uninstall is dropping.
+    // Each first waits for the start's background work, the catch-up under
+    // way among it: the command that runs the hook boots the app for it,
+    // which starts the work, and tears that boot down once the hook returns.
+    // Left running, the work would read services the teardown has taken
+    // away, store the catch-up's fingerprint after the hook forgot it, or
+    // write to a record an uninstall is dropping.
     async onInstall(ctx) {
-      await lastCatchUp();
+      await lastStartWork();
       await forgetCatchUpFingerprint(ctx);
     },
     async onUninstall(ctx, { keepData }) {
-      await lastCatchUp();
+      await lastStartWork();
       if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
@@ -1462,23 +1473,31 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // process answers any save, or a page could take an address the
       // collection says another holds. One read once it has moved.
       await recordReady(ctx);
+      // The start's background work runs one part after another, never side
+      // by side: on a serverless host the pool holds three connections, or
+      // one in the Proxy's function, and parts running together would take
+      // every one of them while the admin's first requests wait for one.
+      //
       // Started, not awaited: it waits for the boot to finish, and brings the
       // record up to date with content saved while the plugin was absent or
-      // addresses a deploy moved.
-      void startCatchUp(ctx);
-      // Started, not awaited, for the same reason: the content fingerprints
-      // an earlier release kept, brought up to date while the field group
-      // rows they were taken from are as they were, so a save that rewrites
-      // them does not move a page's date. One read once that is done.
-      void startFingerprintUpgrade(ctx);
-      // The not-found log an earlier version kept in a collection, moved to
-      // the plugin's table; one count once there is nothing left to move.
+      // addresses a deploy moved. First, as the outputs wait for it.
+      const catchUp = startCatchUp(ctx);
+      // Started, not awaited, for the same reason, once the catch-up has
+      // settled: the content fingerprints an earlier release kept, brought up
+      // to date while the field group rows they were taken from are as they
+      // were, so a save that rewrites them does not move a page's date. One
+      // read once that is done.
+      const upgrade = startFingerprintUpgrade(ctx, catchUp);
+      // Then the not-found log an earlier version kept in a collection, moved
+      // to the plugin's table; one count once there is nothing left to move.
       // Bounded as the catch-up's are: it runs unawaited, and a function
       // frozen with one of its transactions open must not keep that
       // transaction's locks.
-      void ctx.db
-        .withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
-          moveLoggedRows(ctx)
+      const moved = upgrade
+        .then(() =>
+          ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+            moveLoggedRows(ctx)
+          )
         )
         .catch((error: unknown) => {
           ctx.logger.error(
@@ -1508,15 +1527,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         }
       );
       // Decided once, the first time the plugin starts on a site: whether a
-      // site with no production address known is kept out of search.
-      void decideStanding(ctx).catch((error: unknown) => {
-        ctx.logger.error(
-          "The SEO plugin could not record the site's standing",
-          {
-            error,
-          }
-        );
-      });
+      // site with no production address known is kept out of search. Last
+      // of the start's background work, one part at a time.
+      // Kept, so a hook that tears the boot down waits for all of it.
+      keepStartWork(
+        moved
+          .then(() => decideStanding(ctx))
+          .catch((error: unknown) => {
+            ctx.logger.error(
+              "The SEO plugin could not record the site's standing",
+              {
+                error,
+              }
+            );
+          })
+      );
     },
   });
 }

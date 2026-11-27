@@ -1182,7 +1182,7 @@ async function siteProblems(
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
     // Redirects are site-wide SEO's: their count is told no one else.
-    ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
+    ...(reader.seesRedirects ? await unservedRedirects(ctx, checks) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
     // Pages whose copy failed are public pages the sitemap lists, by address.
     ...plainCopyProblems(await copyFailures(ctx)),
@@ -1190,16 +1190,22 @@ async function siteProblems(
 }
 
 /**
- * The site's saved redirects going unserved for want of a running Proxy. A
- * status that cannot be read is reported as nothing, never as a failed list.
+ * The site's saved redirects, and its plain-text copies where they are
+ * switched on, going unserved for want of a running Proxy. A status that
+ * cannot be read is reported as nothing, never as a failed list.
  */
-async function unservedRedirects(ctx: PluginContext): Promise<Problem[]> {
+async function unservedRedirects(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<Problem[]> {
   try {
     const status = await readProxyStatus(ctx);
     if (status.state === "running") return [];
+    const rules = await checks.readers.readRules(ctx, undefined);
     return proxyProblems(
       status,
-      await ctx.services.ownCollections.count(redirectsSlug(ctx))
+      await ctx.services.ownCollections.count(redirectsSlug(ctx)),
+      rules.plainTextCopies === true
     );
   } catch (error) {
     ctx.logger.warn("Whether the Proxy runs could not be read", { error });

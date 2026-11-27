@@ -234,6 +234,10 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
             ? {}
             : { sitemap: `${origin}/sitemap.xml` }),
           ...(robotsRules === undefined ? {} : { ownRules: robotsRules.text }),
+          // Stored with the own rules, so it is ticked or not with them.
+          ...(robotsRules?.contentSignal === true
+            ? { contentSignal: true }
+            : {}),
         });
         // Says the file is the plugin's, so the settings screen can tell a
         // site that serves its own robots.txt instead.

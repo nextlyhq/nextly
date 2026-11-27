@@ -5,7 +5,7 @@ description: Answer a request before its page is served, or add headers to every
 
 # Proxy handlers
 
-> **Alpha (`0.x`) — `@experimental`.** `contributes.proxy` and `createNextlyProxy` are new and may change.
+> **Alpha (`0.x`) — `@experimental`.** `contributes.proxy`, `createNextlyProxy`, `composeProxy` and `nextlyProxyMatcher` are new and may change.
 
 Some work has to happen before a page is served, whatever the page is: sending an old address on to a new one, or marking every response from a staging host as not for search engines. A plugin does that with a proxy handler. The site's Proxy (Next.js's `proxy.ts`) asks every handler about each request it matches, before the page is rendered or taken from its prerendered store.
 
@@ -15,20 +15,57 @@ The site's `proxy.ts`, beside its `app` folder, hands each request to Nextly:
 
 ```ts
 // src/proxy.ts
-import { createNextlyProxy } from "nextly/runtime";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
 
 import nextlyConfig from "../nextly.config";
 
-export const proxy = createNextlyProxy(nextlyConfig);
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig));
 
+// The pattern `nextlyProxyMatcher` (from "nextly/runtime") holds, written out.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
 };
 ```
 
-Keep `config` written out in this file: Next.js reads the matcher without running it. Leave built files and optimized images out, as above, since no handler has anything to say about them.
+Keep `config` written out in this file: Next.js reads the matcher when it builds, without running the file, and refuses a value imported from elsewhere. Use this one pattern, which `nextlyProxyMatcher` holds for a test to check yours against. It reaches every page address, page addresses ending in `.md` and files such as `/<key>.txt`, and leaves out Next.js's built files, optimized images, the admin and static assets (scripts, styles, images, fonts and media), since no handler has anything to say about them. A site that needs its Proxy on more addresses adds its own patterns beside it; Nextly is asked only about the addresses this one matches.
 
 The Proxy never holds a page's request for Nextly's start. While a start is under way, it lets every request through as the page alone, and begins the start if nothing has. Handlers apply from the first request after the start finishes, which keeps a cold server answering pages and files at once, even against a database far from it. On a serverless platform the start is kept running after the request is answered (Next.js's `waitUntil`), so the next request finds it done rather than beginning again. The one exception is a request a handler [claims](#claim-a-request-no-page-serves): that one waits for the start. It also lets a request through untouched when no plugin contributes a handler, when every handler answers nothing, or when Nextly cannot start, so it never takes the site down by itself. A redirect or header that must hold from a server's very first request belongs in `next.config`, not in a handler.
+
+### A site with a Proxy of its own
+
+Hand the site's own Proxy function to `composeProxy` as its second argument:
+
+```ts
+// src/proxy.ts
+import { NextResponse, type NextRequest } from "next/server";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
+
+import nextlyConfig from "../nextly.config";
+
+function siteProxy(request: NextRequest) {
+  // The site's own rules: a consent cookie here.
+  const response = NextResponse.next();
+  if (!request.cookies.has("consent"))
+    response.cookies.set("consent", "pending");
+  return response;
+}
+
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig), siteProxy);
+
+export const config = {
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
+};
+```
+
+Nextly's handlers are asked first. Where one answers (a redirect, a page gone, a plain-text copy, the IndexNow key), that answer is sent and the site's function is not called. Otherwise the site's function is called with the request and Next.js's event, and what it answers is sent with Nextly's headers added where it set none of its own: the staging guard's `X-Robots-Tag`, and the request headers a page's not-found log reads. Its own headers and cookies are kept as it set them. With no answer from the site, Nextly's is sent. Both get the event, so work either keeps running past the answer (`waitUntil`) is kept.
+
+### On a serverless host
+
+On Vercel the Proxy runs in a function of its own, before every request it matches, so it scales with all of the site's traffic. There it starts Nextly with one database connection (`PROXY_DATABASE_POOL`), closed a second after its last use, and keeps the function running after each answer (`waitUntil`) until that connection has closed, as `@vercel/functions`' `attachDatabasePool` would. A suspended function holds no connection, so many Proxy instances don't fill the database's connections. Off Vercel, the Proxy shares the app's process and its pool.
 
 ## Contribute a handler
 
@@ -47,7 +84,10 @@ export default definePlugin({
           const path = new URL(request.url).pathname;
           if (path === "/old-pricing") {
             return {
-              response: Response.redirect(new URL("/pricing", request.url), 301),
+              response: Response.redirect(
+                new URL("/pricing", request.url),
+                301
+              ),
             };
           }
           return { headers: { "x-served-by": "acme" } };
@@ -60,10 +100,10 @@ export default definePlugin({
 
 `handle` gets the request and the plugin's own context, so it can read the plugin's collections through `ctx.services`. It returns an answer with any of three parts, or nothing:
 
-| Part | What it does |
-|---|---|
-| `response` | Answers the request instead of serving the page, as a redirect does. |
-| `headers` | Set on whatever is served: the page, a prerendered one included, or the response that answered. |
+| Part             | What it does                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `response`       | Answers the request instead of serving the page, as a redirect does.                                |
+| `headers`        | Set on whatever is served: the page, a prerendered one included, or the response that answered.     |
 | `requestHeaders` | Added to the request the page renders for, where `headers()` reads them. Never sent to the visitor. |
 
 Every handler runs on every matched request, all at once, and their answers are put together in plugin order: the first `response` answers, and for a header two handlers both set, however each spells its name, the later plugin's value stands. Each needs a `name`, unique within the plugin; startup refuses a handler without one, or without a `handle` function, or whose `claims` is not a function.

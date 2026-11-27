@@ -11,16 +11,29 @@
  * any page.
  *
  * The site proves it owns its addresses with a key served at its root, at
- * `/<key>.txt`, answered by the Proxy while IndexNow is on. The key is made
- * the first time a notice is sent and kept encrypted in the plugin's
- * settings; it is public by design, as the protocol serves it, but never
- * returned through the admin or any API.
+ * `/<key>.txt`, while IndexNow is on: by a route `withNextly`'s rewrite
+ * reaches, so no Proxy is needed, and by the Proxy where the site has one.
+ * The key is made the first time it is checked or a notice is sent, and kept
+ * encrypted in the plugin's settings; it is public by design, as the
+ * protocol serves it, but never returned through the admin or any API.
+ *
+ * Before IndexNow is switched on, the admin checks the key file answers at
+ * the site's production address (`checkIndexNowKey`): Bing refuses every
+ * notice from a site whose key it cannot read. The endpoint's 202 means only
+ * "received, key not checked yet", so a 202 is followed by the same check,
+ * and a key file that does not answer is reported as a refused key.
  *
  * @module connections/indexnow
  */
 import { randomBytes } from "node:crypto";
 
-import type { PluginContext, PluginProxyHandler } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginContext,
+  type PluginProxyHandler,
+  type PluginRoute,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 
 import {
   ADDRESSES_MOVED,
@@ -30,11 +43,20 @@ import {
 import { productionAddressesOf } from "../canonical";
 import { heldLanguages, servedAt } from "../languages/versions";
 import { siteOriginFor } from "../outputs/site-origin";
+import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import { isRecord } from "../plain-values";
 import { idOf } from "../problems/hooks";
+import { fetchAs, type FetchOptions } from "../received/fetch";
+import { originsOf } from "../received/route";
+import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { ReadRules } from "../resolver/provider";
 
-import type { ConnectionAttempt, ConnectionResult } from "./contract";
+import {
+  INDEXNOW_KEY_CHECK_PATH,
+  type ConnectionAttempt,
+  type ConnectionResult,
+  type IndexNowKeyCheck,
+} from "./contract";
 import {
   sendIndexNow,
   type IndexNowNotice,
@@ -54,16 +76,39 @@ const MOST_URLS = 10_000;
 /** A key: 32 characters, as the protocol takes them. */
 const KEY_FILE = /^\/([0-9a-f]{32})\.txt$/;
 
+/** A stored key, as the key file's address names it. */
+const KEY = /^[0-9a-f]{32}$/;
+
+/**
+ * Where `withNextly` rewrites the key file to, behind the API handler: the
+ * `KEY_FILE_ROUTE_PREFIX` of `nextly/next`, with the key as its last part.
+ */
+export const INDEXNOW_KEY_ROUTE_PATH = "/indexnow-key/:key";
+
+/**
+ * How long the key file is served while IndexNow is off, for a check under
+ * way: the check's own read, which the switch waits for, reaches the site
+ * within its ten seconds; the rest is room for a slow start.
+ */
+const KEY_CHECK_WINDOW_MS = 60_000;
+
+/** The user agent the key check reads the site as, which a log can name. */
+const KEY_CHECK_AGENT = "Nextly-SEO-key-check/1.0";
+
 /** What IndexNow reads with. */
 export interface IndexNowSetup {
   readRules: ReadRules;
   /** The site's configured origin, where its settings name no address. */
   origin?: string;
+  /** How the key check reaches the site; the network unless a test says else. */
+  fetch?: Pick<FetchOptions, "resolve" | "transport" | "limits">;
 }
 
 /** What the endpoint's answer means. */
 export function resultOfStatus(status: number): ConnectionResult {
-  if (status === 200 || status === 202) return "sent";
+  if (status === 200) return "sent";
+  // Received, the key not checked yet: the search engines read it later.
+  if (status === 202) return "accepted";
   // 403: the key was not found at the site; 422: it does not match the
   // addresses' host. Either way, the search engines refused the key.
   if (status === 403 || status === 422) return "refused-key";
@@ -72,7 +117,7 @@ export function resultOfStatus(status: number): ConnectionResult {
 }
 
 /** The site's key, made and kept the first time one is needed. */
-async function keyOf(ctx: PluginContext): Promise<string> {
+async function keyOf(ctx: Pick<PluginContext, "settings">): Promise<string> {
   const { indexNowKey } = await readConnections(ctx);
   if (indexNowKey !== undefined && KEY_FILE.test(`/${indexNowKey}.txt`)) {
     return indexNowKey;
@@ -132,44 +177,57 @@ async function urlsByHost(
 }
 
 /**
+ * Send `notice`, and once more with the key the site now serves where it was
+ * refused because another instance's key replaced this one before the
+ * search engines read it: what came of it, and the key used last.
+ */
+async function sendNotice(
+  ctx: PluginContext,
+  fetch: OutboundFetch,
+  notice: IndexNowNotice
+): Promise<{ result: ConnectionResult; key: string }> {
+  const result = await sendOne(fetch, notice);
+  const stored =
+    result === "refused-key" ? await replacedKey(ctx, notice.key) : undefined;
+  if (stored === undefined) return { result, key: notice.key };
+  return {
+    result: await sendOne(fetch, { ...notice, key: stored }),
+    key: stored,
+  };
+}
+
+/**
  * One notice for each host's addresses, at most `MOST_URLS` at a time, sent
- * with `key`: how the last went. A notice refused because another
- * instance's key replaced this one before the search engines checked it is
- * sent once more with the key the site now serves.
+ * with `key`: how the last went, and the hosts whose notice was accepted
+ * with the key not yet read.
  */
 async function tellHosts(
   ctx: PluginContext,
   fetch: OutboundFetch,
   byHost: ReadonlyMap<string, readonly string[]>,
   key: string
-): Promise<ConnectionAttempt> {
+): Promise<{ last: ConnectionAttempt; accepted: Set<string> }> {
   let using = key;
   let last = attemptNow("sent", 0);
+  // The hosts a notice of which was accepted, its key not yet read.
+  const accepted = new Set<string>();
   for (const [host, urls] of byHost) {
     for (let at = 0; at < urls.length; at += MOST_URLS) {
-      const notice: IndexNowNotice = {
-        host,
-        key: using,
-        urlList: urls.slice(at, at + MOST_URLS),
-      };
-      let result = await sendOne(fetch, notice);
-      const stored =
-        result === "refused-key" ? await replacedKey(ctx, using) : undefined;
-      if (stored !== undefined) {
-        using = stored;
-        result = await sendOne(fetch, { ...notice, key: using });
-      }
-      last = attemptNow(result, notice.urlList.length);
+      const urlList = urls.slice(at, at + MOST_URLS);
+      const sent = await sendNotice(ctx, fetch, { host, key: using, urlList });
+      using = sent.key;
+      last = attemptNow(sent.result, urlList.length);
+      if (sent.result === "accepted") accepted.add(host);
       // The key and the addresses stay out of the log.
-      if (result !== "sent") {
+      if (sent.result !== "sent") {
         ctx.logger.warn("IndexNow did not take the site's notice", {
-          result,
+          result: sent.result,
           host,
         });
       }
     }
   }
-  return last;
+  return { last, accepted };
 }
 
 /** The notes taken since the last notice, and when the next one goes. */
@@ -278,7 +336,20 @@ function indexNowQueue(
       )
     );
     const byHost = await urlsByHost(noted, origin, hosts);
-    const last = await tellHosts(ctx, fetch, byHost, await keyOf(ctx));
+    const told = await tellHosts(ctx, fetch, byHost, await keyOf(ctx));
+    let last = told.last;
+    // A 202 says only that the notice was received: the search engines read
+    // the key later, on the host the notice named, and refuse every notice
+    // where they cannot. So the key file is read now on each such host, as
+    // they will read it; one that doesn't answer refuses the key.
+    const protocol = new URL(origin).protocol;
+    for (const host of told.accepted) {
+      const check = await checkIndexNowKey(ctx, setup, `${protocol}//${host}`);
+      if (check.result !== "answering") {
+        last = { ...last, result: "refused-key" };
+        break;
+      }
+    }
     await writeConnections(ctx, { indexNowLast: last });
   }
 
@@ -378,29 +449,208 @@ export function watchForIndexNow(
   return () => queue.close();
 }
 
+/** Whether the key file is served now: IndexNow is on, or a check reads it. */
+async function keyFileServed(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  until: string | undefined
+): Promise<boolean> {
+  if ((await setup.readRules(ctx, undefined)).indexNow === true) return true;
+  // The time is the window's first word; the rest names the check that
+  // opened it.
+  const time =
+    until === undefined ? Number.NaN : Date.parse(until.split(" ")[0] ?? "");
+  return !Number.isNaN(time) && Date.now() < time;
+}
+
 /**
- * The Proxy handler that serves the site's IndexNow key at `/<key>.txt`
- * while IndexNow is on, so the search engines can check it. Every other
- * request, and every request while it is off, passes untouched.
+ * The key file's answer for `asked`, the key its address names: the key as
+ * plain text, while the file is served and `asked` is the stored key as it
+ * is spelled; nothing otherwise, which the caller answers as not found.
+ */
+async function keyFileAnswer(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  asked: string,
+  method: string
+): Promise<Response | undefined> {
+  if (method !== "GET" && method !== "HEAD") return undefined;
+  if (!KEY.test(asked)) return undefined;
+  const { indexNowKey, indexNowKeyCheckUntil } = await readConnections(ctx);
+  if (indexNowKey !== asked) return undefined;
+  if (!(await keyFileServed(ctx, setup, indexNowKeyCheckUntil))) {
+    return undefined;
+  }
+  return new Response(method === "HEAD" ? null : asked, {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      // Read again on each check: a key switched off stops answering.
+      "cache-control": "no-store",
+    },
+  });
+}
+
+/** Whether `key`'s file answers at `origin`, as IndexNow reads it. */
+async function keyAnswersAt(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  origin: string,
+  key: string
+): Promise<boolean> {
+  const fetched = await fetchAs(
+    new URL(`/${key}.txt`, origin),
+    KEY_CHECK_AGENT,
+    {
+      ...setup.fetch,
+      origins: await originsOf(ctx, {
+        readRules: setup.readRules,
+        baseUrl: setup.origin,
+      }),
+    }
+  );
+  // The file must answer the key itself, as IndexNow reads it: a page the
+  // site serves at that address instead is not the key.
+  return (
+    fetched.kind === "received" &&
+    fetched.status === 200 &&
+    fetched.redirects.length === 0 &&
+    fetched.html.trim() === key
+  );
+}
+
+/**
+ * Read the key file while it is served for the check: the window is opened
+ * for this read, and closed after it only where no later check has opened
+ * its own since, so a check never closes the window another still reads in.
+ */
+async function readInWindow(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  origin: string,
+  key: string
+): Promise<boolean> {
+  // Named for this check, so two checks opening a window in the same
+  // millisecond still tell their windows apart.
+  const until = `${new Date(Date.now() + KEY_CHECK_WINDOW_MS).toISOString()} ${randomBytes(6).toString("hex")}`;
+  await writeConnections(ctx, { indexNowKeyCheckUntil: until });
+  try {
+    return await keyAnswersAt(ctx, setup, origin, key);
+  } finally {
+    const { indexNowKeyCheckUntil } = await readConnections(ctx);
+    if (indexNowKeyCheckUntil === until) {
+      await writeConnections(ctx, { indexNowKeyCheckUntil: null });
+    }
+  }
+}
+
+/** The key checks under way in this process, by origin, which a second one joins. */
+const checksUnderWay = new Map<string, Promise<IndexNowKeyCheck>>();
+
+/**
+ * Read the key file at `origin`, the site's production address where none
+ * is named, as the search engines will, the key made first where there is
+ * none, and keep what was found. While the read runs the file is served even
+ * with IndexNow off, so the check can come before the switch. The read is
+ * held to the site's own addresses (`fetchAs`), so it reaches nothing else.
+ * A check asked for while one for the same origin runs in this process
+ * answers what that one finds.
+ */
+async function checkIndexNowKey(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  at?: string
+): Promise<IndexNowKeyCheck> {
+  const origin = at ?? (await siteOriginFor(undefined, ctx, setup));
+  if (origin === undefined) {
+    const check: IndexNowKeyCheck = {
+      at: new Date().toISOString(),
+      result: "no-address",
+    };
+    await writeConnections(ctx, { indexNowKeyCheck: check });
+    return check;
+  }
+  const running = checksUnderWay.get(origin);
+  if (running !== undefined) return running;
+  const checking = (async (): Promise<IndexNowKeyCheck> => {
+    const checkedAt = new Date().toISOString();
+    const answering = await readInWindow(ctx, setup, origin, await keyOf(ctx));
+    const check: IndexNowKeyCheck = {
+      at: checkedAt,
+      result: answering ? "answering" : "not-answering",
+      origin,
+    };
+    await writeConnections(ctx, { indexNowKeyCheck: check });
+    return check;
+  })().finally(() => checksUnderWay.delete(origin));
+  checksUnderWay.set(origin, checking);
+  return checking;
+}
+
+/** Key checks running in this process; a screen a person opens needs few. */
+let checksRunning = 0;
+const MOST_CHECKS = 2;
+
+/**
+ * The routes of the key file: the file itself, at the site's root through
+ * `withNextly`'s rewrite (no Proxy needed), and the Connections tab's check
+ * of it, for whoever manages site-wide SEO.
+ */
+export function indexNowKeyRoutes(setup: IndexNowSetup): PluginRoute[] {
+  return [
+    {
+      method: "GET",
+      path: INDEXNOW_KEY_ROUTE_PATH,
+      mount: "root",
+      public: true,
+      handler: async (req, ctx) =>
+        (await keyFileAnswer(ctx, setup, ctx.params.key ?? "", req.method)) ??
+        new Response("Not found", {
+          status: 404,
+          headers: { "cache-control": "no-store" },
+        }),
+    },
+    siteWide({
+      method: "POST",
+      path: INDEXNOW_KEY_CHECK_PATH,
+      requiredPermission: MANAGE_SEO_PERMISSION,
+      handler: async (_req, ctx: PluginRouteContext) => {
+        if (checksRunning >= MOST_CHECKS) {
+          throw NextlyError.rateLimited({
+            retryAfterSeconds: 10,
+            logContext: { reason: "seo-indexnow-key-check-busy" },
+          });
+        }
+        checksRunning++;
+        try {
+          return Response.json(await checkIndexNowKey(ctx, setup));
+        } finally {
+          checksRunning--;
+        }
+      },
+    }),
+  ];
+}
+
+/**
+ * The Proxy handler that serves the site's IndexNow key at `/<key>.txt`, as
+ * the key route does, for a site whose Proxy runs. It claims the key file's
+ * address, which no page serves, so a Proxy still starting waits for the
+ * start rather than answer it not found. Every other request passes.
  */
 export function indexNowKeyProxyHandler(
-  setup: IndexNowSetup
+  setup: IndexNowSetup,
+  seen: ProxySeenNotes = NOT_NOTED
 ): PluginProxyHandler {
   return {
     name: "indexnow-key",
+    claims: request => KEY_FILE.test(new URL(request.url).pathname),
     async handle(request, ctx) {
-      if (request.method !== "GET" && request.method !== "HEAD") return;
+      // Noted in the background, so the admin can tell the Proxy runs.
+      void seen.note(ctx);
       const asked = KEY_FILE.exec(new URL(request.url).pathname)?.[1];
       if (asked === undefined) return;
-      const rules = await setup.readRules(ctx, undefined);
-      if (rules.indexNow !== true) return;
-      const { indexNowKey } = await readConnections(ctx);
-      if (indexNowKey !== asked) return;
-      return {
-        response: new Response(request.method === "HEAD" ? null : asked, {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        }),
-      };
+      const response = await keyFileAnswer(ctx, setup, asked, request.method);
+      return response === undefined ? undefined : { response };
     },
   };
 }

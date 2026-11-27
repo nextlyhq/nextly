@@ -96,6 +96,13 @@ const NEXTLY_ADDED_HTML_LIMITED_BOTS = [
   "Amazonbot",
   "Bytespider",
   "meta-externalagent",
+  // Meta's and Amazon's AI search crawlers and the fetchers each sends for a
+  // person's request: they read the HTML they are sent, and none is known
+  // to run a page's script.
+  "meta-webindexer",
+  "meta-externalfetcher",
+  "Amzn-SearchBot",
+  "Amzn-User",
   "DuckAssistBot",
   "MistralAI-User",
   "cohere-ai",
@@ -170,6 +177,24 @@ const ROOT_FILES = [
   // The whole site in one file, which tools reading llms.txt may ask for too.
   "/llms-full.txt",
 ] as const;
+
+/**
+ * The IndexNow key file: a key of 32 lower-case hex characters, served at the
+ * site's root, where the protocol requires it to prove the whole host. Like
+ * the files above, the site's own (a `public/` file, a route, a rewrite of
+ * its own) comes first, and a plugin route mounted at
+ * {@link KEY_FILE_ROUTE_PREFIX} answers it otherwise, with no Proxy needed.
+ */
+const KEY_FILE_SOURCE = "/:key([0-9a-f]{32}).txt";
+
+/**
+ * Where the key file is answered behind the API handler: `<prefix>/<key>`. A
+ * plugin's root route at `/indexnow-key/:key` answers it.
+ */
+export const KEY_FILE_ROUTE_PREFIX = "/indexnow-key";
+
+/** A key file's address, to ask whether the site rewrites such addresses itself. */
+const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
 
 /** Options for {@link withNextly}. */
 export interface WithNextlyOptions {
@@ -274,9 +299,26 @@ function withRootFileRewrites(
           )
       )
       .map(file => ({ source: file, destination: `${apiRoute}${file}` }));
+    // The key file, on the same terms: left to a site that rewrites such an
+    // address itself.
+    const keyFileRewrites = all.some(
+      rule =>
+        typeof rule.source === "string" && matches(rule.source, KEY_FILE_SAMPLE)
+    )
+      ? []
+      : [
+          {
+            source: KEY_FILE_SOURCE,
+            destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
+          },
+        ];
     return {
       beforeFiles: phases.beforeFiles ?? [],
-      afterFiles: [...(phases.afterFiles ?? []), ...rootRewrites],
+      afterFiles: [
+        ...(phases.afterFiles ?? []),
+        ...rootRewrites,
+        ...keyFileRewrites,
+      ],
       fallback: phases.fallback ?? [],
     };
   };

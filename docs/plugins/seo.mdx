@@ -163,8 +163,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | `nosnippet`          | checkbox | No text under the page's link in any Google result                                                                                                                       |
 | `noimageindex`       | checkbox | Asks Google not to index the pictures on the page                                                                                                                        |
 | `unavailableAfter`   | date     | When the page leaves search. After it, the page is served `noindex` and leaves the sitemap and `llms.txt`                                                                |
-| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it                                                                                                     |
-| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it                                                                                                 |
+| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it; Bing also keeps the page out of Copilot's answers and AI training                                  |
+| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it; with it, Bing's Copilot uses only the page's address, title and snippet                        |
 
 <Callout type="warn">
 **Ticking `noindex` does not on its own keep a page out of search results.** The plugin
@@ -548,11 +548,46 @@ These are requests. Well-behaved tools follow them; some ignore them. Asking Goo
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
 
+`"search"` and `"block"` also write the shared AI-training opt-out, a group of its own that
+names a policy token rather than a crawler:
+
+```txt
+User-agent: __usage_ai-training
+Disallow: /
+```
+
+AI companies that read it don't train on the pages it disallows; `Disallow: /` covers every
+page, the admin and your own rules' paths included. A `User-agent: *` group never applies to
+the token, so it is always named. Anthropic honours it now, and Google and Microsoft plan to in
+2027; it is an individual IETF draft (`draft-kelley-aipref-training-preference-signal`), not yet
+a standard. `"all"` writes nothing for it.
+
 The crawler names come from each provider's own page (OpenAI, Anthropic, Google, Apple, Common
-Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 13 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
+Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 27 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
 asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted as ads in
 ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
 set up.
+
+Six fetch a page because a person asked for it, and their providers say robots.txt may not
+apply to them: `ChatGPT-User`, `Perplexity-User`, `meta-externalfetcher`, `Amzn-User`,
+`Google-Agent` and `Google-GeminiNotebook`. `"block"` still asks them to stay away; the
+settings screen lists them apart, as "User-triggered: robots.txt may not apply".
+
+#### A Content-Signal line
+
+**Add a Content-Signal line**, a tick under the AI tools choice, off by default, states the
+choice in the group for every crawler:
+
+```txt
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+```
+
+`"all"` writes `ai-train=yes`, `"search"` `ai-train=no`, and `"block"` `ai-input=no` and
+`ai-train=no`; `search=yes` always. Content-Signal is Cloudflare's proposal, not a standard:
+some scanners and Cloudflare read it, and crawlers that don't know it skip it, so no rule of
+the file changes with it. The tick is saved with your own rules, so it needs no migration.
 
 ### Your own rules
 
@@ -576,12 +611,14 @@ Each line is read as you type, the way crawlers read robots.txt:
   **Block these pages anyway**. The confirmation is kept with the rules' text and the pages it
   named, so it is asked again when either changes. Each such page stays an error on the
   problem list while the rule stands.
-- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule, such as
-  `Content-Signal`, is kept with a note that crawlers may ignore it.
+- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule is kept with
+  a note that crawlers may ignore it; a `Content-Signal` line's note also points to the tick
+  above, so the site doesn't state its preference twice.
 - A group naming a crawler is followed by that crawler instead of the rules for every crawler,
   Nextly's own included. For an AI crawler, such as `User-agent: GPTBot`, it is joined with the
   group the AI tools choice writes for it, so a page the choice keeps it from opens only with an
-  `Allow` line; the screen says so.
+  `Allow` line; the screen says so. A group naming `__usage_ai-training` joins the opt-out
+  group the choice writes in the same way.
 - A rule needs a `User-agent` line above it, and a line holding a control character is
   refused, so nothing in the box can start a group of its own you did not write.
 
@@ -593,9 +630,15 @@ plugin's rules are not the ones crawlers read; the plugin reads the site's robot
 production address for that header, at most every ten minutes. The rules are a new field of the settings Single: a site that applies its schema with
 migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 
+### Outside robots.txt
+
 robots.txt can't take a site out of Google's AI Overviews or AI Mode without taking it out of
-Google Search: they read pages with Google Search's own crawler. A page's snippet controls
-keep its text out of them.
+Google Search: they read pages with Google Search's own crawler. Search Console's
+**Settings > Search generative AI** setting leaves a site out of AI Overviews, AI Mode and
+Discover's AI features, and Google says it isn't a ranking signal; a page's snippet controls
+keep one page's text out of them. Bing Webmaster Tools sets whether Bing may use your pages
+for AI training and for grounding Copilot's answers, from 15 December 2026. The settings
+screen's **Outside robots.txt** row links to both.
 
 ### The site's address, and why it affects caching
 
@@ -748,13 +791,30 @@ for a few seconds after the last save, so a burst of saves makes one notice, and
 the save has finished: a save never waits for IndexNow, and a working draft's save sends
 nothing.
 
-The site proves it owns its pages with a key served at its root, `/<key>.txt`, answered by the
-site's [Proxy](/docs/plugins/proxy) while IndexNow is on. The key is made the first time a
-notice is sent and kept encrypted in the plugin's settings. Every notice goes to
-`api.indexnow.org` only. A refused key (`403` or `422`), a rate limit (`429`) or an endpoint
-that cannot be reached is shown on the Connections tab and listed on the problem list until a
-later notice goes through; the next change is sent again. Notices name the site's production
-address, so IndexNow needs one saved.
+The site proves it owns its pages with a key served at its root, `/<key>.txt`, while IndexNow
+is on. `withNextly()` in `next.config` rewrites that address to the plugin, so the key needs no
+Proxy; a site with a [Proxy](/docs/plugins/proxy) answers it there too. A site not wrapped in
+`withNextly()` adds the rewrite itself, after its own files:
+
+```ts
+// next.config.ts, in rewrites().afterFiles
+{ source: "/:key([0-9a-f]{32}).txt", destination: "/admin/api/indexnow-key/:key" }
+```
+
+Switching IndexNow on in Settings › Connections first reads the key file at the site's
+production address, as Bing will, making the key if there is none yet. Where the file doesn't
+answer with the key, the switch stays off and says so, with **Check again**: Bing refuses every
+notice from a site whose key it can't read. While IndexNow is on, the row shows **Key file:
+answering ✓** and the file is read again once a day. The key is kept encrypted in the plugin's
+settings and never shown in the admin.
+
+Every notice goes to `api.indexnow.org` only. Its `200` is shown as sent. A `202` means the
+notice was received and the key will be read later, so the plugin reads the key file then too:
+the notice is shown as accepted where the file answers, and as a refused key where it doesn't. A
+refused key (`403` or `422`), a rate limit (`429`) or an endpoint that cannot be reached is
+shown on the Connections tab and listed on the problem list until a later notice goes through;
+the next change is sent again. Notices name the site's production address, so IndexNow needs
+one saved.
 
 The plugin may reach only `api.indexnow.org`, `oauth2.googleapis.com`, `www.googleapis.com`
 and `searchconsole.googleapis.com`, each request given ten seconds and following no redirect.
@@ -871,8 +931,10 @@ the copy can be.
 No reader is told apart by who it is: neither output looks at the user agent, and every
 reader asking the same way gets the same answer. llms.txt is its own file. A copy is
 answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `proxy.ts`, as
-[redirects](#redirects) do, and its matcher must reach addresses ending in `.md`: a matcher
-that leaves out every address with a dot in its last part leaves the copies to the site. A
+[redirects](#redirects) do, with the matcher `nextlyProxyMatcher` holds, which reaches
+addresses ending in `.md`: a matcher that leaves out every address with a dot in its last part
+leaves the copies to the site. Until the Proxy has handled a request, Settings keeps the switch
+off and says why, and Problems lists copies switched on but not served. A
 site that ships its own `public/llms.txt` or `app/llms.txt/route.ts` keeps serving it.
 
 A copy is made from the page as it is stored, the fields the site renders, wherever those
@@ -1206,6 +1268,8 @@ them in each listed page's `robots` tag; a page hidden from search is served non
     problem list names it until the date is removed.
   - **Controls for other search engines**: `noarchive` and `nocache`, closed away, each its
     own switch and off by default. Google uses neither, and no other setting turns either on.
+    Bing reads both for Copilot: `noarchive` keeps the page out of Copilot's answers and AI
+    training, and `nocache` limits Copilot to the page's address, title and snippet.
 
 A route that sets its own limits in `robots` keeps them where they are stricter: the smaller
 image preview and snippet, and the earlier date, are served.
@@ -1692,14 +1756,17 @@ Redirects answer from the site's Proxy, before the page is served, so a page tha
 
 ```ts
 // src/proxy.ts
-import { createNextlyProxy } from "nextly/runtime";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
 
 import nextlyConfig from "../nextly.config";
 
-export const proxy = createNextlyProxy(nextlyConfig);
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig));
 
+// The pattern `nextlyProxyMatcher` (from "nextly/runtime") holds, written out.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
 };
 ```
 
@@ -1716,42 +1783,38 @@ What the plugin adds to each request is kept off the database:
 - **A page request no redirect is for reads nothing.** Each server reads the addresses redirects hold once, keeps them as a set, and reads them again in the background every 15 seconds. Only a request whose address, or a range above it, a redirect holds reads the database, to choose the redirect.
 - **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
 - **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
+- **On Vercel the Proxy holds one database connection at most**, in its own function, and closes it before the function is suspended: see [On a serverless host](/docs/plugins/proxy#on-a-serverless-host).
 
 Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. The one exception is a page's [plain-text copy](#llmstxt-and-plain-text-copies) at its `.md` address, which no page of the site serves: that request waits for the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
 
 #### A site that already has `middleware.ts`
 
-Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in it, and hand the rest to Nextly. The rules then run on Node.js, which runs everything the Edge runtime does:
+Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in a function, and hand both to `composeProxy`. The rules then run on Node.js, which runs everything the Edge runtime does:
 
 ```ts
 // src/proxy.ts, formerly src/middleware.ts
 import { NextResponse, type NextRequest } from "next/server";
-import { createNextlyProxy } from "nextly/runtime";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
 
 import nextlyConfig from "../nextly.config";
 
-const nextly = createNextlyProxy(nextlyConfig);
-
-// The site's own rules, as its middleware had them: a response for a
-// request they answer, such as a 410 or a redirect, and nothing otherwise.
-declare function siteRules(request: NextRequest): Response | undefined;
-
-export async function proxy(request: NextRequest) {
-  const own = siteRules(request);
-  if (own !== undefined) return own;
-  // A redirect, or the page with the headers the plugin adds.
-  const response = (await nextly(request)) ?? NextResponse.next();
-  // What the site added to every page goes on whichever response is sent.
+// The site's own rules, as its middleware had them.
+function siteProxy(request: NextRequest) {
+  const response = NextResponse.next();
   response.headers.set("x-frame-options", "DENY");
   return response;
 }
 
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig), siteProxy);
+
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
 };
 ```
 
-Keep the site's matcher, written out in the file. A request the site's own rules answer is sent as they made it, without the plugin's headers; call `nextly(request)` first instead where the staging guard's `noindex` must reach those responses too. A rewrite the site's rules make (`NextResponse.rewrite`) is answered before the plugin sees the request, as before.
+Nextly's handlers are asked first: a redirect, a page gone, a plain-text copy or the IndexNow key is answered by the plugin, and the site's function is not called for it. Every other request goes to the site's function, and its answer is sent with the plugin's headers added where it set none of its own, its cookies untouched. A site whose rules need more addresses than the matcher above adds its own patterns beside it; the plugin is asked only about the addresses its own pattern matches. [Proxy handlers](/docs/plugins/proxy#a-site-with-a-proxy-of-its-own) has the details.
 
 #### Is the Proxy running?
 

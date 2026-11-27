@@ -8,18 +8,18 @@
  * @module admin/tabs
  */
 import {
-  Alert,
-  AlertDescription,
   Button,
   Input,
   SegmentedChoice,
   SettingsRowGroup,
   Switch,
+  usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Info, X } from "lucide-react";
-import { useId, type JSX, type ReactNode } from "react";
+import { X } from "lucide-react";
+import { useId, useState, type JSX, type ReactNode } from "react";
 
-import type { SeoContentType } from "../settings/contract";
+import { REDIRECT_ROUTES, type ProxyStatus } from "../redirects/contract";
+import { SEO_PLUGIN_NAME, type SeoContentType } from "../settings/contract";
 import {
   defaultTitlePattern,
   fillPattern,
@@ -30,6 +30,7 @@ import { profileAddressProblem } from "../settings/stored-values";
 import type { StructuredDataBrand } from "../structured-data/rules";
 import { fitSummary, textFit } from "../tab/problems";
 
+import { ContentSignalTick, OutsideRobotsRow } from "./ai-controls";
 import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
 import { brandDetailsDraftProblem } from "./brand-draft";
 import {
@@ -531,6 +532,55 @@ function SwitchRow({
   );
 }
 
+/**
+ * What the Plain-text copies row says while the site's Proxy has never run:
+ * the copies are answered there, so switched on they would not be served.
+ */
+const COPIES_NEED_PROXY =
+  "Plain-text copies are answered by the site's Proxy, which hasn't handled a request yet. A developer adds src/proxy.ts with composeProxy from nextly/runtime (see the SEO guide, \"Running redirects\"); then switch this on.";
+
+/**
+ * Plain-text copies' switch, which turns on only once the site's Proxy has
+ * handled a request: until then it stays off and says why. Where whether
+ * the Proxy runs can't be read, the switch is not held back.
+ */
+function PlainCopiesRow({ draft, change }: TabProps): JSX.Element {
+  const proxy = usePluginRoute<ProxyStatus>({
+    plugin: SEO_PLUGIN_NAME,
+    path: REDIRECT_ROUTES.proxy,
+    staleTime: 0,
+  });
+  const neverRan = proxy.error === null && proxy.data?.state === "not-wired";
+  const [refused, setRefused] = useState(false);
+  return (
+    <SettingsRowGroup
+      label="Plain-text copies"
+      description="Adds a text version of each page, the same words people see, for AI tools. Off by default."
+    >
+      <Switch
+        aria-label="Plain-text copies"
+        checked={draft.plainTextCopies}
+        onCheckedChange={plainTextCopies => {
+          if (plainTextCopies && neverRan) {
+            setRefused(true);
+            return;
+          }
+          setRefused(false);
+          change(current => ({ ...current, plainTextCopies }));
+        }}
+      />
+      {refused || (draft.plainTextCopies && neverRan) ? (
+        <p
+          className="mt-1.5 text-xs font-medium text-warning-text"
+          role="status"
+        >
+          {COPIES_NEED_PROXY}
+        </p>
+      ) : null}
+    </SettingsRowGroup>
+  );
+}
+
 /** The host the site is served from, for the sentences that name it. */
 export function siteHostOf(
   draft: SettingsDraft,
@@ -544,31 +594,6 @@ export function siteHostOf(
     }
   }
   return typeof window === "undefined" ? "your-site" : window.location.host;
-}
-
-/**
- * What robots.txt can't do for Google's AI answers, beside the choices that
- * might suggest it can: they read pages with Google Search's own crawler,
- * so only a page's snippet controls keep its text out of them.
- */
-function AiOverviewsRow(): JSX.Element {
-  return (
-    <SettingsRowGroup
-      label="Google's AI Overviews and AI Mode"
-      description="Answers Google shows above its results."
-    >
-      <Alert variant="info" role="note">
-        <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <AlertDescription>
-          robots.txt can&apos;t take your site out of them. They read pages with
-          Google Search&apos;s own crawler, so blocking it would take you out of
-          Google Search too. To keep a page&apos;s text out, set its{" "}
-          <b className="font-semibold">Text under the link</b> to None on that
-          page; that also removes the text from normal results.
-        </AlertDescription>
-      </Alert>
-    </SettingsRowGroup>
-  );
 }
 
 /** Which automated readers may use the site's pages, and what they are given. */
@@ -631,8 +656,9 @@ export function CrawlersTab({
         />
         <ControlNote>{AI_CHOICES_NOTE}</ControlNote>
         <CrawlerTable choice={draft.aiCrawlers} />
+        <ContentSignalTick draft={draft} change={change} />
       </SettingsRowGroup>
-      <AiOverviewsRow />
+      <OutsideRobotsRow />
       <OwnRulesRow
         draft={draft}
         change={change}
@@ -658,14 +684,7 @@ export function CrawlersTab({
         on={draft.llmsFullTxt}
         set={llmsFullTxt => change(current => ({ ...current, llmsFullTxt }))}
       />
-      <SwitchRow
-        label="Plain-text copies"
-        description="Adds a text version of each page, the same words people see, for AI tools. Off by default."
-        on={draft.plainTextCopies}
-        set={plainTextCopies =>
-          change(current => ({ ...current, plainTextCopies }))
-        }
-      />
+      <PlainCopiesRow draft={draft} change={change} />
     </SettingsCard>
   );
 }

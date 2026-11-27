@@ -47,7 +47,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { typedCanonical } from "../../canonical";
 import type { ChecklistBody } from "../../overview/contract";
 import { seoPlugin } from "../../plugin";
+import { keptSeoContext } from "../../not-found/report";
 import { REDIRECTS_SLUG } from "../../redirects/collection";
+import { recordProxySeen } from "../../redirects/proxy-seen";
 import { routeValuesKey } from "../../route-values/store";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
@@ -1209,6 +1211,7 @@ describe.each(getConfiguredTestDialects())(
         "shareImage",
         "brand",
         "searchConsole",
+        "proxy",
       ]);
       expect(read.done).toEqual({
         site: true,
@@ -1216,6 +1219,7 @@ describe.each(getConfiguredTestDialects())(
         shareImage: false,
         brand: false,
         searchConsole: false,
+        proxy: false,
       });
       expect(read.body.items[1]).toMatchObject({ types: 2 });
 
@@ -1267,7 +1271,14 @@ describe.each(getConfiguredTestDialects())(
         brand: true,
         import: true,
         searchConsole: false,
+        proxy: false,
       });
+
+      // The site's Proxy handles a request: it notes so, and the item is done.
+      const seo = keptSeoContext();
+      if (seo === undefined) throw new Error("the SEO plugin never started");
+      await recordProxySeen(seo);
+      expect((await checklist(staff.importer)).done.proxy).toBe(true);
 
       // A site with no name is not named, whatever else it has.
       await t.nextly.updateSingle({

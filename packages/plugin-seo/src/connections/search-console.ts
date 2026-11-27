@@ -530,6 +530,10 @@ export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
             ...(stored.indexNowLast === undefined
               ? {}
               : { last: stored.indexNowLast }),
+            // What the key file's last check found; never the key.
+            ...(stored.indexNowKeyCheck === undefined
+              ? {}
+              : { keyCheck: stored.indexNowKeyCheck }),
           },
         };
         return respondDoc(body);
