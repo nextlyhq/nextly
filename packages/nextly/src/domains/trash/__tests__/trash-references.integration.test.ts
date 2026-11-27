@@ -306,6 +306,59 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect((await trashed(t, second)).label).toBe("Two");
   });
 
+  it("erasing a staff account clears its id and name from what it trashed, and only its own", async () => {
+    const t = await boot(dialect);
+    const leaving = await superAdminUser(
+      t,
+      `leaving-${randomUUID().slice(0, 8)}`
+    );
+    const staying = await superAdminUser(
+      t,
+      `staying-${randomUUID().slice(0, 8)}`
+    );
+    const byLeaving = await make(t, PAGES, { title: "A", slug: "by-leaving" });
+    const byStaying = await make(t, PAGES, { title: "B", slug: "by-staying" });
+    await t.nextly.delete({
+      collection: PAGES,
+      id: byLeaving,
+      user: { id: leaving, name: "Leaving Person" },
+    } as never);
+    await t.nextly.delete({
+      collection: PAGES,
+      id: byStaying,
+      user: { id: staying, name: "Staying Person" },
+    } as never);
+    const who = async (id: string) => {
+      const [row] = await t.adapter.select<Record<string, unknown>>(
+        TRASH_TABLE,
+        { where: { and: [{ column: "itemId", op: "=", value: id }] } }
+      );
+      return {
+        kind: row.trashedByKind,
+        id: row.trashedById,
+        name: row.trashedByName,
+      };
+    };
+    expect(await who(byLeaving)).toEqual({
+      kind: "user",
+      id: leaving,
+      name: "Leaving Person",
+    });
+
+    await t.nextly.users.delete({ id: leaving });
+
+    expect(await who(byLeaving)).toEqual({
+      kind: "user",
+      id: null,
+      name: null,
+    });
+    expect(await who(byStaying)).toEqual({
+      kind: "user",
+      id: staying,
+      name: "Staying Person",
+    });
+  });
+
   it("puts back pins and markers of readers still there, and none of a reader deleted since", async () => {
     const t = await boot(dialect);
     const id = await make(t, PAGES, { title: "Pinned", slug: "pinned" });
