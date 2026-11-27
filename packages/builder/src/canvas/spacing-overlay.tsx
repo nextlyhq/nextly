@@ -62,6 +62,7 @@
  * @module spacing-overlay
  */
 
+import { COMPONENT_INSTANCE_TYPE, findNode } from "@nextlyhq/blocks-engine";
 import { registeredBlocks, type BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
@@ -81,7 +82,9 @@ import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
   canvasContentRect,
   canvasPaintedScale,
+  boxInFrameViewport,
   clippedByAncestor,
+  framePointInHost,
   hasScrollbarGutter,
   layoutFragments,
   overlaySpaceOf,
@@ -90,6 +93,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { holdsBlocks } from "./keyboard-move";
 import {
   applicableEdges,
   overlayEscape,
@@ -586,6 +590,181 @@ export function probeScale(
   );
 }
 
+/** A band's own key, the one the layer draws it under: `<box>-<side>`. */
+function bandKeyOf(band: HTMLElement): string {
+  return `${band.dataset.box ?? ""}-${band.dataset.side ?? ""}`;
+}
+
+/** Whether two sets hold the same keys. */
+function sameKeys(
+  one: ReadonlySet<string>,
+  other: ReadonlySet<string>
+): boolean {
+  if (one.size !== other.size) return false;
+  for (const key of one) if (!other.has(key)) return false;
+  return true;
+}
+
+const NO_KEYS: ReadonlySet<string> = new Set();
+
+/**
+ * The bands whose number is thicker than the band itself: on a top or bottom
+ * band its height, on a side band its width. Both are read on screen, where
+ * the number keeps its own size at any zoom, so the answer does not flip as
+ * the canvas zooms the way a fixed pixel threshold would.
+ */
+function tightBandsIn(layer: HTMLElement): ReadonlySet<string> {
+  const tight = new Set<string>();
+  for (const band of layer.querySelectorAll<HTMLElement>(
+    ".nx-spacing-overlay__band"
+  )) {
+    const chip = band.querySelector(".nx-spacing-overlay__value");
+    if (chip === null) continue;
+    const box = boxInFrameViewport(band);
+    const label = boxInFrameViewport(chip);
+    const across =
+      band.dataset.side === "top" || band.dataset.side === "bottom";
+    if (across ? label.height > box.height : label.width > box.width) {
+      tight.add(bandKeyOf(band));
+    }
+  }
+  return tight;
+}
+
+/**
+ * Which band the pointer is over, by its key, or `null`, and whether the
+ * last pointer to press or move was a touch.
+ *
+ * The overlay takes no pointer, so a press goes through to the block under
+ * it; which band is pointed at is read from the pointer's moves instead. In
+ * the editor's document, and over a canvas in a frame in the frame's too,
+ * whose points are carried onto the editor's through the frame's painted box.
+ * Hit-tested against the bands' own boxes, so it holds at any zoom.
+ *
+ * A press counts as pointing too: a tap on a touch screen sends no move. And
+ * bands drawn again under a still pointer (a scroll, a zoom, an edit, a
+ * reflow) are hit-tested again at the last point, since no move follows.
+ */
+function usePointedBand(
+  layer: React.RefObject<HTMLDivElement | null>,
+  active: boolean,
+  frameKey: unknown
+): { readonly pointed: string | null; readonly touch: boolean } {
+  const [pointed, setPointed] = React.useState<string | null>(null);
+  const [touch, setTouch] = React.useState(false);
+  const last = React.useRef<{ x: number; y: number } | null>(null);
+  const hitTest = React.useCallback(() => {
+    const element = layer.current;
+    const point = last.current;
+    let found: string | null = null;
+    if (element !== null && point !== null) {
+      // Topmost first: a later band paints over an earlier one where they
+      // share pixels (a padding band over a pulled-in negative margin).
+      const bands = [
+        ...element.querySelectorAll<HTMLElement>(".nx-spacing-overlay__band"),
+      ].reverse();
+      for (const band of bands) {
+        const box = boxInFrameViewport(band);
+        if (
+          point.x >= box.x &&
+          point.x <= box.x + box.width &&
+          point.y >= box.y &&
+          point.y <= box.y + box.height
+        ) {
+          found = bandKeyOf(band);
+          break;
+        }
+      }
+    }
+    setPointed(current => (current === found ? current : found));
+  }, [layer]);
+  React.useEffect(() => {
+    const element = layer.current;
+    if (!active || element === null) {
+      last.current = null;
+      setPointed(null);
+      return;
+    }
+    const chrome = element.ownerDocument;
+    const frame = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.frame ?? null;
+    const at = (x: number, y: number): void => {
+      last.current = { x, y };
+      hitTest();
+    };
+    // A touch cannot hover, so after one every number is shown (below); a
+    // mouse or a pen moving again hides the thin ones until pointed.
+    const kind = (event: PointerEvent): void =>
+      setTouch(event.pointerType === "touch");
+    const onChrome = (event: PointerEvent): void => {
+      kind(event);
+      at(event.clientX, event.clientY);
+    };
+    // Carried out of the frame by the one mapping every frame point takes:
+    // its border, its padding and its painted scale.
+    const onFrame = (event: PointerEvent): void => {
+      kind(event);
+      if (frame === null) return;
+      const host = framePointInHost(frame, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      at(host.x, host.y);
+    };
+    /*
+     * A pointer leaving the window (or the frame) from over a band sends no
+     * later move, so the number it showed would stay shown; leaving clears
+     * it. Leaving the frame for the editor is followed by the editor's own
+     * moves, which point again.
+     */
+    const onLeave = (): void => {
+      last.current = null;
+      setPointed(null);
+    };
+    // A scroll moves the bands without a drawing to follow it when nothing
+    // the overlay measures changes, so it is a reason to test again too.
+    const onScroll = (): void => hitTest();
+    const inner = frame?.contentDocument ?? null;
+    const both = inner !== null && inner !== chrome;
+    chrome.addEventListener("scroll", onScroll, {
+      capture: true,
+      passive: true,
+    });
+    if (both) {
+      inner.addEventListener("scroll", onScroll, {
+        capture: true,
+        passive: true,
+      });
+    }
+    for (const type of ["pointermove", "pointerdown"] as const) {
+      chrome.addEventListener(type, onChrome, { passive: true });
+      if (both) inner.addEventListener(type, onFrame, { passive: true });
+    }
+    chrome.documentElement.addEventListener("pointerleave", onLeave);
+    if (both) inner.documentElement.addEventListener("pointerleave", onLeave);
+    return () => {
+      chrome.removeEventListener("scroll", onScroll, { capture: true });
+      if (both)
+        inner.removeEventListener("scroll", onScroll, { capture: true });
+      for (const type of ["pointermove", "pointerdown"] as const) {
+        chrome.removeEventListener(type, onChrome);
+        if (both) inner.removeEventListener(type, onFrame);
+      }
+      chrome.documentElement.removeEventListener("pointerleave", onLeave);
+      if (both) {
+        inner.documentElement.removeEventListener("pointerleave", onLeave);
+      }
+    };
+  }, [layer, active, frameKey, hitTest]);
+  // After every drawing, before it is painted: a band can move under a still
+  // pointer without any measurement of it changing (a zoom scales the layer,
+  // a scroll moves it), and the test is a few box reads that set state only
+  // when a different band is under the point.
+  React.useLayoutEffect(() => {
+    if (active) hitTest();
+  });
+  return { pointed, touch };
+}
+
 export function SpacingOverlay({
   editor,
   hidden = false,
@@ -929,10 +1108,51 @@ export function SpacingOverlay({
      */
   }, [measure, hidden, selectedId, document, canvasFrame]);
 
+  /*
+   * A block that holds no blocks (a Button, a Heading) has its bands drawn as
+   * outlines with no fill, so its own colors show true under them. A container
+   * keeps filled bands: there the fill is the room it gives its children.
+   * Asked of `holdsBlocks`, the one answer a drag and Layers use too. A
+   * component copy keeps them as well: it draws a whole set of blocks, kept in
+   * the component rather than in slots of its own, so whether its slots hold
+   * blocks says nothing about its size. A type the canvas's own resolver
+   * knows is read from that definition, the one the canvas renders: a
+   * container stored before its slot holds anything names no slot itself.
+   */
+  const outlines = React.useMemo(() => {
+    if (selectedId === null) return false;
+    const node = findNode(document.nodes, selectedId);
+    if (node === undefined || node.type === COMPONENT_INSTANCE_TYPE) {
+      return false;
+    }
+    const definition = resolver.get(node.type);
+    return definition === undefined
+      ? !holdsBlocks(node, undefined)
+      : Object.keys(definition.slots ?? {}).length === 0;
+  }, [document, selectedId, resolver]);
+
+  /*
+   * A number thicker than its band covers the block it measures (a Button's
+   * label, under a 12 px padding), so it hides until its band is pointed at.
+   * Measured after the bands are drawn, from what they drew.
+   */
+  const [tight, setTight] = React.useState<ReadonlySet<string>>(NO_KEYS);
+  React.useLayoutEffect(() => {
+    const element = layer.current;
+    const next = element === null ? NO_KEYS : tightBandsIn(element);
+    setTight(current => (sameKeys(current, next) ? current : next));
+  }, [bands, framed]);
+  const { pointed, touch } = usePointedBand(
+    layer,
+    !hidden && bands.length > 0,
+    canvasFrame
+  );
+
   return (
     <div
       ref={layer}
       className="nx-spacing-overlay"
+      data-outlines={outlines ? "" : undefined}
       /*
        * Not marked as chrome, for the reason the drop indicator is not: it takes
        * no pointer events at all, so a press travels through to the block
@@ -963,6 +1183,11 @@ export function SpacingOverlay({
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
           data-gap={band.gapFrom === undefined ? undefined : ""}
+          // After a touch every number shows: a tap cannot point at a band.
+          data-tight={
+            !touch && tight.has(`${band.box}-${band.side}`) ? "" : undefined
+          }
+          data-pointed={pointed === `${band.box}-${band.side}` ? "" : undefined}
           // See the layer above: the report is hidden, the control is not.
           aria-hidden="true"
           style={bandStyle(band)}
