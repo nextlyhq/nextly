@@ -13,6 +13,12 @@ export const ALGORITHM = "HS256";
 export const TOKEN_TYP = {
   session: "nextly-session+jwt",
   pending: "nextly-pending+jwt",
+  // The access tokens of the credentials the command line and agents hold,
+  // one purpose each, so none is accepted as an admin session or at a door
+  // meant for another (`auth/cli-credentials`).
+  cliSignIn: "nextly-cli+jwt",
+  agentPass: "nextly-agent+jwt",
+  chatAppPass: "nextly-chat-app+jwt",
 } as const;
 
 export type TokenPurpose = keyof typeof TOKEN_TYP;
