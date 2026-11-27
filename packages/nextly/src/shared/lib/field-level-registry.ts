@@ -219,7 +219,7 @@ export interface FieldFunctions {
  * rules and hooks are captured by the same walk but nothing reads them for a
  * field group, so registering one does not mean they are enforced.
  */
-type EntityKind = "collection" | "single" | "fieldGroup";
+export type EntityKind = "collection" | "single" | "fieldGroup";
 type Store = Map<string, Record<string, FieldFunctions>>;
 
 const GLOBAL_KEY = "__nextlyFieldFunctionRegistry";
@@ -536,6 +536,22 @@ export function hasFieldAccessRule(
 ): boolean {
   const fns = getFieldFunctions(kind, slug);
   return fns ? nestedHasAccessCallback(fns, operation) : false;
+}
+
+/**
+ * Whether this entity hides anything a save of it could carry without showing
+ * it: a read rule on a container, or on a field inside one. A container is
+ * written whole, so what it hides has to be put back; a field of its own
+ * column is not written by a save that does not name it.
+ */
+export function hidesInsideContainer(kind: EntityKind, slug: string): boolean {
+  const fns = getFieldFunctions(kind, slug);
+  return Object.values(fns ?? {}).some(
+    entry =>
+      entry.fields !== undefined &&
+      (typeof entry.access?.read === "function" ||
+        nestedHasAccessCallback(entry.fields, "read"))
+  );
 }
 
 /**
