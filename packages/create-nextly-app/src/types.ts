@@ -1,4 +1,5 @@
 import type { GeneratedFiles } from "./generators/generated-files";
+import type { PackageManager } from "./plan";
 
 /**
  * Project type / template selection.
@@ -40,9 +41,9 @@ export interface TemplateManifest {
 export type DatabaseType = "postgresql" | "mysql" | "sqlite";
 
 /**
- * Supported package managers
+ * Supported package managers: the setup plan's list.
  */
-export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
+export type { PackageManager };
 
 /**
  * Database configuration for scaffolding
