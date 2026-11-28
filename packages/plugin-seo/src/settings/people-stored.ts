@@ -29,9 +29,6 @@ const FACTS = [
   "founder",
 ] as const;
 
-/** The facts held as text with something in it. */
-const TEXTS = ["jobTitle", "description"] as const;
-
 /** Text with something in it. */
 const filled = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
@@ -45,45 +42,60 @@ function pageAddressProblem(value: string): string | null {
       : "must be an address from the site's root, such as /about, or a whole one starting with https://";
 }
 
+/** A whole address, starting with https://. */
+const wholeAddress = (value: unknown): boolean =>
+  typeof value === "string" && webAddressProblem(value.trim()) === null;
+
+/** Text, or why a fact named `name` is not. */
+const textProblem = (name: string, value: unknown): string | null =>
+  typeof value === "string" ? null : `${name} must be text`;
+
+/** How each fact that is not plain text, or a list of names, is checked. */
+const FACT_CHECKS: Partial<
+  Record<
+    (typeof FACTS)[number],
+    (value: unknown, name: string) => string | null
+  >
+> = {
+  name: value => (filled(value) ? null : "needs a name"),
+  type: value =>
+    value === "person" || value === "organization"
+      ? null
+      : "must be a person or an organization",
+  founder: value =>
+    typeof value === "boolean" ? null : "must be true or false",
+  url: (value, name) => pageProblem(name, value),
+  image: (value, name) => pageProblem(name, value),
+  id: value =>
+    wholeAddress(value)
+      ? null
+      : "id must be a whole address, starting with https://",
+  sameAs: value =>
+    Array.isArray(value) && value.every(wholeAddress)
+      ? null
+      : "profiles must each be a whole address, starting with https://",
+  worksFor: value => employerProblem(value),
+  jobTitle: (value, name) => textProblem(name, value),
+  description: (value, name) => textProblem(name, value),
+};
+
+/** An address on the site or a whole one, or why a fact is not. */
+function pageProblem(name: string, value: unknown): string | null {
+  return typeof value === "string"
+    ? pageAddressProblem(value)
+    : `${name} must be text`;
+}
+
+/** A list of names, or why a fact named `name` is not. */
+const namesProblem = (name: string, value: unknown): string | null =>
+  Array.isArray(value) && value.every(filled)
+    ? null
+    : `${name} must be a list of names`;
+
 /** Why the fact `name` of one person is not one; null when it is. */
 function factProblem(name: string, value: unknown): string | null {
-  switch (name) {
-    case "name":
-      return filled(value) ? null : "needs a name";
-    case "type":
-      return value === "person" || value === "organization"
-        ? null
-        : "must be a person or an organization";
-    case "founder":
-      return typeof value === "boolean" ? null : "must be true or false";
-    case "url":
-    case "image":
-      return typeof value === "string"
-        ? pageAddressProblem(value)
-        : `${name} must be text`;
-    case "id":
-      return typeof value === "string" &&
-        webAddressProblem(value.trim()) === null
-        ? null
-        : "id must be a whole address, starting with https://";
-    case "sameAs":
-      return Array.isArray(value) &&
-        value.every(
-          url =>
-            typeof url === "string" && webAddressProblem(url.trim()) === null
-        )
-        ? null
-        : "profiles must each be a whole address, starting with https://";
-    case "worksFor":
-      return employerProblem(value);
-    default:
-      if ((TEXTS as readonly string[]).includes(name)) {
-        return typeof value === "string" ? null : `${name} must be text`;
-      }
-      return Array.isArray(value) && value.every(filled)
-        ? null
-        : `${name} must be a list of names`;
-  }
+  const check = FACT_CHECKS[name as (typeof FACTS)[number]];
+  return check === undefined ? namesProblem(name, value) : check(value, name);
 }
 
 /** Why a stored employer is not one: a name, and a whole address if any. */

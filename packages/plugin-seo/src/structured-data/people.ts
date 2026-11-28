@@ -209,6 +209,84 @@ function ownerFactsOf(
 }
 
 /**
+ * The founders the brand's own list gives, each marked as one; none where
+ * any People entry is marked as a founder, since the founders are one fact.
+ */
+function codeFoundersOf(
+  rules: Pick<StructuredDataRules, "brand">,
+  listed: readonly StructuredDataPerson[]
+): StructuredDataPerson[] {
+  if (listed.some(person => person.founder === true)) return [];
+  return (rules.brand.founders ?? []).map(founder => ({
+    ...founder,
+    founder: true,
+  }));
+}
+
+/** Whether `person` goes by the name `key` (a name as matched). */
+const goesBy = (person: StructuredDataPerson, key: string): boolean =>
+  namesOf(person).some(name => nameKey(name) === key);
+
+/**
+ * The entries of a person's site, placed: the one named as the brand is the
+ * person who runs the site, their own facts over the brand's and their page
+ * the site's home unless given, and is added from the brand's facts alone
+ * where nobody listed is.
+ */
+function ownedPeople(
+  people: readonly StructuredDataPerson[],
+  brand: StructuredDataBrand,
+  ownerName: string,
+  origin: string
+): StructuredDataPerson[] {
+  const key = nameKey(ownerName);
+  const facts = ownerFactsOf(brand, ownerName, `${origin}/`, origin);
+  const all = people.map(each =>
+    placed(
+      goesBy(each, key)
+        ? mergedPerson({ ...each, type: "person" }, facts)
+        : each,
+      origin
+    )
+  );
+  return all.some(each => goesBy(each, key)) ? all : [facts, ...all];
+}
+
+/** The entries by their page's address and by each name, the first winning. */
+function indexesOf(entries: readonly PersonEntry[]): {
+  byPage: Map<string, PersonEntry>;
+  byName: Map<string, PersonEntry>;
+} {
+  const byPage = new Map<string, PersonEntry>();
+  const byName = new Map<string, PersonEntry>();
+  for (const entry of entries) {
+    const page =
+      entry.person.url === undefined ? undefined : addressKey(entry.person.url);
+    if (page !== undefined && !byPage.has(page)) byPage.set(page, entry);
+    for (const name of namesOf(entry.person)) {
+      if (!byName.has(nameKey(name))) byName.set(nameKey(name), entry);
+    }
+  }
+  return { byPage, byName };
+}
+
+/**
+ * On an organisation's site, the entry a name that is the brand's stands for:
+ * the site's own organisation, whose node the site already writes.
+ */
+function siteEntryOf(
+  ownerName: string | undefined,
+  organizationId: string | undefined
+): PersonEntry | undefined {
+  if (organizationId === undefined || ownerName === undefined) return undefined;
+  return {
+    id: organizationId,
+    person: { name: ownerName, type: "organization" },
+    site: true,
+  };
+}
+
+/**
  * The site's People for one page's graph: its entries with their `@id`s,
  * its founders and, on a person's site, the person who runs it.
  *
@@ -223,78 +301,33 @@ export function peopleOf(
   ownerName: string | undefined,
   organizationId: string | undefined
 ): People {
-  const home = `${origin}/`;
   const listed = rules.people ?? [];
-  const flagged = listed.filter(person => person.founder === true);
-  // The founders are one fact: the People marked as founders, else the
-  // brand's own list, each the People entry of the same person where listed.
-  const codeFounders =
-    flagged.length > 0
-      ? []
-      : (rules.brand.founders ?? []).map(founder => ({
-          ...founder,
-          founder: true,
-        }));
-  const person = rules.brand.kind === "person" && ownerName !== undefined;
+  const people = merged([...listed, ...codeFoundersOf(rules, listed)]);
+  const personal = rules.brand.kind === "person" && ownerName !== undefined;
+  const entries = identified(
+    personal
+      ? ownedPeople(people, rules.brand, ownerName, origin)
+      : people.map(each => placed(each, origin)),
+    `${origin}/`
+  );
+  const { byPage, byName } = indexesOf(entries);
   const ownerKey = ownerName === undefined ? undefined : nameKey(ownerName);
-  const all = merged([...listed, ...codeFounders]).map(each => {
-    if (!person || ownerKey === undefined) return placed(each, origin);
-    // The entry named as the brand is the person who runs the site: their
-    // own facts over the brand's, their page the site's home unless given.
-    const owns = namesOf(each).some(name => nameKey(name) === ownerKey);
-    return owns
-      ? placed(
-          mergedPerson(
-            { ...each, type: "person" },
-            ownerFactsOf(rules.brand, ownerName, home, origin)
-          ),
-          origin
-        )
-      : placed(each, origin);
-  });
-  if (
-    person &&
-    ownerKey !== undefined &&
-    !all.some(each => namesOf(each).some(name => nameKey(name) === ownerKey))
-  ) {
-    all.unshift(ownerFactsOf(rules.brand, ownerName, home, origin));
-  }
-  const entries = identified(all, home);
-  const byPage = new Map<string, PersonEntry>();
-  const byName = new Map<string, PersonEntry>();
-  for (const entry of entries) {
-    const page =
-      entry.person.url === undefined ? undefined : addressKey(entry.person.url);
-    if (page !== undefined && !byPage.has(page)) byPage.set(page, entry);
-    for (const name of namesOf(entry.person)) {
-      if (!byName.has(nameKey(name))) byName.set(nameKey(name), entry);
-    }
-  }
-  const owner = ownerKey === undefined ? undefined : byName.get(ownerKey);
-  // On an organisation's site, a name that is the brand's is the site's own
-  // organisation, whose node the site already writes.
-  const site: PersonEntry | undefined =
-    !person && organizationId !== undefined && ownerName !== undefined
-      ? {
-          id: organizationId,
-          person: { name: ownerName, type: "organization" },
-          site: true,
-        }
-      : undefined;
+  const site = personal ? undefined : siteEntryOf(ownerName, organizationId);
+  const owner = personal ? byName.get(nameKey(ownerName)) : undefined;
   return {
     match(named) {
       const page = named.url === undefined ? undefined : addressKey(named.url);
-      const byAddress = page === undefined ? undefined : byPage.get(page);
-      if (byAddress !== undefined) return byAddress;
       const key = nameKey(named.name);
-      const listedEntry = byName.get(key);
-      if (listedEntry !== undefined) return listedEntry;
-      return site !== undefined && key === ownerKey ? site : undefined;
+      return (
+        (page === undefined ? undefined : byPage.get(page)) ??
+        byName.get(key) ??
+        (key === ownerKey ? site : undefined)
+      );
     },
-    founders: person
+    founders: personal
       ? []
       : entries.filter(entry => entry.person.founder === true),
-    ...(person && owner !== undefined ? { owner } : {}),
+    ...(owner === undefined ? {} : { owner }),
   };
 }
 

@@ -438,6 +438,30 @@ function CodeProfiles({
   );
 }
 
+/** A person's site describes the person who runs it, not a company. */
+function isPersonalSite(
+  draft: SettingsDraft,
+  codeBrand: StructuredDataBrand
+): boolean {
+  return draft.siteKind === null
+    ? codeBrand.kind === "person"
+    : draft.siteKind === "person";
+}
+
+/** The Organization tab's words for a company's site and a person's. */
+const BRAND_WORDS = {
+  company: {
+    name: "The name Google shows for your company.",
+    logo: "Logo",
+    logoHelp: "Shown beside your pages in Google's results.",
+  },
+  person: {
+    name: "Your name, as Google shows it.",
+    logo: "Photo",
+    logoHelp: "A photo of you, shown with your profile.",
+  },
+} as const;
+
 /**
  * One record of facts about the organization behind the site. Where the
  * settings hold no value of their own for a fact, the site's code's is shown
@@ -458,10 +482,8 @@ export function BrandTab({
       ? (codeBrand.otherNames ?? []).join(", ")
       : undefined;
   const codeLogo = draft.logo === null ? codeBrand.logo?.url : undefined;
-  // A person's site describes the person who runs it, not a company.
-  const personal =
-    draft.siteKind === "person" ||
-    (draft.siteKind === null && codeBrand.kind === "person");
+  const personal = isPersonalSite(draft, codeBrand);
+  const words = BRAND_WORDS[personal ? "person" : "company"];
   return (
     <SettingsCard>
       <SettingsRowGroup
@@ -480,11 +502,7 @@ export function BrandTab({
       {personal ? <PersonalSiteNote draft={draft} codeName={codeName} /> : null}
       <TextRow
         label="Name"
-        description={
-          personal
-            ? "Your name, as Google shows it."
-            : "The name Google shows for your company."
-        }
+        description={words.name}
         value={draft.brandName}
         placeholder={codeName ?? draft.siteName}
         {...(codeName === undefined ? {} : { note: CODE_NOTE })}
@@ -502,12 +520,8 @@ export function BrandTab({
         }
       />
       <MediaChoice
-        label={personal ? "Photo" : "Logo"}
-        description={
-          personal
-            ? "A photo of you, shown with your profile."
-            : "Shown beside your pages in Google's results."
-        }
+        label={words.logo}
+        description={words.logoHelp}
         shape="square"
         value={draft.logo}
         onChange={logo => change(current => ({ ...current, logo }))}
@@ -765,6 +779,12 @@ export function isTabId(value: unknown): value is TabId {
   return TABS.some(tab => tab.id === value);
 }
 
+/** What is wrong with the People list, as the save bar says it. */
+function peopleProblemText(people: SettingsDraft["people"]): string | null {
+  const problem = peopleDraftProblem(people);
+  return problem === null ? null : `Fix People first: ${problem}`;
+}
+
 /** Any problem that stops the draft being saved, said beside Save. */
 export function draftProblem(
   draft: SettingsDraft,
@@ -792,9 +812,8 @@ export function draftProblem(
       return "Fix the social profile address first.";
     }
   }
-  const people = peopleDraftProblem(draft.people);
-  if (people !== null) return `Fix People first: ${people}`;
   return (
+    peopleProblemText(draft.people) ??
     brandDetailsDraftProblem(draft.brandDetails) ??
     verificationDraftProblem(draft.verificationCodes)
   );

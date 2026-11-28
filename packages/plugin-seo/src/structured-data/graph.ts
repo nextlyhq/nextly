@@ -1079,52 +1079,91 @@ function siteNodesOf(
 ): SiteNodes {
   const siteName = answer.social?.siteName ?? rules.brand.name;
   const brandName = brandNameOf(rules, answer);
-  const home = homeOf(origin);
-  const site: SiteNodes = { nodes: [] };
-  const { owner } = people;
-  if (owner !== undefined) {
-    site.ownerId = owner.id;
-    const described = personEntryNode(owner, undefined, {
-      ...(rules.brand.email === undefined ? {} : { email: rules.brand.email }),
-      ...(rules.brand.telephone === undefined
-        ? {}
-        : { telephone: rules.brand.telephone }),
-    });
-    if (described !== undefined) site.nodes.push(described);
-  } else if (brandName !== undefined) {
-    site.ownerId = `${home}#organization`;
-    site.nodes.push(
-      organizationNode(rules, brandName, site.ownerId, origin, people)
-    );
-    const organization = ref(site.ownerId);
-    for (const founder of people.founders) {
-      const described = personEntryNode(founder, organization);
-      if (described !== undefined) site.nodes.push(described);
-    }
-  }
+  const site = ownerNodesOf(rules, brandName, origin, people);
   if (siteName !== undefined) {
     site.siteName = siteName;
-    site.websiteId = `${home}#website`;
-    // The brand's other names are the site's too where the site is named
-    // for the brand, which is what Google reads a site's name from.
-    const otherNames =
-      brandName?.toLowerCase() === siteName.toLowerCase()
-        ? [...(rules.brand.otherNames ?? [])]
-        : [];
+    site.websiteId = `${homeOf(origin)}#website`;
     site.nodes.push(
-      node({
-        "@type": "WebSite",
-        "@id": site.websiteId,
-        url: home,
-        name: siteName,
-        alternateName: otherNames.length > 0 ? otherNames : undefined,
-        description: rules.brand.description,
-        publisher: ref(site.ownerId),
-        inLanguage: language,
-      })
+      websiteNodeOf(rules, { siteName, brandName, origin, language }, site)
     );
   }
   return site;
+}
+
+/**
+ * Whoever runs the site, described: the person who runs a person's site,
+ * else the brand's organisation with its founders beside it, else nobody.
+ */
+function ownerNodesOf(
+  rules: StructuredDataRules,
+  brandName: string | undefined,
+  origin: string,
+  people: People
+): SiteNodes {
+  const { owner } = people;
+  if (owner !== undefined) {
+    const described = personEntryNode(owner, undefined, contactOf(rules.brand));
+    return {
+      ownerId: owner.id,
+      nodes: described === undefined ? [] : [described],
+    };
+  }
+  if (brandName === undefined) return { nodes: [] };
+  const ownerId = `${homeOf(origin)}#organization`;
+  const organization = ref(ownerId);
+  const founders = people.founders
+    .map(founder => personEntryNode(founder, organization))
+    .filter(
+      (described): described is StructuredDataNode => described !== undefined
+    );
+  return {
+    ownerId,
+    nodes: [
+      organizationNode(rules, brandName, ownerId, origin, people),
+      ...founders,
+    ],
+  };
+}
+
+/** The brand's email and telephone, where it gives them. */
+function contactOf(brand: StructuredDataRules["brand"]): {
+  email?: string;
+  telephone?: string;
+} {
+  return {
+    ...(brand.email === undefined ? {} : { email: brand.email }),
+    ...(brand.telephone === undefined ? {} : { telephone: brand.telephone }),
+  };
+}
+
+/** The website, published by whoever runs the site. */
+function websiteNodeOf(
+  rules: StructuredDataRules,
+  named: {
+    siteName: string;
+    brandName: string | undefined;
+    origin: string;
+    language: string | undefined;
+  },
+  site: SiteNodes
+): StructuredDataNode {
+  const { siteName, brandName, origin, language } = named;
+  // The brand's other names are the site's too where the site is named
+  // for the brand, which is what Google reads a site's name from.
+  const otherNames =
+    brandName?.toLowerCase() === siteName.toLowerCase()
+      ? [...(rules.brand.otherNames ?? [])]
+      : [];
+  return node({
+    "@type": "WebSite",
+    "@id": site.websiteId,
+    url: homeOf(origin),
+    name: siteName,
+    alternateName: otherNames.length > 0 ? otherNames : undefined,
+    description: rules.brand.description,
+    publisher: ref(site.ownerId),
+    inLanguage: language,
+  });
 }
 
 /** Where a page is kept: its path from the site's root and its language. */
