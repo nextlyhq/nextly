@@ -390,26 +390,34 @@ const personRead: DetailReader = async (facts, read) => {
  * page names nobody or is the person's own page, the person who runs it.
  */
 const profileSubjectRead: DetailReader = async (facts, read) => {
-  // The owner's own page made a profile is about them, unless its content
-  // type maps whom it is about: a field named like a person only by chance,
-  // such as a page's own `name`, is not read as one.
-  if (facts.ownersPage === true && facts.mapping.person === undefined) {
-    return ref(facts.people.owner?.id);
-  }
+  if (aboutTheOwner(facts)) return ref(facts.people.owner?.id);
   const named = await namedOf(facts.ctx, facts.input, read, facts.origin);
-  if (named !== undefined) {
-    const page =
-      named.url === undefined && facts.answer.canonical !== undefined
-        ? absolute(facts.answer.canonical, facts.origin)
-        : undefined;
-    return namedValue(
-      facts,
-      page === undefined ? named : { ...named, url: page }
-    );
-  }
+  if (named !== undefined) return namedValue(facts, atThisPage(facts, named));
   if (!empty(read.value)) return undefined;
   return ref(facts.people.owner?.id);
 };
+
+/**
+ * Whether a profile page is about the person who runs a person's site: their
+ * own page made a profile is, unless its content type maps whom it is about.
+ * A field named like a person only by chance, such as a page's own `name`,
+ * is not read as one there.
+ */
+const aboutTheOwner = (
+  facts: Pick<PageFacts, "ownersPage" | "mapping">
+): boolean => facts.ownersPage === true && facts.mapping.person === undefined;
+
+/**
+ * A profile's subject given the page's own address where nothing else gives
+ * them one, so they go by the `@id` a post naming them by their entry gives.
+ */
+function atThisPage(facts: PageFacts, named: Named): Named {
+  if (named.url !== undefined || facts.answer.canonical === undefined) {
+    return named;
+  }
+  const page = absolute(facts.answer.canonical, facts.origin);
+  return page === undefined ? named : { ...named, url: page };
+}
 
 /** Whether a value holds nothing at all: absent, blank or an empty list. */
 function empty(value: unknown): boolean {
