@@ -20,11 +20,35 @@ npx nextly migrate
 
 Commit the migration it writes. Every database the project deploys to must have its field groups moved with `nextly migrate:field-groups --apply --backup-confirmed` before it applies that migration.
 
+### A history that records no field group
+
+A history whose snapshots hold no field-group table, and record no field group, says nothing about which names it is on: it reads as the legacy names only because every earlier release wrote that by default. A database on the current names holds everything it describes, so `nextly migrate` applies its files there, an upgrade's included, and this refusal does not stop them. That is the case of a site that moved its storage and later removed its last field group, and of a database a first start set up on the current names, as it sets up every new one.
+
+Such a history is refused only at a pending migration that plans field groups under the legacy names, which the refusal names. Where no database has applied that file yet, write it again after the move:
+
+```bash
+# Delete the named migration and its snapshot in meta/, then:
+npx nextly migrate:create --field-group-names=current
+npx nextly migrate:create --name <name>
+npx nextly migrate
+```
+
+The move is written from the history as it stands, so it can be written while the config has other changes to migrate; the second command writes them, on the current names.
+
 ## Example
 
 ```text
 ✗ This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
   Why:  Every file after this point would be planned against tables the database no longer has.
   Next: No file was applied. Run `nextly migrate:create --field-group-names=current`, then `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)
+```
+
+A pending migration that plans field groups on a history that recorded none:
+
+```text
+✗ This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the pending migration 20261128_101500_000_add_card.sql plans field groups under the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Applied, it would create tables and registry rows the database does not keep its field groups under.
+  Next: No file was applied. If no database has applied 20261128_101500_000_add_card.sql, delete it with its snapshot, run `nextly migrate:create --field-group-names=current`, then write it again with `nextly migrate:create --name <name>` and run `nextly migrate`.
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)
 ```
