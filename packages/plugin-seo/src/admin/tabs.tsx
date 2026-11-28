@@ -41,6 +41,8 @@ import {
 } from "./choices";
 import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
+import { isPersonalSite, ownerNameOf } from "./people";
+import { otherNamesOf, peopleDraftProblem } from "./people-draft";
 import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
   networkOf,
@@ -437,6 +439,20 @@ function CodeProfiles({
   );
 }
 
+/** The Organization tab's words for a company's site and a person's. */
+const BRAND_WORDS = {
+  company: {
+    name: "The name Google shows for your company.",
+    logo: "Logo",
+    logoHelp: "Shown beside your pages in Google's results.",
+  },
+  person: {
+    name: "Your name, as Google shows it.",
+    logo: "Photo",
+    logoHelp: "A photo of you, shown with your profile.",
+  },
+} as const;
+
 /**
  * One record of facts about the organization behind the site. Where the
  * settings hold no value of their own for a fact, the site's code's is shown
@@ -457,6 +473,8 @@ export function BrandTab({
       ? (codeBrand.otherNames ?? []).join(", ")
       : undefined;
   const codeLogo = draft.logo === null ? codeBrand.logo?.url : undefined;
+  const personal = isPersonalSite(draft, codeBrand);
+  const words = BRAND_WORDS[personal ? "person" : "company"];
   return (
     <SettingsCard>
       <SettingsRowGroup
@@ -472,9 +490,12 @@ export function BrandTab({
           onChange={siteKind => change(current => ({ ...current, siteKind }))}
         />
       </SettingsRowGroup>
+      {personal ? (
+        <PersonalSiteNote draft={draft} codeBrand={codeBrand} />
+      ) : null}
       <TextRow
         label="Name"
-        description="The name Google shows for your company."
+        description={words.name}
         value={draft.brandName}
         placeholder={codeName ?? draft.siteName}
         {...(codeName === undefined ? {} : { note: CODE_NOTE })}
@@ -492,8 +513,8 @@ export function BrandTab({
         }
       />
       <MediaChoice
-        label="Logo"
-        description="Shown beside your pages in Google's results."
+        label={words.logo}
+        description={words.logoHelp}
         shape="square"
         value={draft.logo}
         onChange={logo => change(current => ({ ...current, logo }))}
@@ -508,8 +529,48 @@ export function BrandTab({
         change={change}
         codeProfiles={codeBrand.profiles ?? []}
       />
-      <BrandDetailRows draft={draft} change={change} codeBrand={codeBrand} />
+      <BrandDetailRows
+        draft={draft}
+        change={change}
+        codeBrand={codeBrand}
+        personal={personal}
+      />
     </SettingsCard>
+  );
+}
+
+/**
+ * What a person's site says above its facts: pages describe the person who
+ * runs it, named by the name below, and their entry on People, the one of
+ * the same name, adds their job title, workplace and topics.
+ */
+function PersonalSiteNote({
+  draft,
+  codeBrand,
+}: {
+  draft: SettingsDraft;
+  codeBrand: StructuredDataBrand;
+}): JSX.Element {
+  const name = ownerNameOf(draft, codeBrand);
+  const key = name.toLowerCase().replace(/\s+/g, " ");
+  const entry = draft.people.find(person =>
+    [person.name, ...otherNamesOf(person.otherNames)].some(
+      each => each.trim().toLowerCase().replace(/\s+/g, " ") === key
+    )
+  );
+  return (
+    <SettingsRowGroup
+      label="Who runs the site"
+      description="You publish this site, and the home page is your profile."
+    >
+      <ControlNote>
+        {name === ""
+          ? "Give your name below, and add yourself on People under the same name for your job title and workplace."
+          : entry === undefined
+            ? `Pages describe ${name}. Add ${name} on People to give your job title, workplace and topics.`
+            : `Pages describe ${name}, with the job title, workplace and topics given on People.`}
+      </ControlNote>
+    </SettingsRowGroup>
   );
 }
 
@@ -699,6 +760,7 @@ export const TABS = [
   { id: "types", label: "Content types" },
   { id: "images", label: "Share images" },
   { id: "brand", label: "Organization" },
+  { id: "people", label: "People" },
   { id: "crawlers", label: "Search engines and AI" },
   { id: "connections", label: "Connections" },
 ] as const;
@@ -708,6 +770,12 @@ export type TabId = (typeof TABS)[number]["id"];
 /** Whether a value names one of the tabs. */
 export function isTabId(value: unknown): value is TabId {
   return TABS.some(tab => tab.id === value);
+}
+
+/** What is wrong with the People list, as the save bar says it. */
+function peopleProblemText(people: SettingsDraft["people"]): string | null {
+  const problem = peopleDraftProblem(people);
+  return problem === null ? null : `Fix People first: ${problem}`;
 }
 
 /** Any problem that stops the draft being saved, said beside Save. */
@@ -738,6 +806,7 @@ export function draftProblem(
     }
   }
   return (
+    peopleProblemText(draft.people) ??
     brandDetailsDraftProblem(draft.brandDetails) ??
     verificationDraftProblem(draft.verificationCodes)
   );

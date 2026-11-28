@@ -9,6 +9,11 @@ exports[`whole graphs of a site's pages > keeps the shape of a blog post 1`] = `
       "Nextly CMS",
     ],
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/about#person",
+      },
+    ],
     "logo": {
       "@type": "ImageObject",
       "url": "https://nextlyhq.com/nextly-logo-light.svg",
@@ -19,6 +24,19 @@ exports[`whole graphs of a site's pages > keeps the shape of a blog post 1`] = `
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",
@@ -126,6 +144,11 @@ exports[`whole graphs of a site's pages > keeps the shape of a list of posts 1`]
       "Nextly CMS",
     ],
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/about#person",
+      },
+    ],
     "logo": {
       "@type": "ImageObject",
       "url": "https://nextlyhq.com/nextly-logo-light.svg",
@@ -136,6 +159,19 @@ exports[`whole graphs of a site's pages > keeps the shape of a list of posts 1`]
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",
@@ -224,7 +260,7 @@ exports[`whole graphs of a site's pages > keeps the shape of the About page 1`] 
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
     "founder": [
       {
-        "@id": "https://nextlyhq.com/#founder",
+        "@id": "https://nextlyhq.com/about#person",
       },
     ],
     "logo": {
@@ -237,6 +273,19 @@ exports[`whole graphs of a site's pages > keeps the shape of the About page 1`] 
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",
@@ -295,19 +344,6 @@ exports[`whole graphs of a site's pages > keeps the shape of the About page 1`] 
       },
     ],
   },
-  {
-    "@id": "https://nextlyhq.com/#founder",
-    "@type": "Person",
-    "jobTitle": "Founder",
-    "name": "Sara Khan",
-    "sameAs": [
-      "https://github.com/sara-khan",
-    ],
-    "url": "https://nextlyhq.com/about",
-    "worksFor": {
-      "@id": "https://nextlyhq.com/#organization",
-    },
-  },
 ]
 `;
 
@@ -320,6 +356,11 @@ exports[`whole graphs of a site's pages > keeps the shape of the Contact page 1`
       "Nextly CMS",
     ],
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/about#person",
+      },
+    ],
     "logo": {
       "@type": "ImageObject",
       "url": "https://nextlyhq.com/nextly-logo-light.svg",
@@ -330,6 +371,19 @@ exports[`whole graphs of a site's pages > keeps the shape of the Contact page 1`
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",
@@ -397,6 +451,11 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
       "Nextly CMS",
     ],
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/about#person",
+      },
+    ],
     "logo": {
       "@type": "ImageObject",
       "url": "https://nextlyhq.com/nextly-logo-light.svg",
@@ -407,6 +466,19 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",
@@ -482,6 +554,11 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page with 
       "Nextly CMS",
     ],
     "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/about#person",
+      },
+    ],
     "logo": {
       "@type": "ImageObject",
       "url": "https://nextlyhq.com/nextly-logo-light.svg",
@@ -492,6 +569,19 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page with 
       "https://x.com/nextlyhq",
     ],
     "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#person",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
   },
   {
     "@id": "https://nextlyhq.com/#website",

@@ -221,6 +221,9 @@ export function codeBrandOf(value: unknown): StructuredDataBrand {
   const parentName = parent === undefined ? undefined : textOf(parent.name);
   return {
     ...withText("name", value.name),
+    ...(value.kind === "person" || value.kind === "organization"
+      ? { kind: value.kind }
+      : {}),
     ...(textsOf(value.otherNames).length > 0
       ? { otherNames: textsOf(value.otherNames) }
       : {}),

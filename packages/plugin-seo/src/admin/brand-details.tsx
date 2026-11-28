@@ -68,6 +68,12 @@ export interface BrandRowsProps {
   change: (next: (draft: SettingsDraft) => SettingsDraft) => void;
   /** The brand facts the site's code gives, shown where the settings hold none. */
   codeBrand: StructuredDataBrand;
+  /**
+   * Whether the site is a person's: its facts are the person's, so the
+   * facts only a company has (when it was founded, its owner, its founders)
+   * are not asked for.
+   */
+  personal?: boolean;
 }
 
 /** One text fact's row: typed here, else the code's value shown in it. */
@@ -314,7 +320,7 @@ function CodeOnlyRows({
       {founders.length === 0 ? null : (
         <TextRow
           label="Founders"
-          description="Who founded the organization, described on its About page."
+          description="Who founded the organization, named on every page. Founders marked on People are named instead."
           value={founders.join("; ")}
           readOnly
           note={CODE_ONLY_NOTE}
@@ -344,14 +350,21 @@ function CodeOnlyRows({
 }
 
 /** The Organization tab's rows after the profiles. */
-export function BrandDetailRows(props: BrandRowsProps): JSX.Element {
+export function BrandDetailRows({
+  personal = false,
+  ...props
+}: BrandRowsProps): JSX.Element {
   return (
     <>
       <FactRow
         {...props}
         fact="description"
-        label="Description"
-        description="What the organization is, in a sentence or two."
+        label={personal ? "Short bio" : "Description"}
+        description={
+          personal
+            ? "Who you are, in a sentence or two."
+            : "What the organization is, in a sentence or two."
+        }
         placeholder={props.draft.description}
         multiline
       />
@@ -369,6 +382,15 @@ export function BrandDetailRows(props: BrandRowsProps): JSX.Element {
         description="With the country code, such as +1 555 0100."
         mono
       />
+      {personal ? null : <CompanyRows {...props} />}
+    </>
+  );
+}
+
+/** The rows only a company has: its contact points, founding and owner. */
+function CompanyRows(props: BrandRowsProps): JSX.Element {
+  return (
+    <>
       <ContactPoints {...props} />
       <FactRow
         {...props}

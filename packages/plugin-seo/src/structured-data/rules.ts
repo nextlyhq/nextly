@@ -17,6 +17,7 @@ import {
 import { z } from "zod";
 
 import type { TitleFields } from "../resolver/own-name";
+import { peopleProblem, storedPeopleOf } from "../settings/people-stored";
 
 import {
   DETAIL_LABELS,
@@ -61,11 +62,37 @@ export interface StructuredDataContactPoint {
   availableLanguage?: readonly string[];
 }
 
-/** A person the brand names, such as its founder. */
+/** The organisation a person works for, as their entry names it. */
+export interface StructuredDataEmployer {
+  name: string;
+  /** Its home page, absolute. */
+  url?: string;
+}
+
+/**
+ * A person the site names, such as its founder or one of its authors: one
+ * entry of the site's People, described as one node wherever the site names
+ * them. A team account, such as "Editorial team", is an entry of type
+ * `"organization"`.
+ */
 export interface StructuredDataPerson {
   name: string;
+  /**
+   * Other names they go by, such as a short form of their name: an author
+   * named by one of them is the same person.
+   */
+  otherNames?: readonly string[];
   /** Their own page, on the site or elsewhere. */
   url?: string;
+  /**
+   * The identifier their node goes by, an absolute address such as
+   * `https://example.com/#person`: the same on every site the person
+   * appears on, so each names one person. `<url>#person` (or
+   * `#organization`) by default, else one made from their name on this site.
+   */
+  id?: string;
+  /** A person (the default), or a team or company credited as one. */
+  type?: "person" | "organization";
   jobTitle?: string;
   description?: string;
   /** A picture of them, from the site's root or absolute. */
@@ -74,6 +101,10 @@ export interface StructuredDataPerson {
   sameAs?: readonly string[];
   /** What they are known for, such as `TypeScript`. */
   knowsAbout?: readonly string[];
+  /** The organisation they work for, where it is not the site's own. */
+  worksFor?: StructuredDataEmployer;
+  /** Whether they founded the organisation that owns the site. */
+  founder?: boolean;
 }
 
 /** The organisation that owns the brand, where it is another one. */
@@ -105,13 +136,27 @@ export interface StructuredDataBrand {
   /** When it was founded, as ISO 8601 (`2020`, `2020-03-01`). */
   foundingDate?: string;
   parentOrganization?: StructuredDataParentOrganization;
-  /** Who founded it: described on the site's About page. */
+  /**
+   * Who founded it, named as its founders on every page. A founder named
+   * like an entry of the site's People is that entry.
+   */
   founders?: readonly StructuredDataPerson[];
+  /**
+   * Who runs the site: an organisation (the default), or a person, whose
+   * personal site it is. A person's site is published by that person, named
+   * by the brand's name and described by its facts, with no organisation.
+   */
+  kind?: StructuredDataOwnerKind;
 }
 
+/** Who runs a site: an organisation, or one person. */
+export type StructuredDataOwnerKind = "organization" | "person";
+
 /**
- * Who an article is credited to where its page names nobody: the brand
- * itself (`"organization"`), or a person, such as `{ name: "Editorial team" }`.
+ * Who an article is credited to where its page names nobody: whoever runs
+ * the site (`"organization"`, the person on a person's site), or a person,
+ * such as `{ name: "Editorial team" }`, who is the entry of the site's
+ * People of that name where there is one.
  */
 export type StructuredDataDefaultAuthor =
   | "organization"
@@ -136,6 +181,13 @@ export interface StructuredDataRules {
    */
   origin?: string;
   brand: StructuredDataBrand;
+  /**
+   * The people (and teams) the site names, each described as one node with
+   * one `@id` wherever the site names them: as a founder, the default
+   * author, the author or subject of a page matched by their page's address
+   * or by name.
+   */
+  people?: readonly StructuredDataPerson[];
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   types: Readonly<Record<string, StructuredDataTypeRule>>;
   /** Who an article is credited to where its page names nobody. */
@@ -165,6 +217,12 @@ export interface StructuredDataOptions {
    * from here.
    */
   brand?: StructuredDataBrand;
+  /**
+   * The people (and teams) the site names, each one node with one `@id`
+   * on every page that names them. The SEO settings' People, once they hold
+   * any, are read instead: the list is one fact.
+   */
+  people?: readonly StructuredDataPerson[];
   /** Each content type's choice and mapping, until the SEO settings hold them. */
   types?: Record<string, StructuredDataTypeRule>;
   /**
@@ -248,14 +306,11 @@ const isoDate = z
 /** An address from the site's root, or an absolute one. */
 const pageAddress = z.union([webAddress, z.string().regex(/^\/(?!\/)/)]);
 
-const personSchema = z.strictObject({
+/** Who an article is credited to, as the options name a person. */
+const authorPersonSchema = z.strictObject({
   name: filled,
   url: pageAddress.optional(),
   jobTitle: filled.optional(),
-  description: filled.optional(),
-  image: pageAddress.optional(),
-  sameAs: z.array(webAddress).optional(),
-  knowsAbout: z.array(filled).optional(),
 });
 
 /**
@@ -288,12 +343,14 @@ const brandExtrasSchema = z.object({
       sameAs: z.array(webAddress).optional(),
     })
     .optional(),
-  founders: z.array(personSchema).optional(),
+  // Checked as People are, by `peopleProblem`, below.
+  founders: z.array(z.unknown()).optional(),
+  kind: z.enum(["organization", "person"]).optional(),
 });
 
 const defaultAuthorSchema = z.union([
   z.literal("organization"),
-  personSchema.pick({ name: true, url: true, jobTitle: true }),
+  authorPersonSchema,
 ]);
 
 const breadcrumbsSchema = z.strictObject({
@@ -317,6 +374,20 @@ function checkedWith<T>(
 }
 
 /**
+ * A list of people the options give, checked by the rule the SEO settings
+ * keep theirs to, or a refusal naming the person and the fact.
+ */
+function checkedPeople(
+  where: string,
+  people: unknown
+): StructuredDataPerson[] | undefined {
+  if (people === undefined) return undefined;
+  const problem = peopleProblem(people);
+  if (problem !== null) refuse(`${where}: ${problem}`);
+  return storedPeopleOf(people);
+}
+
+/**
  * The structured data options as given, checked when the plugin is created
  * so a mistyped fact fails at start rather than writing markup Google
  * rejects.
@@ -326,8 +397,11 @@ function checkedOptions(
 ): Omit<StructuredDataRules, "origin"> {
   const brand = options?.brand ?? {};
   checkedWith("structuredData.brand", brandExtrasSchema, brand);
+  checkedPeople("structuredData.brand.founders", brand.founders);
+  const people = checkedPeople("structuredData.people", options?.people);
   return {
     brand,
+    ...(people === undefined ? {} : { people }),
     types: checkedTypeRules(options?.types),
     ...(options?.defaultAuthor === undefined
       ? {}

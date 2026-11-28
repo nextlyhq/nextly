@@ -700,6 +700,192 @@ describe("a brand fact", () => {
   });
 });
 
+describe("the People tab", () => {
+  it("adds a person, saved as one entry of the site's People", async () => {
+    serving({
+      _rev: "5",
+      siteName: "Rext AI",
+      productionAddresses: ["https://rext.ai"],
+      setupStep: 3,
+    });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    fireEvent.click(screen.getByRole("button", { name: "Add a person" }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Mobeen Abdullah" },
+    });
+    fireEvent.change(screen.getByLabelText("Their page"), {
+      target: { value: "https://mobeenabdullah.com/" },
+    });
+    // The identifier pages give them, shown until another is pasted.
+    expect(
+      screen.getByLabelText("Identifier").getAttribute("placeholder")
+    ).toBe("https://mobeenabdullah.com/#person");
+    fireEvent.change(screen.getByLabelText("Profiles"), {
+      target: {
+        value: "https://github.com/mobeenabdullah\n https://x.com/mobeen \n",
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Works for"), {
+      target: { value: "Revnix" },
+    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Mobeen Abdullah is a founder" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        people: [
+          {
+            name: "Mobeen Abdullah",
+            url: "https://mobeenabdullah.com/",
+            sameAs: [
+              "https://github.com/mobeenabdullah",
+              "https://x.com/mobeen",
+            ],
+            worksFor: { name: "Revnix" },
+            founder: true,
+          },
+        ],
+        _rev: "5",
+      },
+    ]);
+  });
+
+  it("shows two people sharing a page the identifiers pages give them, one from each name", () => {
+    serving({
+      _rev: "5",
+      siteName: "Example Studio",
+      productionAddresses: ["https://example.com"],
+      people: [
+        { name: "Sara Khan", url: "/about" },
+        { name: "Ali Raza", url: "/about" },
+      ],
+      setupStep: 3,
+    });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    expect(
+      screen
+        .getAllByLabelText("Identifier")
+        .map(field => field.getAttribute("placeholder"))
+    ).toEqual([
+      "https://example.com/#person-sara-khan",
+      "https://example.com/#person-ali-raza",
+    ]);
+  });
+
+  it("says how the identifier is made where no address can be shown yet", () => {
+    serving({ _rev: "5", siteName: "Example Studio", setupStep: 3 });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    fireEvent.click(screen.getByRole("button", { name: "Add a person" }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Sam Rivera" },
+    });
+
+    // No production address and no page of their own: nothing to show.
+    expect(
+      screen.getByLabelText("Identifier").getAttribute("placeholder")
+    ).toBeNull();
+    expect(screen.queryByText(/Empty uses the address shown/)).toBeNull();
+    expect(
+      screen.getByText(/Empty uses one made from their page, else their name/)
+    ).toBeTruthy();
+  });
+
+  it("holds the save up for a profile that is not an address, naming the person", () => {
+    serving({
+      _rev: "5",
+      setupStep: 3,
+      people: [{ name: "Sara Khan" }],
+    });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    fireEvent.change(screen.getByLabelText("Profiles"), {
+      target: { value: "github.com/sara" },
+    });
+
+    expect(
+      screen.getAllByText(/Sara Khan: profiles must each be a whole address/)
+        .length
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true
+    );
+  });
+
+  it("shows the code's People read-only until the settings list their own, then copies them in", async () => {
+    serving({ _rev: "6", setupStep: 3 });
+    vi.mocked(usePluginClientConfig).mockReturnValue({
+      people: [{ name: "Sara Khan", url: "/about", jobTitle: "Founder" }],
+    });
+    try {
+      render(<SeoSettingsPage />);
+      openTab("People");
+      const shown = screen.getByLabelText("Sara Khan");
+      expect(shown).toHaveProperty("readOnly", true);
+      expect(shown).toHaveProperty("value", "/about");
+
+      fireEvent.click(screen.getByRole("button", { name: "Add a person" }));
+      fireEvent.change(screen.getAllByLabelText("Name")[1] as HTMLElement, {
+        target: { value: "Ali Raza" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await settle();
+
+      expect(sent).toEqual([
+        {
+          people: [
+            { name: "Sara Khan", url: "/about", jobTitle: "Founder" },
+            { name: "Ali Raza" },
+          ],
+          _rev: "6",
+        },
+      ]);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+});
+
+describe("a person's site", () => {
+  it("describes the person on the Organization tab, and asks for no company facts", async () => {
+    serving({
+      _rev: "7",
+      siteName: "Mobeen Abdullah",
+      brandName: "Mobeen Abdullah",
+      setupStep: 3,
+      people: [{ name: "Mobeen Abdullah", jobTitle: "Founder" }],
+    });
+    render(<SeoSettingsPage />);
+
+    openTab("Organization");
+    expect(screen.getByLabelText("Founded")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /A person/ }));
+
+    expect(
+      screen.getByText(
+        "Pages describe Mobeen Abdullah, with the job title, workplace and topics given on People."
+      )
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Short bio")).toBeTruthy();
+    expect(screen.queryByLabelText("Founded")).toBeNull();
+    expect(screen.queryByLabelText("Parent organization")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([{ siteKind: "person", _rev: "7" }]);
+  });
+});
+
 describe("what llms.txt says, and llms-full.txt", () => {
   it("are set on Search engines and AI and saved together", async () => {
     serving({ _rev: "4", siteName: "Acme", llmsTxt: true, setupStep: 3 });
