@@ -1671,25 +1671,25 @@ than several of the same name. List them on **SEO › Settings › People**, or 
 ```ts
 seoPlugin({
   collections: ["posts", "authors"],
-  baseUrl: "https://rext.ai",
+  baseUrl: "https://example.com",
   structuredData: {
-    brand: { name: "Rext AI" },
+    brand: { name: "Example Studio" },
     people: [
       {
-        name: "Mobeen Abdullah",
-        otherNames: ["Mobeen"],
+        name: "Sam Rivera",
+        otherNames: ["Sam"],
         // The same identifier on every site this person appears on.
-        id: "https://mobeenabdullah.com/#person",
-        url: "https://mobeenabdullah.com/",
-        image: "https://mobeenabdullah.com/media/mobeen.jpg",
+        id: "https://samrivera.example/#person",
+        url: "https://samrivera.example/",
+        image: "https://samrivera.example/media/sam.jpg",
         jobTitle: "Founder",
-        sameAs: ["https://github.com/mobeenabdullah"],
+        sameAs: ["https://github.com/samrivera"],
         knowsAbout: ["TypeScript"],
-        worksFor: { name: "Revnix", url: "https://revnix.com" },
+        worksFor: { name: "Northwind", url: "https://northwind.example" },
         founder: true,
       },
       // A team account is described as an organisation.
-      { name: "Rext AI Team", type: "organization", url: "/team" },
+      { name: "Example Studio Team", type: "organization", url: "/team" },
     ],
   },
 });
