@@ -39,6 +39,22 @@ import { rulesFromOptions } from "../../structured-data/rules";
 import { llmsFullTxtOf } from "../ai-outputs";
 import { fullFileCuts } from "../full-file-cut";
 
+/** How many times the site's pages have been listed since last reset. */
+const listings = vi.hoisted(() => ({ count: 0 }));
+
+// Each listing is still made as the plugin makes it; the count is what shows
+// the preview lists the site once for its file and its groups.
+vi.mock("../listing", async importOriginal => {
+  const actual = await importOriginal<typeof import("../listing")>();
+  return {
+    ...actual,
+    listPages: (...args: Parameters<typeof actual.listPages>) => {
+      listings.count += 1;
+      return actual.listPages(...args);
+    },
+  };
+});
+
 const SITE = "https://acme.example";
 
 let current: TestNextly | undefined;
@@ -520,6 +536,7 @@ describe.each(getConfiguredTestDialects())(
       if (seoContext === undefined) throw new Error("no SEO plugin context");
       const readRules: ReadRules = (ctx, locale) => readSeoRules(ctx, locale);
 
+      listings.count = 0;
       const preview = await aiFilesPreview(
         seoContext,
         SITE,
@@ -533,6 +550,8 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(headings(preview.preview)).toContain("Writing");
       expect(preview.preview).not.toContain(`${SITE}/docs/start`);
+      // One listing of the site for the file and its groups.
+      expect(listings.count).toBe(1);
       // Every group is offered, the one left out too, by its own heading.
       expect(preview.groups).toEqual(
         expect.arrayContaining([

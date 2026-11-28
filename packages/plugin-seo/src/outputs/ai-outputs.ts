@@ -292,28 +292,18 @@ async function llmsPagesOf(
   config: AiOutputsConfig,
   rules: SiteRules,
   folder?: string
-): Promise<{ listed: GroupedPage[]; readRules: ReadRules }> {
+): Promise<{
+  listed: GroupedPage[];
+  groups: LlmsGroup[];
+  readRules: ReadRules;
+}> {
   const { pages, readRules } = await sitemapPagesOf(ctx, origin, config);
-  const { listed } = await llmsListOf(ctx, pages, rules.aiFiles);
+  const { listed, groups } = await llmsListOf(ctx, pages, rules.aiFiles);
   return {
     listed: folder === undefined ? listed : inFolderFiles(listed, folder),
+    groups,
     readRules,
   };
-}
-
-/**
- * The groups of pages llms.txt lists at `origin`, left out or not, as the
- * settings screen offers them, grouped by `files`: the choices as the
- * screen holds them.
- */
-export async function llmsGroupsOf(
-  ctx: PluginContext,
-  origin: string,
-  config: AiOutputsConfig,
-  files: AiFiles | undefined
-): Promise<LlmsGroup[]> {
-  const { pages } = await sitemapPagesOf(ctx, origin, config);
-  return (await llmsListOf(ctx, pages, files)).groups;
 }
 
 /** Each folder with files of its own, by its heading and its llms.txt's address. */
@@ -355,9 +345,26 @@ export async function llmsTxtOf(
   rules: SiteRules,
   folder?: string
 ): Promise<string | null> {
+  return (
+    (await llmsTxtWithGroups(ctx, origin, config, rules, folder))?.text ?? null
+  );
+}
+
+/**
+ * {@link llmsTxtOf}, with every group of pages the listing it was written
+ * from holds, left out or not, as the settings screen offers them: one
+ * listing for both, so the groups and the file always agree.
+ */
+export async function llmsTxtWithGroups(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig,
+  rules: SiteRules,
+  folder?: string
+): Promise<{ text: string; groups: LlmsGroup[] } | null> {
   if (rules.llmsTxt !== true) return null;
   if (folder !== undefined && !servesFolderFiles(rules, folder)) return null;
-  const { listed, readRules } = await llmsPagesOf(
+  const { listed, groups, readRules } = await llmsPagesOf(
     ctx,
     origin,
     config,
@@ -378,7 +385,7 @@ export async function llmsTxtOf(
         : { description: head.description }),
     };
   });
-  return llmsTxt({
+  const text = llmsTxt({
     ...fileHeadOf(origin, rules, folder),
     ...(rules.llmsFullTxt === true
       ? { fullTxt: new URL(fullTxtPath(folder), origin).href }
@@ -394,6 +401,7 @@ export async function llmsTxtOf(
       : { folder: true }),
     entries,
   });
+  return { text, groups };
 }
 
 /** Where llms-full.txt is served: the site's, or a folder's. */

@@ -14,11 +14,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
-import {
-  llmsGroupsOf,
-  llmsTxtOf,
-  type AiOutputsConfig,
-} from "../outputs/ai-outputs";
+import { llmsTxtWithGroups, type AiOutputsConfig } from "../outputs/ai-outputs";
 import { siteOriginFor } from "../outputs/site-origin";
 import { MANAGE_SEO_PERMISSION } from "../permissions";
 
@@ -69,15 +65,15 @@ export async function aiFilesPreview(
     (await siteOriginFor(requestOrigin, ctx, config)) ?? requestOrigin;
   const saved = await config.readRules(ctx, undefined);
   const { aiFiles: _saved, ...rules } = saved;
-  const file =
-    (await llmsTxtOf(ctx, origin, config, {
-      ...rules,
-      llmsTxt: true,
-      ...(aiFiles === undefined ? {} : { aiFiles }),
-    })) ?? "";
-  const lines = file.replace(/\n$/, "").split("\n");
+  // One listing for the file and its groups, so the two always agree.
+  const written = await llmsTxtWithGroups(ctx, origin, config, {
+    ...rules,
+    llmsTxt: true,
+    ...(aiFiles === undefined ? {} : { aiFiles }),
+  });
+  const lines = (written?.text ?? "").replace(/\n$/, "").split("\n");
   return {
-    groups: await llmsGroupsOf(ctx, origin, config, aiFiles),
+    groups: written?.groups ?? [],
     preview: lines.slice(0, PREVIEW_LINES).join("\n"),
     lines: lines.length,
   };
