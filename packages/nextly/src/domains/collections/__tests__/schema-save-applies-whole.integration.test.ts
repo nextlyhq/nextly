@@ -64,13 +64,17 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     ).executeQuery<T>(sql);
   }
 
+  // The table's columns in their table order. information_schema keeps no
+  // order of its own without ORDER BY: MySQL answered one read in table order
+  // and the next alphabetically, so comparing two reads of an unchanged table
+  // failed. pragma_table_info is already in table order.
   async function columnsOf(table: string): Promise<string[]> {
     const rows = await query<{ name: string }>(
       dialect === "mysql"
-        ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+        ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' ORDER BY ORDINAL_POSITION`
         : dialect === "sqlite"
           ? `SELECT name FROM pragma_table_info('${table}')`
-          : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+          : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' ORDER BY ordinal_position`
     );
     return rows.map(row => row.name);
   }
