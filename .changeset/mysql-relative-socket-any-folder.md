@@ -32,3 +32,5 @@
 A relative MySQL `socketPath` is read as this machine's database wherever the project folder is, on Windows and in a folder whose name has a space, and a new plugin's lint config adopts the experimental declaration check its own test uses, so a fresh plugin lints clean.
 
 A save that names an empty language on a site with languages is kept in the default language: it no longer fails with "Resource already exists" when it changes both a shared value and a translated one, as a field group's structure and its text.
+
+`nextly`'s published types no longer name `@nextlyhq/adapter-postgres`, so a project that does not install it type-checks.
