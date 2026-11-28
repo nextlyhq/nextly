@@ -9,6 +9,7 @@
  * @module admin/settings-draft
  */
 import { isRecord } from "../plain-values";
+import { aiFilesOf, storedAiFiles, type AiFiles } from "../settings/ai-files";
 import {
   AI_CRAWLER_CHOICES,
   largeImagePreviewsOn,
@@ -130,6 +131,12 @@ export interface SettingsDraft {
   llmsFullTxt: boolean;
   /** What the site tells AI tools in its own words, at the top of llms.txt. */
   llmsIntro: string;
+  /**
+   * How the files for AI tools are shaped: llms.txt's sections, the site's
+   * own sections of links, what llms-full.txt holds and how large it grows,
+   * the folders with files of their own and the fields left out of copies.
+   */
+  aiFiles: AiFiles;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
   /** The site's own robots.txt lines. */
@@ -336,6 +343,7 @@ export function draftOf(
     llmsTxt: stored.llmsTxt === true,
     llmsFullTxt: stored.llmsFullTxt === true,
     llmsIntro: text(stored.llmsIntro),
+    aiFiles: aiFilesOf(stored.aiFiles),
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),
@@ -647,6 +655,7 @@ function storedForm(
     robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
     brandDetails: storedBrandDetails(draft.brandDetails),
+    aiFiles: storedAiFiles(draft.aiFiles),
     people: storedPeople(draft.people),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())

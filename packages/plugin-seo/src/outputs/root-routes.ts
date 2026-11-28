@@ -16,6 +16,7 @@ import { feedXmlOf } from "../feeds/feed";
 import type { CheckedFeed } from "../feeds/options";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
+import { servesFolderFiles } from "../settings/ai-files";
 import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
@@ -271,18 +272,47 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       "file of every page",
       config,
       rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
-      llmsFullTxtOf
+      (ctx, origin, outputs, rules) =>
+        llmsFullTxtOf(ctx, origin, outputs, rules)
+    ),
+    // A folder's own files, at the addresses `withNextly` sends
+    // `/<folder>/llms.txt` and `/<folder>/llms-full.txt` to.
+    llmsRoute(
+      `${LLMS_FILE_PREFIX}/:section/llms.txt`,
+      "list of pages",
+      config,
+      rules => rules.llmsTxt === true,
+      (ctx, origin, outputs, rules, folder) =>
+        llmsTxtOf(ctx, origin, outputs, rules, folder)
+    ),
+    llmsRoute(
+      `${LLMS_FILE_PREFIX}/:section/llms-full.txt`,
+      "file of every page",
+      config,
+      rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
+      (ctx, origin, outputs, rules, folder) =>
+        llmsFullTxtOf(ctx, origin, outputs, rules, undefined, folder)
     )
   );
   return routes;
 }
 
 /**
+ * Where `withNextly` sends a folder's llms files behind the API handler:
+ * the address under `LLMS_FILE_ROUTE_PREFIX` of `nextly/next`, which is
+ * `/llms-files`.
+ */
+const LLMS_FILE_PREFIX = "/llms-files";
+
+/**
  * A route serving one of the llms files, only once switched on in the SEO
  * settings, so it is not found until then; it lists what the sitemap lists,
- * narrowed as it is. No copy of it is kept to serve while the address record
- * catches up: it carries pages' titles, descriptions or words, which a kept
- * copy would go on serving after the public may no longer read them.
+ * narrowed as it is. A route under {@link LLMS_FILE_PREFIX} serves a
+ * folder's file, the folder the route caught, and is not found for a folder
+ * the settings give no files of its own. No copy of it is kept to serve
+ * while the address record catches up: it carries pages' titles,
+ * descriptions or words, which a kept copy would go on serving after the
+ * public may no longer read them.
  */
 function llmsRoute(
   path: string,
@@ -293,7 +323,8 @@ function llmsRoute(
     ctx: PluginRouteContext,
     origin: string,
     outputs: AiOutputsConfig,
-    rules: SiteRules
+    rules: SiteRules,
+    folder?: string
   ) => Promise<string | null>
 ): PluginRoute {
   return {
@@ -304,6 +335,10 @@ function llmsRoute(
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
       if (!on(rules)) return notFound();
+      const { section } = ctx.params;
+      if (section !== undefined && !servesFolderFiles(rules, section)) {
+        return notFound();
+      }
       const waiting = await catchingUp(ctx, what, undefined);
       if (waiting !== null) return waiting;
       const { origin, headers } = await originOf(
@@ -328,7 +363,8 @@ function llmsRoute(
             : { collections: config.sitemap.collections }),
           ...(config.feeds === undefined ? {} : { feeds: config.feeds }),
         },
-        rules
+        rules,
+        section
       );
       return answered(ctx, undefined, body, headers);
     },

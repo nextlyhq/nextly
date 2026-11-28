@@ -27,6 +27,7 @@ import {
 
 import { holdsManageSeo } from "../permissions";
 
+import { aiFilesStoredProblem } from "./ai-files-stored";
 import { brandDetailsProblem } from "./brand-details";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
@@ -192,6 +193,15 @@ export function seoSettingsSingle(): SingleConfig {
       // What the site tells AI tools in its own words, after llms.txt's
       // summary.
       textarea({ name: "llmsIntro", label: "What AI tools should know" }),
+      // How the files for AI tools are shaped: llms.txt's sections, the
+      // site's own sections of links, what llms-full.txt holds and how large
+      // it grows, the folders with files of their own, and the fields left
+      // out of copies. One value, so a choice added later changes no column.
+      json({
+        name: "aiFiles",
+        label: "AI files",
+        validate: refusing(aiFilesStoredProblem),
+      }),
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",

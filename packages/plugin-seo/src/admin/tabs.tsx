@@ -31,6 +31,7 @@ import type { StructuredDataBrand } from "../structured-data/rules";
 import { fitSummary, textFit } from "../tab/problems";
 
 import { ContentSignalTick, OutsideRobotsRow } from "./ai-controls";
+import { aiFilesDraftProblem, AiFilesRows } from "./ai-files";
 import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
 import { brandDetailsDraftProblem } from "./brand-draft";
 import {
@@ -741,10 +742,14 @@ export function CrawlersTab({
       />
       <SwitchRow
         label="llms-full.txt"
-        description={`Every listed page's words in one file at ${host}/llms-full.txt, for AI tools that read a whole site at once. Served only with llms.txt on. Off by default; on a large site it is cut at 5 MB.`}
+        description={`Every listed page's words in one file at ${host}/llms-full.txt, for AI tools that read a whole site at once. Served only with llms.txt on. Off by default; it stops at the size chosen below, 5 MB unless you choose.`}
         on={draft.llmsFullTxt}
         set={llmsFullTxt => change(current => ({ ...current, llmsFullTxt }))}
       />
+      {/* How the llms files are shaped: shown while llms.txt is on. */}
+      {draft.llmsTxt ? (
+        <AiFilesRows draft={draft} change={change} host={host} />
+      ) : null}
       <PlainCopiesRow draft={draft} change={change} />
     </SettingsCard>
   );
@@ -808,6 +813,7 @@ export function draftProblem(
   return (
     peopleProblemText(draft.people) ??
     brandDetailsDraftProblem(draft.brandDetails) ??
-    verificationDraftProblem(draft.verificationCodes)
+    verificationDraftProblem(draft.verificationCodes) ??
+    aiFilesDraftProblem(draft.aiFiles)
   );
 }

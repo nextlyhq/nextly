@@ -127,6 +127,7 @@ describe("the form's values, from the stored settings", () => {
       llmsTxt: false,
       llmsFullTxt: false,
       llmsIntro: "",
+      aiFiles: {},
       plainTextCopies: true,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -176,6 +177,7 @@ describe("the form's values, from the stored settings", () => {
       llmsTxt: false,
       llmsFullTxt: false,
       llmsIntro: "",
+      aiFiles: {},
       plainTextCopies: false,
       robotsRules: { text: "" },
       verificationCodes: {

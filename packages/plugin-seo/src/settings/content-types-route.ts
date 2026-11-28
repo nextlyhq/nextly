@@ -19,6 +19,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { originsFrom, PRODUCTION_ADDRESSES_ENV } from "../canonical";
+import { copyReads, NOT_CONTENT } from "../outputs/plain-copy";
 import { siteWide } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
 import { singleKey } from "../problems/page-types";
@@ -28,6 +29,7 @@ import {
   type TitleFields,
 } from "../resolver/own-name";
 
+import { leftOutInCode } from "./ai-files";
 import {
   CONTENT_TYPES_ROUTE_PATH,
   SEO_SETTINGS_SLUG,
@@ -37,6 +39,7 @@ import {
   type PatternExample,
   type PatternField,
   type ContentTypeSource,
+  type CopyFieldChoice,
   type ListedContentType,
   type SeoContentType,
   type SwitchedOffType,
@@ -167,6 +170,35 @@ function entryFields(fields: unknown): Record<string, unknown>[] {
   return found;
 }
 
+/**
+ * The top-level fields a type's plain-text copies read or leave out, in
+ * the order the type declares them, as the "In plain-text copies" list
+ * offers them: each but its address, SEO and bookkeeping, which no copy
+ * ever holds, with why one is left out whatever the list says.
+ */
+function copyFieldsOf(
+  declared: readonly Record<string, unknown>[]
+): CopyFieldChoice[] {
+  return declared.flatMap(field => {
+    const { name, type } = field;
+    if (typeof name !== "string" || name === "" || NOT_CONTENT.has(name)) {
+      return [];
+    }
+    const leftOut = leftOutInCode(field)
+      ? "code"
+      : typeof type !== "string" || !copyReads(type)
+        ? "kind"
+        : undefined;
+    return [
+      {
+        name,
+        label: labelOfField(field, name),
+        ...(leftOut === undefined ? {} : { leftOut }),
+      },
+    ];
+  });
+}
+
 /** The label the admin's lists use for a collection. */
 function labelOf(slug: string, meta: Record<string, unknown>): string {
   const labels = isRecord(meta.labels) ? meta.labels : {};
@@ -260,6 +292,7 @@ async function contentTypeOf(
     }))
   );
   const mappableFields = readableFieldsOf(declared, "collection", record);
+  const copyFields = copyFieldsOf(declared);
   const isPublic = !withoutAddress.has(slug);
   // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
@@ -287,6 +320,7 @@ async function contentTypeOf(
     ...(source === undefined ? {} : { source }),
     fields,
     mappableFields,
+    copyFields,
     ...(example === undefined ? {} : { example }),
     ...(count === undefined ? {} : { count }),
     public: isPublic,
@@ -319,6 +353,7 @@ function singleTypeOf(
       }))
     ),
     mappableFields: readableFieldsOf(declared, "single", record),
+    copyFields: copyFieldsOf(declared),
     public: !withoutAddress.has(singleKey(slug)),
   };
 }

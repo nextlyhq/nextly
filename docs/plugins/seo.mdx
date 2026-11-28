@@ -862,7 +862,8 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
 
 - **`/llms.txt`** is a plain list of the site's pages, in the format the
   [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
-  default description beneath it, and each page as a link under its content type, by its
+  default description beneath it, and each page as a link under its section (its content type,
+  unless you [shape the files](#shaping-the-files)), by its
   [own name](#a-pages-own-name) and with the description its head carries, worked out from
   what the public may read of the page; a page the public may not read is listed by its
   address alone. It lists exactly the pages the sitemap lists, by
@@ -874,15 +875,18 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   no longer read them.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
-  escaped so it never becomes a heading.
+  escaped so it never becomes a heading. The proposal reserves headings for its sections of
+  links, so a section of your own goes in **Your own sections** instead
+  ([Shaping the files](#shaping-the-files)).
 - **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
   llms.txt's head, then every page llms.txt lists, in its order, each as its own name, its
   address (`Source:`) and the words of its plain-text copy. A page built in code is written
   from the Markdown `codeAddresses` gives for it, else from the page as it renders, four
   pages at a time and within 20 seconds for the whole file; a page whose words can't be had
   (it doesn't render, or the file's time ran out) is written with its description and listed
-  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past 5 MB and
-  ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
+  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past its
+  size, 5 MB unless you choose a smaller one, and ends by pointing to llms.txt for the rest;
+  **Problems** then lists it as **llms-full.txt stops short**, with how many pages it left out. llms.txt links it while it is on. It is not
   part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
   vendor's logs), others read llms.txt and each page's copy instead.
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
@@ -965,6 +969,65 @@ could not be made**, with why (`status 500`, `timed out after 10 s`) and a **Try
 to where it was asked for: its copy, or llms-full.txt. A copy made with the page's words, once
 it renders or once it has stored words of its own, takes the problem off.
 With copies on, llms.txt links these pages' copies too, and their head links them.
+
+### Shaping the files
+
+With llms.txt on, **SEO > Settings > Search engines and AI** shapes both files. Every choice is
+kept in one new field of the settings Single (`aiFiles`), so a site that applies its schema with
+migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading; until it does,
+the files are written as before.
+
+- **Sections of llms.txt** lists the groups its pages are listed under, in their order: each
+  content type by its label, every Single's page under **Pages**, and the pages built in code by
+  the folder they fill (`/docs` and `/docs/start` under **Docs**, a page such as `/pricing` at
+  the root under **Other pages**). Rename a group, move it up or down, and give two groups one
+  heading to list them as one section. **Optional** lists a group's pages under the
+  `## Optional` section, written last, which the [llms.txt proposal](https://llmstxt.org) lets AI
+  tools skip when they need less. **Leave out** takes a group out of llms.txt and llms-full.txt;
+  the sitemap still lists its pages.
+- **Your own sections** adds sections of links llms.txt lists besides your pages: a heading, and
+  one link a line as a Markdown list item, `- [API reference](https://example.com/api): Every endpoint`.
+  An address from the site's root (`/pricing`) is made whole. Headings and links are plain words:
+  markup, a heading's `#` or an address that is not a web address is refused. A section with a
+  heading of your pages' joins it, after its pages; one named **Optional** is listed last.
+- **What llms-full.txt holds**: every page llms.txt lists, the pages of the sections you choose,
+  or the pages whose address starts with one of the paths you write, one a line (`/docs/` takes
+  in `/docs` and every page under it), so a site can publish its docs alone. **Stops at** chooses
+  its size, from 1 to 5 MB.
+- **Folders with their own files** gives a folder its own llms files, one folder a line:
+  `docs` serves `/docs/llms.txt` and, with llms-full.txt on, `/docs/llms-full.txt`, each holding
+  only the pages under `/docs`, named by the site and the folder (`# Acme: Docs`). The proposal
+  has a file cover the addresses under its path, and an AI tool use the most specific one. The
+  site's llms.txt names each folder's file after its feeds. Another folder's address is not found.
+  `withNextly()` sends these addresses to the plugin, as it does the feeds; a site whose own
+  dynamic route answers one passes `folderLlmsFiles: false` (see
+  [Answering a file at the site root](/docs/plugins/routes#answering-a-file-at-the-site-root)).
+- **Preview of llms.txt** shows its first 200 lines with the choices as you edit them, before you
+  save, and before llms.txt is switched on.
+
+A content type's row on **Content types** lists its fields under **In plain-text copies**, ticked
+while its `.md` copies and llms-full.txt write them; untick one, such as a button's label or a
+field of notes for staff that the public may read but the page never shows, to leave it out. A
+field copies don't write (a number, a date, code, JSON, or a Page Builder layout, whose words come
+from the rendered page) is shown greyed. A field the site's code
+leaves out is greyed too:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Tools = defineCollection({
+  slug: "tools",
+  fields: [
+    text({ name: "name" }),
+    // Never in a plain-text copy or llms-full.txt, whatever the settings say.
+    text({ name: "ctaLabel", custom: { seo: { copy: false } } }),
+  ],
+});
+```
+
+`custom: { seo: { copy: false } }` leaves the field out at any depth, inside a group or a
+repeater too. A field group (a component) is copied as the rich text it holds, read from its
+stored value, so a field inside one is left out by unticking the field group itself.
 
 ### A page's own name
 
