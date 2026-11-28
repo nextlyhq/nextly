@@ -109,9 +109,12 @@ export function isPluginSurface(file) {
 // (packages/admin/src/styles/globals.css) and the builder's canvas-only
 // overrides, among them the entrance-animation replay rule in
 // packages/builder/src/canvas/appear-replay.ts, which must outweigh a block's
-// compiled timeline whatever its selector's weight. The guard fails if this
-// grows; lower it when overrides are removed.
-const ADMIN_IMPORTANT_BASELINE = 36;
+// compiled timeline whatever its selector's weight, and the four on a builder
+// popup while it is being placed (packages/builder/src/styles/popups.css): two
+// outrank the room limits the popover writes inline on the element, and two
+// outrank its opening animation, so the popup is measured unseen at full size.
+// The guard fails if this grows; lower it when overrides are removed.
+const ADMIN_IMPORTANT_BASELINE = 40;
 
 const TOKEN_WRAP_RE = createTokenWrapPattern();
 const COLOR_LITERAL_RE = createColorLiteralPattern();

@@ -109,6 +109,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 }
 
 /** Every stored column of every delivery row, as text, for leak checks. */
+/**
+ * Settles once the clock has moved past the current millisecond. The Activity list orders
+ * deliveries by when they were made, and two independent sends in one millisecond are ordered
+ * arbitrarily between themselves (`EmailDeliveryService`), so a test that reads their order
+ * makes each in a millisecond of its own.
+ */
+async function nextMillisecond(): Promise<void> {
+  const at = Date.now();
+  while (Date.now() <= at) {
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+}
+
 async function storedText(t: TestNextly, dialect: TestDialect) {
   const table = loadedDialect(dialect).tables.emailDeliveries;
   const db = t.adapter.getDrizzle() as never as {
@@ -138,16 +151,19 @@ for (const dialect of getConfiguredTestDialects()) {
         id: made.item.id,
         data: { subject: "Fresh news for {{name}}" },
       });
+      await nextMillisecond();
       await t.nextly.email.sendWithTemplate({
         template: "newsletter",
         to: "a@example.com",
         variables: { name: "Alice" },
       });
+      await nextMillisecond();
       await t.nextly.email.send({
         to: "a@example.com",
         subject: SUBJECT,
         html: BODY,
       });
+      await nextMillisecond();
       // A row written before versions were recorded.
       const deliveries = t.getService(
         "emailDeliveryService"

@@ -322,6 +322,7 @@ describe.each(getConfiguredTestDialects())(
             kind: "collection",
             slug: "rc_table_lost",
             table: "dc_rc_table_lost",
+            declared: true,
           },
         ],
         missingColumns: [

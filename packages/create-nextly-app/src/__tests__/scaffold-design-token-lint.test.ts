@@ -195,8 +195,13 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
         expect(rules[rule], rule).toEqual([2]);
       }
       // A warning, not an error: an experimental surface is a choice the
-      // author may make, and the warning makes sure it is made knowingly.
-      expect(rules["@nextlyhq/no-experimental-sdk"]).toEqual([1]);
+      // author may make, and the warning makes sure it is made knowingly. The
+      // one surface the template adopts on purpose is listed, so any other
+      // still warns.
+      expect(rules["@nextlyhq/no-experimental-sdk"]).toEqual([
+        1,
+        { allow: ["checkPluginPackageDeclaration"] },
+      ]);
     },
     ESLINT_TIMEOUT_MS
   );

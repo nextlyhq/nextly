@@ -166,7 +166,7 @@ describeEachDialect("db:sync and what the database refuses", dialect => {
     vi.spyOn(connection, "executeQuery").mockImplementation(async function (
       this: DrizzleAdapter,
       sql: string,
-      params?: never[]
+      params?: Parameters<DrizzleAdapter["executeQuery"]>[1]
     ) {
       used.add(this);
       if (refuse?.test(sql)) throw new Error("refused by the database");

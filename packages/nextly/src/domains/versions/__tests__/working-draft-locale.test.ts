@@ -42,6 +42,21 @@ describe("workingDraftLocale", () => {
     ).toBe("fr");
   });
 
+  it("takes an empty requested locale as none, so the default keys the draft", () => {
+    // Kept as itself, an empty locale would key a language's draft as the
+    // shared draft's slot, and a save writing both would collide.
+    expect(
+      workingDraftLocale({
+        documentLocalized: true,
+        requestLocale: "",
+        defaultLocale: "en",
+      })
+    ).toBe("en");
+    expect(
+      workingDraftLocale({ documentLocalized: true, requestLocale: "" })
+    ).toBeNull();
+  });
+
   it("is null for a localized document with no locale resolvable", () => {
     // Rather than inventing one: a draft stored under a guessed locale is
     // stranded, because no later read would look under that key.

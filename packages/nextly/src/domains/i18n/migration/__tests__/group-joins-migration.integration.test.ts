@@ -72,23 +72,35 @@ const DIALECTS: {
 
 const quiet = createLogger({ quiet: true });
 
-/** The group as the extension declared it first: five fields, shared. */
+/**
+ * The group as the extension declared it first: five fields, shared. A group
+ * keeps one structure in every language and translates the text inside it, so
+ * its text fields are marked shared.
+ */
 const BEFORE: MinimalConfigField = {
   name: "seo",
   type: "group",
   fields: [
-    { name: "metaTitle", type: "text", maxLength: 60 },
-    { name: "metaDescription", type: "textarea", maxLength: 160 },
+    { name: "metaTitle", type: "text", maxLength: 60, localized: false },
+    {
+      name: "metaDescription",
+      type: "textarea",
+      maxLength: 160,
+      localized: false,
+    },
     { name: "ogImage", type: "upload", relationTo: "media" },
-    { name: "canonical", type: "text" },
+    { name: "canonical", type: "text", localized: false },
     { name: "noindex", type: "checkbox", defaultValue: false },
   ],
 };
 
-/** The group as the extension declares it now: four more fields, per language. */
+/**
+ * The group as the extension declares it now: four more fields, and its text
+ * per language. A group itself takes no `localized` (the configuration refuses
+ * it): its text fields are translated as a translated entity's text is.
+ */
 const AFTER: MinimalConfigField = {
   ...BEFORE,
-  localized: true,
   fields: [
     { name: "metaTitle", type: "text", maxLength: 60 },
     { name: "metaDescription", type: "textarea", maxLength: 160 },

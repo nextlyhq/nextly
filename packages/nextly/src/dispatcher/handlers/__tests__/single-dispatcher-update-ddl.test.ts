@@ -56,6 +56,8 @@ vi.mock("../../helpers/di", () => ({
   // and the update records a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
   getConfigFromDI: vi.fn(() => undefined),
+  // Asked by a companion change that logs a step it could not finish, and answered with none.
+  getLoggerFromDI: vi.fn(() => undefined),
   getSchemaRegistryFromDI: vi.fn(() => undefined),
 }));
 

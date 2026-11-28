@@ -43,6 +43,8 @@ vi.mock("@nextlyhq/ui", () => ({
   TooltipContent: () => null,
   // The rail's neutral shapes for entries not decided yet.
   Skeleton: () => <span data-testid="skeleton" />,
+  // Read by the rail's Search entry to name its shortcut (⌘K or Ctrl K).
+  detectApplePlatform: () => false,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,

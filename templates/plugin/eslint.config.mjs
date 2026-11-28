@@ -15,5 +15,17 @@ export default tseslint.config(
   { ignores: ["dist", "dev/.next", "node_modules"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
-  ...nextly.configs.recommended
+  ...nextly.configs.recommended,
+  // One experimental SDK surface is adopted on purpose: `src/declaration.test.ts`
+  // checks package.json's `nextly` key against the plugin's code with it. Listed
+  // here so the rule still names any other experimental use; remove the entry
+  // and that test if the plugin should depend on stable surfaces alone.
+  {
+    rules: {
+      "@nextlyhq/no-experimental-sdk": [
+        "warn",
+        { allow: ["checkPluginPackageDeclaration"] },
+      ],
+    },
+  }
 );

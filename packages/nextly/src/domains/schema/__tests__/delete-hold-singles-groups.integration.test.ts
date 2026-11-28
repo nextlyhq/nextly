@@ -109,9 +109,20 @@ type Kind = (typeof KINDS)[number];
  */
 const ROADS = ["file", "push", "no writer"] as const;
 
-/** The table that holds `note`'s values: the entity's own, or its translations table. */
-function valuesTable(kind: Kind, inTranslations: boolean): string {
-  const table = kind === "Single" ? `single_${SINGLE}` : `comp_${GROUP}`;
+/**
+ * The table that holds `note`'s values: the entity's own, as its registry row names it (a field
+ * group's is `fg_<slug>` on the current field-group names), or its translations table.
+ */
+async function valuesTable(
+  t: TestNextly,
+  kind: Kind,
+  inTranslations: boolean
+): Promise<string> {
+  const row =
+    kind === "Single"
+      ? await t.getService("singleRegistryService").getSingle(SINGLE)
+      : await t.getService("fieldGroupRegistryService").getComponent(GROUP);
+  const table = (row as { tableName: string }).tableName;
   return inTranslations ? `${table}${STORAGE_FORMAT.companionSuffix}` : table;
 }
 
@@ -250,13 +261,14 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         t: TestNextly,
         kind: Kind
       ): Promise<number | "gone"> {
+        const table = await valuesTable(t, kind, perLanguage && translated);
         try {
           const [row] = await (
             t.adapter as unknown as {
               executeQuery<R>(statement: string): Promise<R[]>;
             }
           ).executeQuery<{ n: number | string }>(
-            `SELECT COUNT(*) AS n FROM ${q(valuesTable(kind, perLanguage && translated))} WHERE ${q("note")} IS NOT NULL`
+            `SELECT COUNT(*) AS n FROM ${q(table)} WHERE ${q("note")} IS NOT NULL`
           );
           return Number(row?.n);
         } catch {

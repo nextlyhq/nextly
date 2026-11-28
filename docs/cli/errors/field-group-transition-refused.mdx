@@ -20,6 +20,8 @@ npx nextly migrate:create --field-group-names=current
 
 A project with no migration yet writes its first one with `npx nextly migrate:create --name <name>`.
 
+A history that records no field group is not refused for the config's other changes: it has no field-group table to rename, so the move is written from the newest snapshot as it stands, carrying none of those changes, and the next `npx nextly migrate:create --name <name>` writes them on the current names. Its newest snapshot must record which fields are translated, as every snapshot written by a current release does.
+
 ## Example
 
 ```text

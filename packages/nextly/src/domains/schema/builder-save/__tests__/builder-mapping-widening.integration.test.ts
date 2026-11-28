@@ -66,6 +66,8 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           name,
           dialect: "mysql",
           migrationsDir,
+          // The names the boot created this site's field groups under: a new site's are current.
+          fieldGroupNaming: "current",
           collections: [entity],
           singles: [],
           components: [],
@@ -151,6 +153,8 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           name,
           dialect: "mysql",
           migrationsDir,
+          // The names the boot created this site's field groups under: a new site's are current.
+          fieldGroupNaming: "current",
           collections: [entity],
           singles: [],
           components: [],

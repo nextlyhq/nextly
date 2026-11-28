@@ -32,6 +32,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
+import { checkedInTurn } from "../../problems/check";
 import type { ReceivedAnswer } from "../contract";
 
 interface Direct {
@@ -247,7 +248,8 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
-      await t.nextly.create({
+      const saved: string[] = [];
+      const surfer = await t.nextly.create({
         collection: "posts",
         data: {
           title: "Surfer vs Rext",
@@ -259,7 +261,8 @@ describe.each(getConfiguredTestDialects())(
           seo: { metaTitle: "Surfer vs Rext | Rext AI" },
         },
       });
-      await t.nextly.create({
+      saved.push(String(surfer.item.id));
+      const closed = await t.nextly.create({
         collection: "posts",
         data: {
           title: "Closed plans",
@@ -269,8 +272,9 @@ describe.each(getConfiguredTestDialects())(
           seo: { metaTitle: "Closed plans | Rext AI" },
         },
       });
+      saved.push(String(closed.item.id));
       // A post the design draws, with no description of its own.
-      await t.nextly.create({
+      const designed = await t.nextly.create({
         collection: "posts",
         data: {
           title: DESIGNED_PAGE_TITLE,
@@ -279,7 +283,11 @@ describe.each(getConfiguredTestDialects())(
           status: "published",
         },
       });
+      saved.push(String(designed.item.id));
       await lastCatchUp();
+      // Each save's own page check reads robots.txt as Googlebot; it is
+      // done before a test counts what the crawlers asked the site.
+      await Promise.all(saved.map(id => checkedInTurn("posts", id)));
 
       const direct = t.nextly as unknown as Direct;
       const owner = await direct.users.create({

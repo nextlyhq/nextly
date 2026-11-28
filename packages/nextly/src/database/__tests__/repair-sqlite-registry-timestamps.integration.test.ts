@@ -22,7 +22,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recordStatements } from "../../__tests__/helpers/record-statements";
 import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { shutdownServices } from "../../di/register";
-import { resolveRegistryTableName } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  resolveFieldGroupRegistryName,
+  type FieldGroupRegistryName,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 import { labelLegacyArchiveRows } from "../../domains/i18n/migration/label-legacy-archive-rows";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
@@ -61,7 +64,7 @@ describe("the SQLite registries' timestamps", () => {
   let dir: string;
   let url: string;
   let adapter: DrizzleAdapter;
-  let fieldGroups: string;
+  let fieldGroups: FieldGroupRegistryName;
 
   const adapterFor = (): Promise<DrizzleAdapter> =>
     createAdapter({ type: "sqlite", url } as Parameters<
@@ -76,7 +79,7 @@ describe("the SQLite registries' timestamps", () => {
     await shutdownServices();
     adapter = await adapterFor();
     installRegistryResolver(adapter);
-    fieldGroups = await resolveRegistryTableName(adapter);
+    fieldGroups = await resolveFieldGroupRegistryName(adapter);
     for (const statement of getI18nArchiveDdl("sqlite")) {
       await adapter.executeQuery(statement);
     }
@@ -127,7 +130,11 @@ describe("the SQLite registries' timestamps", () => {
       buildSingleMetadataUpsert(entity("rsrt_new_single"), "sqlite")
     );
     await adapter.executeQuery(
-      buildComponentMetadataUpsert(entity("rsrt_new_group"), "sqlite")
+      buildComponentMetadataUpsert(
+        entity("rsrt_new_group"),
+        "sqlite",
+        fieldGroups
+      )
     );
     for (const [table, slug] of [
       ["dynamic_collections", "rsrt_new"],
@@ -154,7 +161,11 @@ describe("the SQLite registries' timestamps", () => {
     );
     await adapter.executeQuery(
       asAnOlderFileWroteIt(
-        buildComponentMetadataUpsert(entity("rsrt_old_group"), "sqlite")
+        buildComponentMetadataUpsert(
+          entity("rsrt_old_group"),
+          "sqlite",
+          fieldGroups
+        )
       )
     );
     await adapter.executeQuery(

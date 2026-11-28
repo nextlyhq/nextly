@@ -582,11 +582,12 @@ describe("every collection, from every page", () => {
       )
     ).toEqual([0, 1]);
 
-    // A collection only the second page holds is searched too.
-    await user.type(
-      screen.getByRole("searchbox", { name: "Search collections" }),
-      "Type 129"
+    // A collection only the second page holds is searched too. Pasted as one
+    // input, as typing it would filter all 130 rows once per letter.
+    await user.click(
+      screen.getByRole("searchbox", { name: "Search collections" })
     );
+    await user.paste("Type 129");
     expect(namesIn("Collections")).toEqual(["Type 129"]);
   });
 });

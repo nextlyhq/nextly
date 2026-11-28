@@ -28,7 +28,7 @@ import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
 export interface WorkingDraftLocaleInput {
   /** `collection.localized === true`. */
   documentLocalized: boolean;
-  /** The locale this request resolved to, if any. */
+  /** The locale this request resolved to, if any; empty is none. */
   requestLocale?: string | null;
   /** The app's default locale, used when the request named none. */
   defaultLocale?: string | null;
@@ -47,5 +47,9 @@ export function workingDraftLocale(
   input: WorkingDraftLocaleInput
 ): string | null {
   if (!input.documentLocalized && !perLanguageStorageEnabled()) return null;
-  return input.requestLocale ?? input.defaultLocale ?? null;
+  // An empty locale names no language, as a write's locale check reads it.
+  // Kept as itself it would key a language's draft under the shared slot's
+  // key (`workingDraftKey` encodes `null` as the empty segment), so a save
+  // writing both drafts would collide with itself.
+  return input.requestLocale || input.defaultLocale || null;
 }

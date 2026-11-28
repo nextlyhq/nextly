@@ -21,6 +21,7 @@ import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 import { claimedBy, secondEditor, SECOND_EDITOR } from "./support/two-editors";
+import { saveFromBar } from "./support/document-bar";
 
 test.describe.configure({ lock: [LOCK.usersRoles] });
 
@@ -40,11 +41,7 @@ async function post(page: Page): Promise<string> {
   });
 }
 
-const save = (page: Page) =>
-  page
-    .getByRole("button", { name: /^Save( draft)?$/ })
-    .first()
-    .click();
+const save = (page: Page) => saveFromBar(page);
 
 test.describe(
   "saving edits that began from an older version",
