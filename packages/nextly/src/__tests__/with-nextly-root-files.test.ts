@@ -23,6 +23,9 @@ const sources = (rules: Rewrite[]) => rules.map(rule => rule.source);
 /** The source of the IndexNow key file's rewrite. */
 const KEY_FILE = "/:key([0-9a-f]{32}).txt";
 
+/** The sources of the feed files' rewrites. */
+const FEED_FILES = ["/feed.xml", "/:section/feed.xml"];
+
 describe("withNextly serves the site's root files from plugins", () => {
   it("rewrites robots.txt, sitemap.xml, llms.txt and llms-full.txt to the API handler, after the site's own files", async () => {
     const { afterFiles, beforeFiles, fallback } = await rewritesOf(
@@ -37,6 +40,11 @@ describe("withNextly serves the site's root files from plugins", () => {
       {
         source: "/:key([0-9a-f]{32}).txt",
         destination: "/admin/api/indexnow-key/:key",
+      },
+      { source: "/feed.xml", destination: "/admin/api/feed-files/feed.xml" },
+      {
+        source: "/:section/feed.xml",
+        destination: "/admin/api/feed-files/:section/feed.xml",
       },
     ]);
     expect(beforeFiles).toEqual([]);
@@ -77,7 +85,7 @@ describe("withNextly serves the site's root files from plugins", () => {
     );
     expect(fromPhases.beforeFiles).toEqual([own]);
     expect(fromPhases.afterFiles[0]).toEqual(own);
-    expect(fromPhases.afterFiles).toHaveLength(6);
+    expect(fromPhases.afterFiles).toHaveLength(8);
     expect(fromPhases.fallback).toEqual([own]);
   });
 
@@ -95,6 +103,7 @@ describe("withNextly serves the site's root files from plugins", () => {
       "/llms.txt",
       "/llms-full.txt",
       KEY_FILE,
+      ...FEED_FILES,
     ]);
     expect(fallback).toEqual([theirs]);
   });
@@ -124,6 +133,9 @@ describe("withNextly serves the site's root files from plugins", () => {
       "/llms.txt",
       "/llms-full.txt",
       KEY_FILE,
+      // The site's own feed pattern keeps a folder's feed.xml; the root's is
+      // not one it matches.
+      "/feed.xml",
     ]);
   });
 
@@ -171,5 +183,117 @@ describe("withNextly serves the IndexNow key file without the Proxy", () => {
     );
 
     expect(sources(afterFiles)).not.toContain(KEY_FILE);
+  });
+});
+
+describe("withNextly serves feed files from plugins", () => {
+  it("rewrites feed.xml at the root and in one folder to the handler's feed routes, as Next matches them", async () => {
+    const { afterFiles } = await rewritesOf(
+      withNextly({}, { apiRoute: "/cms/api" })
+    );
+    expect(afterFiles).toContainEqual({
+      source: "/feed.xml",
+      destination: "/cms/api/feed-files/feed.xml",
+    });
+    expect(afterFiles).toContainEqual({
+      source: "/:section/feed.xml",
+      destination: "/cms/api/feed-files/:section/feed.xml",
+    });
+
+    // Next's own matcher: one folder deep and no deeper, and only feed.xml.
+    const inFolder = getPathMatch("/:section/feed.xml");
+    expect(inFolder("/blog/feed.xml")).toEqual({ section: "blog" });
+    expect(inFolder("/blog/2026/feed.xml")).toBe(false);
+    expect(inFolder("/blog/rss.xml")).toBe(false);
+    expect(getPathMatch("/feed.xml")("/feed.xml")).toEqual({});
+  });
+
+  it("leaves each feed address to a site that rewrites it itself, and all of them when turned off", async () => {
+    const theirs = { source: "/:slug/feed.xml", destination: "/feeds/:slug" };
+    const kept = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: [theirs] }) })
+    );
+    expect(sources(kept.afterFiles)).toContain("/feed.xml");
+    expect(sources(kept.afterFiles)).not.toContain("/:section/feed.xml");
+
+    const off = await rewritesOf(withNextly({}, { feedFiles: false }));
+    expect(sources(off.afterFiles)).not.toContain("/feed.xml");
+    expect(sources(off.afterFiles)).not.toContain("/:section/feed.xml");
+    expect(sources(off.afterFiles)).toContain("/sitemap.xml");
+  });
+
+  it("leaves a folder's feed to a site that rewrites that folder's address itself, in any phase, and serves every other folder's", async () => {
+    const theirs = [
+      { source: "/blog/feed.xml", destination: "/legacy/blog-feed" },
+      { source: "/news.v2/:path*", destination: "https://old.example/:path*" },
+    ];
+    const { afterFiles } = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: theirs }) })
+    );
+    const section = afterFiles.find(rule =>
+      rule.destination.endsWith("/feed-files/:section/feed.xml")
+    );
+    expect(section?.destination).toBe(
+      "/admin/api/feed-files/:section/feed.xml"
+    );
+    // As Next matches it: ours is asked before the site's fallback, so it
+    // must not match the folders the site rewrites.
+    const ours = getPathMatch(section?.source ?? "");
+    expect(ours("/blog/feed.xml")).toBe(false);
+    expect(ours("/news.v2/feed.xml")).toBe(false);
+    expect(ours("/docs/feed.xml")).toEqual({ section: "docs" });
+    expect(ours("/blogs/feed.xml")).toEqual({ section: "blogs" });
+    expect(ours("/newsxv2/feed.xml")).toEqual({ section: "newsxv2" });
+    expect(sources(afterFiles)).toContain("/feed.xml");
+  });
+
+  it("leaves every folder's feed to a site whose rule under a folder pattern reaches feed.xml, and keeps them where it cannot", async () => {
+    const reaching = await rewritesOf(
+      withNextly({
+        rewrites: async () => ({
+          fallback: [
+            {
+              source: "/:lang(en|fr)/:path*",
+              destination: "/old/:lang/:path*",
+            },
+          ],
+        }),
+      })
+    );
+    expect(
+      reaching.afterFiles.some(rule =>
+        rule.destination.endsWith("/feed-files/:section/feed.xml")
+      )
+    ).toBe(false);
+
+    const elsewhere = await rewritesOf(
+      withNextly({
+        rewrites: async () => ({
+          fallback: [
+            {
+              source: "/:lang(en|fr)/docs/:path*",
+              destination: "/old/:lang/docs/:path*",
+            },
+          ],
+        }),
+      })
+    );
+    expect(sources(elsewhere.afterFiles)).toContain("/:section/feed.xml");
+  });
+
+  it("leaves every folder's feed to a site whose own rule names feed.xml in a shape it cannot read folder by folder", async () => {
+    const theirs = {
+      source: "/:lang(en|fr)/feed.xml",
+      destination: "/feeds/:lang",
+    };
+    const { afterFiles } = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: [theirs] }) })
+    );
+    expect(
+      afterFiles.some(rule =>
+        rule.destination.endsWith("/feed-files/:section/feed.xml")
+      )
+    ).toBe(false);
+    expect(sources(afterFiles)).toContain("/feed.xml");
   });
 });

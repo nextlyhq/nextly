@@ -363,26 +363,27 @@ in `optionalDependsOn`.
 
 ## Configuration
 
-| Option            | Type                                                             | Default            | What it does                                                                                                                         |
-| ----------------- | ---------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `collections`     | `string[]`                                                       | every type         | The collections that get the `seo` group, where the site names its types                                                             |
-| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage, where the site names its types                                             |
-| `exclude`         | `string[]`                                                       | none               | Experimental. Types left without SEO, where no list is named                                                                         |
-| `include`         | `string[]`                                                       | none               | Experimental. Plugin collections given SEO as well, where no list is named                                                           |
-| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                                                                   |
-| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                                      |
-| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                                               |
-| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                                               |
-| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                                      |
-| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                                        |
-| `structuredData`  | `{ brand, people, types, defaultAuthor, breadcrumbs }`           | none               | Brand facts, [People](#people-one-person-on-every-page), and each content type's [structured data](#structured-data) type and fields |
-| `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                                                 |
-| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                                                  |
-| `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code)                     |
-| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`          | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies                       |
-| `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                                    |
-| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                                            |
-| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                                              |
+| Option            | Type                                                                        | Default            | What it does                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `collections`     | `string[]`                                                                  | every type         | The collections that get the `seo` group, where the site names its types                                                             |
+| `singles`         | `string[]`                                                                  | none               | The Singles that get the `seo` group, such as a homepage, where the site names its types                                             |
+| `exclude`         | `string[]`                                                                  | none               | Experimental. Types left without SEO, where no list is named                                                                         |
+| `include`         | `string[]`                                                                  | none               | Experimental. Plugin collections given SEO as well, where no list is named                                                           |
+| `fields`          | `FieldConfig[]`                                                             | the nine above     | The fields placed inside the group                                                                                                   |
+| `baseUrl`         | `string`                                                                    | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                                      |
+| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }`            | `true`             | Controls the sitemap at `/sitemap.xml`                                                                                               |
+| `robots`          | `boolean`                                                                   | `true`             | Controls `/robots.txt`                                                                                                               |
+| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                            | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                                      |
+| `hiddenTypes`     | `string[]`                                                                  | none               | Content types hidden from search as a whole, until the SEO settings name some                                                        |
+| `structuredData`  | `{ brand, people, types, defaultAuthor, breadcrumbs }`                      | none               | Brand facts, [People](#people-one-person-on-every-page), and each content type's [structured data](#structured-data) type and fields |
+| `socialCard`      | `{ siteName, language, xAccount }`                                          | none               | The site's name, language and X account on every page's [social card](#social-cards)                                                 |
+| `pagePermissions` | `boolean`                                                                   | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                                                  |
+| `nextBuildDir`    | `string`                                                                    | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code)                     |
+| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`                     | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies                       |
+| `gonePage`        | `string`                                                                    | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                                    |
+| `feeds`           | `{ [name]: { path, sources, title, description, link, limit, everyPage } }` | none               | Experimental. The site's [RSS feeds](#rss-feeds)                                                                                     |
+| `urlFor`          | `(entry, collection) => string \| null \| undefined`                        | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                                            |
+| `basePath`        | `string`, or a function                                                     | none               | Deprecated, as `urlFor`                                                                                                              |
 
 ## The sitemap and robots.txt
 
@@ -993,6 +994,172 @@ seoPlugin({
 
 Keys are a collection's slug or `single:<slug>`; values a field's name or a dotted path into a
 group. A value that is neither is refused when the site starts.
+
+## RSS feeds
+
+Experimental. The plugin serves the site's RSS 2.0 feeds, each named in the `feeds` option:
+where it is served, what it is made from and how many of the newest items it holds. Feed
+readers, newsletter tools and some AI tools follow a site's feed to learn what is new. There
+is no feed until the options name one, and no admin screen for them: a feed is code, set
+where the site sets its plugin, so adding one needs no migration.
+
+```ts
+import { seoPlugin, type FeedItem } from "@nextlyhq/plugin-seo";
+
+// Pages the site builds in code, such as a changelog's release notes.
+const releases = [
+  {
+    version: "1.4.0",
+    title: "Feeds for every section",
+    date: "2026-11-26",
+    summary: "Each section of the site can have a feed of its own.",
+  },
+];
+
+function releaseNotes(): FeedItem[] {
+  return releases.map(release => ({
+    id: `release:${release.version}`,
+    title: release.title,
+    url: `/changelog#${release.version}`,
+    published: release.date,
+    description: release.summary,
+  }));
+}
+
+seoPlugin({
+  collections: ["posts", "tools"],
+  baseUrl: "https://example.com",
+  feeds: {
+    everything: { path: "/feed.xml", sources: ["posts", "tools"] },
+    blog: {
+      path: "/blog/feed.xml",
+      title: "Example blog",
+      description: "New posts from the Example team",
+      sources: ["posts"],
+      limit: 30,
+    },
+    changelog: { path: "/changelog/feed.xml", sources: [releaseNotes] },
+  },
+});
+```
+
+| Option        | Type                       | Default                                   | What it does                                                 |
+| ------------- | -------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| `path`        | `string`                   | none                                      | Where it is served: `/feed.xml`, or `feed.xml` in one folder |
+| `sources`     | `(string \| FeedSource)[]` | none                                      | Collections' slugs, and functions giving items built in code |
+| `title`       | `string`                   | the site's name                           | The feed's name, as a reader lists it                        |
+| `description` | `string`                   | the site's default description            | What it holds                                                |
+| `link`        | `string`                   | its folder (`/blog` for `/blog/feed.xml`) | The page that lists what it holds, from the site's root      |
+| `limit`       | `number`, 10 to 50         | `20`                                      | How many of the newest items it holds                        |
+| `everyPage`   | `boolean`                  | `true` for `/feed.xml`, else `false`      | Whether every page's head links it                           |
+
+The options are checked when the site starts: an address of another shape (`/blog/rss.xml`,
+`/a/b/feed.xml`), a source that is neither a slug nor a function, a limit out of range, or two
+feeds at one address is refused, so a mistake fails at boot rather than as a feed that never
+answers.
+
+### What a feed holds
+
+A collection's items are the pages of it the [sitemap lists](#what-the-sitemap-lists), by the
+same rules: published, not hidden from search, their own canonical, with an address. Of those,
+only the ones a visitor with no session may read are in it, read as that visitor reads them
+(the Public role's grants and the type's and fields' read rules), so a draft, a hidden page or
+a page kept from the public is never an item, and no item holds a word the public may not
+read. A page is listed once, in the site's default language. Singles are not sources.
+
+Each item has:
+
+- **`title`**: the page's [own name](#a-pages-own-name), as llms.txt names it: `Pricing`,
+  not `Pricing | Acme`.
+- **`link`**: its canonical address, whole.
+- **`guid`**: `https://example.com#posts:<id>`, the site's origin, the collection and the
+  entry's id, marked `isPermaLink="false"`. It stays the same when the page's slug changes, so
+  a reader never shows the page twice.
+- **`pubDate`**: the date the type maps to `datePublished` in its
+  [structured data](#structured-data), else the first field named like it (`publishedAt`),
+  else when the page was first published, else when it was made.
+- **`description`**: the description its head carries, as plain text.
+- **`dc:creator`**: its author, by name, as structured data names them, never an email
+  address. RSS's own `author` element must be an email, so it is not written.
+- **`category`**: each section and tag structured data reads for the page, by name.
+
+A code source is a function given the site's origin (`{ origin }`) and giving items, newest
+first or in any order, as plain objects (`FeedItem`): `id`, `title`, `url` (from the site's
+root or whole) and `published` (a `Date` or ISO 8601 text), with `updated`, `description`,
+`author` and `categories` where it has them. Its guid is the site's origin and its `id`, so
+give an id that never changes, such as `release:1.4.0`. An item without an id, a title, an
+address or a published date is left out and logged, and a source that throws gives no items
+and is logged, so one broken source never takes the feed down.
+
+A feed's items from all its sources are put together, newest first, and the newest up to its
+limit are held. An item with no date comes after every dated one.
+
+The channel names the feed's `title`, its `link` (whole), its `description`, the site's
+default language, an `atom:link rel="self"` with the feed's own address, and a
+`lastBuildDate`: its newest item's last change, never the time it was asked for, so a reader
+asking again sees nothing new until something is. Every address is whole, every date is
+written as RFC 822 asks (`Thu, 26 Nov 2026 09:30:00 GMT`), every value is escaped (`&`, `<`
+and quotes in a title included), and any character XML 1.0 cannot hold is taken out, so one
+stray control character in a post never stops a reader parsing the whole feed. The output
+follows the rules the [W3C Feed Validation Service](https://validator.w3.org/feed/) checks.
+
+Full post text (`content:encoded`), share images as `enclosure` and Atom are not served yet.
+
+### How a feed is served
+
+`withNextly()` rewrites `/feed.xml` and `/<folder>/feed.xml` to the plugin, so there is no
+route file to write. A feed is answered as `application/rss+xml; charset=utf-8`, cacheable
+for five minutes (`Cache-Control: public, max-age=300, s-maxage=300`): the many readers
+polling a feed are answered from a cache, and a page published, changed or taken down shows
+within five minutes. Where the site's address is not known (no `baseUrl`, and no address the
+site records), a feed names the address it was asked at and is never cached
+(`Cache-Control: no-store`). An address of that shape no feed names is not found.
+
+A feed lists pages, so, like the sitemap, it waits for the address record when a server has
+only just started, and answers `503` with `Retry-After` while a real catch-up outlasts that
+wait. No copy of it is kept to serve meanwhile: it carries pages' names and descriptions,
+which a kept copy would go on serving after the public may no longer read them.
+
+The rewrite is checked after the site's own files and routes, so a site that ships its own
+`public/feed.xml`, `app/feed.xml/route.ts` or `app/blog/feed.xml/route.ts`, or rewrites the
+address itself, keeps serving its own, as with [the other root files](/docs/plugins/routes#answering-a-file-at-the-site-root).
+A dynamic route is the exception: Next.js asks the rewrite before a route such as
+`app/[section]/feed.xml/route.ts`, so the plugin would answer there instead. A site with one
+turns the feed rewrites off:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly({ reactStrictMode: true }, { feedFiles: false });
+```
+
+### Finding a feed from a page
+
+Each page's head links the feeds it belongs to, so a feed reader given any page's address finds
+them:
+
+```html
+<link
+  rel="alternate"
+  type="application/rss+xml"
+  title="Example blog"
+  href="https://example.com/blog/feed.xml"
+/>
+```
+
+A feed with `everyPage` on (`/feed.xml`, by default) is linked from every page. Any other feed
+is linked from its listing page (its `link`) and from each page of a collection it is made
+from. The link is part of the head's metadata, which Next.js writes into the first HTML for the
+crawlers [`nextlyHtmlLimitedBots`](/docs/guides/routing-and-seo) names, not only streamed after
+it. With [llms.txt](#llmstxt-and-plain-text-copies) on, its head names each feed too.
+
+### Moving from the site's own feed
+
+A site that already serves a feed names it in `feeds`, at the same address so subscribers keep
+it, then deletes its own route file: while that file is there, it is what the address serves.
+Readers know an item by its guid, and the plugin's guids are its own, so a reader that followed
+the old feed may show its latest items once more as new after the switch.
 
 ## Languages
 

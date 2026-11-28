@@ -1474,6 +1474,23 @@ function present<T extends object>(value: T): T {
 }
 
 /**
+ * The type a listed page is described as, outside its route's render: the
+ * page's own choice, else its content type's, else the automatic one from
+ * the page's fields, with the types a page not hidden from search is
+ * offered (a listed page is never hidden). A route's own choice
+ * (`structuredDataHints.type`) reaches the plugin only while the route
+ * renders, so it is not read here.
+ */
+export function listedPageTypeOf(
+  document: Readonly<Record<string, unknown>>,
+  rule: StructuredDataRules["types"][string] | undefined
+): StructuredDataTypeKey {
+  const offered = structuredDataTypesFor({ hidden: false });
+  const automatic = automaticType(document, {}, offered);
+  return chosenType({ document }, rule, offered, automatic).type;
+}
+
+/**
  * The image a listed page's structured data reads from a field its content
  * type maps, such as a post's cover under a name no share-image guess reads;
  * none where the type maps no image field. The field mapped for the type the
@@ -1490,9 +1507,7 @@ export async function mappedImageOf(
 ): Promise<PageMetadataImage | undefined> {
   const rule = rules.types[key];
   if (rule?.details === undefined) return undefined;
-  const offered = structuredDataTypesFor({ hidden: false });
-  const automatic = automaticType(document, {}, offered);
-  const { type } = chosenType({ document }, rule, offered, automatic);
+  const type = listedPageTypeOf(document, rule);
   const source =
     rule.details[type]?.image ??
     Object.values(rule.details).find(mapping => mapping?.image !== undefined)

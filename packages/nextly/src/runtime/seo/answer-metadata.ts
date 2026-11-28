@@ -34,6 +34,25 @@ export function defined<T extends Record<string, unknown>>(
   ) as Partial<T>;
 }
 
+/** The media type a feed the answer names is linked as. */
+const RSS_TYPE = "application/rss+xml";
+
+type AlternateTypes = NonNullable<NonNullable<Metadata["alternates"]>["types"]>;
+
+/**
+ * The page's other forms by media type: its formats, and its feeds as one
+ * list of titled links under the RSS type, which Next.js writes as one
+ * `<link rel="alternate">` each. Undefined for none of them.
+ */
+function typesOf(answer: PageMetadataAnswer): AlternateTypes | undefined {
+  const types: AlternateTypes = { ...answer.formats };
+  const feeds = answer.feeds ?? [];
+  if (feeds.length > 0) {
+    types[RSS_TYPE] = feeds.map(feed => ({ url: feed.url, title: feed.title }));
+  }
+  return Object.keys(types).length > 0 ? types : undefined;
+}
+
 /**
  * The canonical, the language addresses and the page's other forms, by
  * media type, or undefined for none of them.
@@ -41,17 +60,17 @@ export function defined<T extends Record<string, unknown>>(
 function alternatesOf(
   answer: PageMetadataAnswer
 ): Metadata["alternates"] | undefined {
-  const { languages, formats } = answer;
+  const { languages } = answer;
   const hasLanguages =
     languages !== undefined && Object.keys(languages).length > 0;
-  const hasFormats = formats !== undefined && Object.keys(formats).length > 0;
-  if (answer.canonical === undefined && !hasLanguages && !hasFormats) {
+  const types = typesOf(answer);
+  if (answer.canonical === undefined && !hasLanguages && types === undefined) {
     return undefined;
   }
   return {
     ...(answer.canonical === undefined ? {} : { canonical: answer.canonical }),
     ...(hasLanguages ? { languages } : {}),
-    ...(hasFormats ? { types: { ...formats } } : {}),
+    ...(types === undefined ? {} : { types }),
   };
 }
 

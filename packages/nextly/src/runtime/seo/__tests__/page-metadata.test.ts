@@ -1176,6 +1176,59 @@ describe("the answer's other forms of the page", () => {
   });
 });
 
+describe("the answer's feeds", () => {
+  it("are placed as titled RSS links, one each, in their order, beside the page's other forms", () => {
+    expect(
+      metadataFromAnswer({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+        feeds: [
+          { url: "/feed.xml", title: "Acme" },
+          { url: "/blog/feed.xml", title: "Acme blog" },
+        ],
+      }).alternates
+    ).toEqual({
+      canonical: "/blog/hello",
+      types: {
+        "text/markdown": "/blog/hello.md",
+        "application/rss+xml": [
+          { url: "/feed.xml", title: "Acme" },
+          { url: "/blog/feed.xml", title: "Acme blog" },
+        ],
+      },
+    });
+    expect(metadataFromAnswer({ feeds: [] }).alternates).toBeUndefined();
+  });
+
+  it("reach the head through the provider's answer, replacing the route's own RSS link and keeping its others", async () => {
+    provide({
+      resolve: () => ({
+        canonical: "/blog/hello",
+        feeds: [{ url: "/blog/feed.xml", title: "Acme blog" }],
+      }),
+    });
+    const meta = await pageMetadataFor({
+      ...page,
+      code: {
+        alternates: {
+          types: {
+            "application/rss+xml": "/old-feed.xml",
+            "text/markdown": "/blog/hello.md",
+          },
+        },
+      },
+      tags: [],
+    });
+    expect(meta.alternates).toEqual({
+      canonical: "/blog/hello",
+      types: {
+        "application/rss+xml": [{ url: "/blog/feed.xml", title: "Acme blog" }],
+        "text/markdown": "/blog/hello.md",
+      },
+    });
+  });
+});
+
 describe("the answer's verification tags", () => {
   it("are placed as meta tags by name", () => {
     expect(

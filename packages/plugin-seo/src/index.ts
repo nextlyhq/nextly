@@ -45,6 +45,14 @@ export type {
   ListingProblem,
 } from "./outputs/listing";
 export type { AiCrawlerChoice } from "./outputs/robots";
+// The site's RSS feeds, as its options name them, and the items a source
+// built in code gives one.
+export type {
+  FeedItem,
+  FeedOption,
+  FeedSource,
+  FeedSourceAbout,
+} from "./feeds/options";
 // Languages: the code each of the site's languages is named by in language
 // links and why one is left out, and a page's links to its other languages.
 export { hreflangCodes, hreflangOf } from "./languages/hreflang";

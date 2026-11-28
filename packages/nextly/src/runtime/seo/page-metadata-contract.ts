@@ -200,6 +200,12 @@ export interface PageArticle {
   tags?: string[];
 }
 
+/** @experimental A feed the page's head links: its address and its name. */
+export interface PageFeedLink {
+  url: string;
+  title: string;
+}
+
 /** @experimental The page's answer: the values its head is built from. */
 export interface PageMetadataAnswer {
   title?: string;
@@ -237,6 +243,13 @@ export interface PageMetadataAnswer {
    * `metadataBase`.
    */
   formats?: Record<string, string>;
+  /**
+   * The site's RSS feeds a reader of the page may subscribe to, each placed
+   * in the head as `<link rel="alternate" type="application/rss+xml" title
+   * href>`, in their order. Replaces a route's own RSS links. Each `url` is
+   * absolute, or root-relative and resolved against `metadataBase`.
+   */
+  feeds?: PageFeedLink[];
   /**
    * The page's structured data: JSON-LD nodes, written without `@context`,
    * which the route helpers hand the page's render as one schema.org graph.
