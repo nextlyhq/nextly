@@ -60,8 +60,18 @@ export interface BuildRecord {
  * deployment's id is what tells two builds apart. None where there is no
  * `BUILD_ID`, as in development, or while `next build` has not yet written
  * it.
+ *
+ * `deploymentId` is read as `unknown` because inside a site's bundle it is not
+ * an environment variable: Next.js replaces `process.env.NEXT_DEPLOYMENT_ID`
+ * at build time with the site's `deploymentId`, or with the boolean `false`
+ * where the site sets none, as most do. Only a non-empty string names a
+ * deployment; read as a string, `false` failed the build of every page that
+ * lists the site's code pages, such as its sitemap.
  */
-export function buildIdIn(buildDir: string): string | undefined {
+export function buildIdIn(
+  buildDir: string,
+  deploymentId: unknown = process.env.NEXT_DEPLOYMENT_ID
+): string | undefined {
   let written: string;
   try {
     written = readFileSync(
@@ -71,7 +81,8 @@ export function buildIdIn(buildDir: string): string | undefined {
   } catch {
     return undefined;
   }
-  const deployment = process.env.NEXT_DEPLOYMENT_ID?.trim() ?? "";
+  const deployment =
+    typeof deploymentId === "string" ? deploymentId.trim() : "";
   const id = deployment === "" ? written : `${written}@${deployment}`;
   return written === "" || id.length > 255 ? undefined : id;
 }

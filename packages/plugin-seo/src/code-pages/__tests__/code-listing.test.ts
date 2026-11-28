@@ -236,4 +236,16 @@ describe("the id of the build being served", () => {
     vi.stubEnv("NEXT_DEPLOYMENT_ID", "dpl_two");
     expect(buildIdIn(dir)).toBe("build-TfctsWXpff2fKS@dpl_two");
   });
+
+  // Inside a site's bundle Next.js replaces `process.env.NEXT_DEPLOYMENT_ID`
+  // with `false` where the site sets no `deploymentId`. The environment cannot
+  // hold a boolean (it would be the string "false", a deployment's name), so
+  // the value is handed in as the bundle hands it.
+  it("is what next build wrote where the bundle names no deployment", () => {
+    dir = mkdtempSync(join(tmpdir(), "seo-build-id-"));
+    writeFileSync(join(dir, "BUILD_ID"), "build-TfctsWXpff2fKS\n");
+    expect(buildIdIn(dir, false)).toBe("build-TfctsWXpff2fKS");
+    expect(buildIdIn(dir, "")).toBe("build-TfctsWXpff2fKS");
+    expect(buildIdIn(dir, " dpl_one ")).toBe("build-TfctsWXpff2fKS@dpl_one");
+  });
 });
