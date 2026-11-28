@@ -362,6 +362,44 @@ describe("one person, one node", () => {
     ).toBe("Bob Stone");
   });
 
+  it("keeps a team whose page is the home page apart from the site's own organisation", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, writer: "Editorial team" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        people: [{ name: "Editorial team", type: "organization", url: "/" }],
+      })
+    );
+
+    expect(nodeOf(nodes, "BlogPosting")?.author).toEqual({
+      "@id": `${ORIGIN}/#organization-2`,
+    });
+    expect(
+      nodes.find(each => each["@id"] === `${ORIGIN}/#organization-2`)?.name
+    ).toBe("Editorial team");
+    expect(
+      nodes.find(each => each["@id"] === `${ORIGIN}/#organization`)?.name
+    ).toBe("Rext AI");
+  });
+
+  it("still knows a person by the name of a second entry giving the same @id", async () => {
+    const SHARED = "https://sara.example/#person";
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, writer: "S. Khan" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        people: [
+          { name: "Sara Khan", id: SHARED },
+          { name: "S. Khan", id: SHARED, jobTitle: "Founder" },
+        ],
+      })
+    );
+
+    expect(nodeOf(nodes, "BlogPosting")?.author).toEqual({ "@id": SHARED });
+  });
+
   it("gives a profile page's subject named as text the page's own address", async () => {
     const { nodes } = await buildStructuredData(
       context(),
@@ -497,6 +535,17 @@ describe("a person's site", () => {
     expect(post?.author).toEqual({ "@id": PERSON_ID });
     expect(post?.publisher).toEqual({ "@id": PERSON_ID });
     expect(persons(nodes).map(node => node["@id"])).toEqual([PERSON_ID]);
+  });
+
+  it("leaves the home page as its route says it is", async () => {
+    const { type } = await buildStructuredData(
+      context(),
+      { ...home(), structuredDataHints: { type: "webPage" } },
+      answerAt("/", "Mobeen Abdullah"),
+      MOBEEN_RULES
+    );
+
+    expect(type).toBe("webPage");
   });
 
   it("leaves a page somebody chose a kind for as they chose it", async () => {

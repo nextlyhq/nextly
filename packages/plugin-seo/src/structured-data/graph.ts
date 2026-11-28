@@ -1620,10 +1620,27 @@ function uniqueNodes(
 }
 
 /**
+ * Whether nobody decided what a page is: neither its own choice, its content
+ * type's nor its route's (`structuredDataHints.type`) made it the plain web
+ * page it is, and a profile page is offered for it.
+ */
+function leftToDecide(
+  facts: Pick<PageFacts, "hints">,
+  decided: Pick<PageStructuredData, "type" | "chosen" | "offered">
+): boolean {
+  return (
+    decided.chosen === "automatic" &&
+    decided.type === "webPage" &&
+    !isStructuredDataTypeKey(facts.hints.type) &&
+    decided.offered.includes("profilePage")
+  );
+}
+
+/**
  * On a person's site, the person's own page is a profile page about them:
  * the home page, or the page their entry names as theirs, where nobody chose
  * what it is and it would otherwise be a plain web page. Any other page, and
- * any choice someone made, is left as decided.
+ * any choice someone made, its route's included, is left as decided.
  */
 function ownersProfile(
   facts: PageFacts,
@@ -1635,9 +1652,7 @@ function ownersProfile(
   if (
     owner === undefined ||
     url === undefined ||
-    decided.chosen !== "automatic" ||
-    decided.type !== "webPage" ||
-    !decided.offered.includes("profilePage")
+    !leftToDecide(facts, decided)
   ) {
     return decided;
   }

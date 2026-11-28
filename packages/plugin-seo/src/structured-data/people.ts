@@ -88,7 +88,9 @@ function samePerson(a: StructuredDataPerson, b: StructuredDataPerson): boolean {
 /**
  * `over`'s facts, with `under`'s where `over` gives none: two entries of one
  * person read as one. A list is one fact, taken whole from the side that
- * holds it.
+ * holds it, but for other names: every name either side goes by stays one
+ * the person is known by, so a byline using the second entry's name still
+ * finds them.
  */
 function mergedPerson(
   over: StructuredDataPerson,
@@ -99,7 +101,27 @@ function mergedPerson(
   const held = Object.fromEntries(
     Object.entries(over).filter(([, value]) => value !== undefined)
   ) as Partial<StructuredDataPerson>;
-  return { ...under, ...held, name: over.name };
+  const otherNames = aliasesOf(over, under);
+  return {
+    ...under,
+    ...held,
+    name: over.name,
+    ...(otherNames.length === 0 ? {} : { otherNames }),
+  };
+}
+
+/** The names `under` goes by that `over` does not, after `over`'s other names. */
+function aliasesOf(
+  over: StructuredDataPerson,
+  under: StructuredDataPerson
+): string[] {
+  const seen = new Set([nameKey(over.name)]);
+  return [...(over.otherNames ?? []), ...namesOf(under)].filter(name => {
+    const key = nameKey(name);
+    if (name.trim() === "" || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** A person's own page and picture as absolute addresses, the rest as given. */
@@ -181,17 +203,22 @@ const givenIdOf = (person: StructuredDataPerson): string | undefined =>
  * Each entry's `@id`: the one it gives, else its default one. Two different
  * names can make one default (`Anne-Marie` and `Anne Marie`), and an entry
  * can give as its own a default another would get, so the `@id`s entries
- * give are taken first, whatever their order, and a default already taken is
- * numbered, keeping the people apart.
+ * give, and the site's own (`<home>#organization`, `<home>#website`), are
+ * taken first, whatever their order, and a default already taken is
+ * numbered, keeping the people and the site apart.
  */
 function identified(
   people: readonly StructuredDataPerson[],
   home: string
 ): PersonEntry[] {
   const pages = pageCounts(people);
-  const used = new Set(
-    people.map(givenIdOf).filter((id): id is string => id !== undefined)
-  );
+  // The site's own nodes are named at its home too: a team whose page is
+  // the home page is not the site's organisation.
+  const used = new Set([
+    `${home}#organization`,
+    `${home}#website`,
+    ...people.map(givenIdOf).filter((id): id is string => id !== undefined),
+  ]);
   return people.map(person => {
     const given = givenIdOf(person);
     if (given !== undefined) return { id: given, person };
