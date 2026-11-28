@@ -171,22 +171,30 @@ function unusedId(id: string, used: Set<string>): string {
   return next;
 }
 
+/** The `@id` an entry gives as its own, where it gives a whole address. */
+const givenIdOf = (person: StructuredDataPerson): string | undefined =>
+  person.id !== undefined && originOf(person.id) !== undefined
+    ? person.id
+    : undefined;
+
 /**
  * Each entry's `@id`: the one it gives, else its default one. Two different
- * names can make one default (`Anne-Marie` and `Anne Marie`), so a default
- * an earlier entry already goes by is numbered, keeping the two people two.
+ * names can make one default (`Anne-Marie` and `Anne Marie`), and an entry
+ * can give as its own a default another would get, so the `@id`s entries
+ * give are taken first, whatever their order, and a default already taken is
+ * numbered, keeping the people apart.
  */
 function identified(
   people: readonly StructuredDataPerson[],
   home: string
 ): PersonEntry[] {
   const pages = pageCounts(people);
-  const used = new Set<string>();
+  const used = new Set(
+    people.map(givenIdOf).filter((id): id is string => id !== undefined)
+  );
   return people.map(person => {
-    if (person.id !== undefined && originOf(person.id) !== undefined) {
-      used.add(person.id);
-      return { id: person.id, person };
-    }
+    const given = givenIdOf(person);
+    if (given !== undefined) return { id: given, person };
     const page = person.url === undefined ? undefined : addressKey(person.url);
     const shared = page !== undefined && (pages.get(page) ?? 0) > 1;
     return {

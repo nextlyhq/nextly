@@ -332,6 +332,36 @@ describe("one person, one node", () => {
     ).toBe("Writer");
   });
 
+  it("never gives a person a generated @id another entry gives as its own", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, writer: "Bob Stone" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        people: [
+          { name: "Alice Lee", founder: true },
+          {
+            name: "Bob Stone",
+            id: `${ORIGIN}/#person-alice-lee`,
+            founder: true,
+          },
+        ],
+      })
+    );
+
+    expect(nodeOf(nodes, "Organization")?.founder).toEqual([
+      { "@id": `${ORIGIN}/#person-alice-lee-2` },
+      { "@id": `${ORIGIN}/#person-alice-lee` },
+    ]);
+    expect(nodeOf(nodes, "BlogPosting")?.author).toEqual({
+      "@id": `${ORIGIN}/#person-alice-lee`,
+    });
+    expect(
+      persons(nodes).find(each => each["@id"] === `${ORIGIN}/#person-alice-lee`)
+        ?.name
+    ).toBe("Bob Stone");
+  });
+
   it("gives a profile page's subject named as text the page's own address", async () => {
     const { nodes } = await buildStructuredData(
       context(),
