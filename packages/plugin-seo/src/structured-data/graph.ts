@@ -44,10 +44,11 @@ import {
   type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "./catalog";
+import { absolute, linksOf, node } from "./node-parts";
+import { peopleOf, personEntryNode, type People } from "./people";
 import type {
   DetailMapping,
   StructuredDataDefaultAuthor,
-  StructuredDataPerson,
   StructuredDataRules,
   StructuredDataTypeRule,
 } from "./rules";
@@ -131,25 +132,6 @@ function pageOf(input: PageMetadataInput): {
   return source.kind === "entry"
     ? { key: source.collection, document: source.entry }
     : { key: `single:${source.slug}`, document: source.document };
-}
-
-/** `address` as an absolute address on `origin`, where it is not already. */
-function absolute(address: string, origin: string): string | undefined {
-  try {
-    const url = new URL(address, `${origin}/`);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** `value` without its absent keys, as a node. */
-function node(value: Record<string, Json | undefined>): StructuredDataNode {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, inner]) => inner !== undefined)
-  ) as StructuredDataNode;
 }
 
 /** An image as structured data states it, at an absolute address. */
@@ -333,6 +315,23 @@ interface PageFacts {
   contentDate: () => Promise<string | undefined>;
   /** The fields the page's content type declares: read once, when asked. */
   declared: () => Promise<unknown>;
+  /** The site's People, each one node with one `@id`. */
+  people: People;
+  /**
+   * Whoever runs the site, as every page names it: the organisation's `@id`,
+   * or on a person's site, the person's.
+   */
+  ownerId: string | undefined;
+  /**
+   * The nodes of the People entries the page names, by `@id`: each written
+   * once, beside the page's own, and named by reference wherever it appears.
+   */
+  named: Map<string, StructuredDataNode>;
+  /**
+   * Set where the page is a profile only because it is the own page of the
+   * person who runs a person's site (`ownersProfile`): it is about them.
+   */
+  ownersPage?: true;
 }
 
 /**
@@ -357,11 +356,68 @@ type DetailReader = (
   read: DetailRead
 ) => DetailValue | Promise<DetailValue>;
 
+/**
+ * A person the page names, as structured data states them: the entry of the
+ * site's People they are, matched by their page's address or their name, by
+ * reference to its one node, which the page's graph writes once; else a
+ * person described by what the page holds.
+ */
+function namedValue(facts: PageFacts, named: Named): Json {
+  const entry = facts.people.match(named);
+  if (entry === undefined) return personNode(named);
+  const described = personEntryNode(entry, ref(organizationIdIn(facts)));
+  if (described !== undefined && !facts.named.has(entry.id)) {
+    facts.named.set(entry.id, described);
+  }
+  return { "@id": entry.id };
+}
+
+/** The site's organisation `@id`, where an organisation runs the site. */
+function organizationIdIn(facts: PageFacts): string | undefined {
+  return facts.people.owner === undefined ? facts.ownerId : undefined;
+}
+
 /** A person the page names, as an author or the subject of a profile. */
 const personRead: DetailReader = async (facts, read) => {
   const named = await namedOf(facts.ctx, facts.input, read, facts.origin);
-  return named === undefined ? undefined : personNode(named);
+  return named === undefined ? undefined : namedValue(facts, named);
 };
+
+/**
+ * The person a profile page is about: the one the page names, whose own page
+ * it is where nothing else gives them one, so they go by the `@id` a post
+ * naming them by their entry gives them; or on a person's site, where the
+ * page names nobody or is the person's own page, the person who runs it.
+ */
+const profileSubjectRead: DetailReader = async (facts, read) => {
+  if (aboutTheOwner(facts)) return ref(facts.people.owner?.id);
+  const named = await namedOf(facts.ctx, facts.input, read, facts.origin);
+  if (named !== undefined) return namedValue(facts, atThisPage(facts, named));
+  if (!empty(read.value)) return undefined;
+  return ref(facts.people.owner?.id);
+};
+
+/**
+ * Whether a profile page is about the person who runs a person's site: their
+ * own page made a profile is, unless its content type maps whom it is about.
+ * A field named like a person only by chance, such as a page's own `name`,
+ * is not read as one there.
+ */
+const aboutTheOwner = (
+  facts: Pick<PageFacts, "ownersPage" | "mapping">
+): boolean => facts.ownersPage === true && facts.mapping.person === undefined;
+
+/**
+ * A profile's subject given the page's own address where nothing else gives
+ * them one, so they go by the `@id` a post naming them by their entry gives.
+ */
+function atThisPage(facts: PageFacts, named: Named): Named {
+  if (named.url !== undefined || facts.answer.canonical === undefined) {
+    return named;
+  }
+  const page = absolute(facts.answer.canonical, facts.origin);
+  return page === undefined ? named : { ...named, url: page };
+}
 
 /** Whether a value holds nothing at all: absent, blank or an empty list. */
 function empty(value: unknown): boolean {
@@ -371,16 +427,19 @@ function empty(value: unknown): boolean {
     : value === undefined || value === null;
 }
 
-/** Who the site credits an article to where its page names nobody. */
+/**
+ * Who the site credits an article to where its page names nobody: whoever
+ * runs the site, or the person it names, who is the entry of its People of
+ * that name or page where there is one.
+ */
 function defaultAuthorNode(
-  author: StructuredDataDefaultAuthor,
-  organization: string | undefined,
-  origin: string
-): StructuredDataNode | undefined {
-  if (author === "organization") return ref(organization);
+  facts: PageFacts,
+  author: StructuredDataDefaultAuthor
+): Json | undefined {
+  if (author === "organization") return ref(facts.ownerId);
   const url =
-    author.url === undefined ? undefined : absolute(author.url, origin);
-  return personNode({
+    author.url === undefined ? undefined : absolute(author.url, facts.origin);
+  return namedValue(facts, {
     name: author.name,
     ...(url === undefined ? {} : { url }),
     ...(author.jobTitle === undefined ? {} : { jobTitle: author.jobTitle }),
@@ -399,11 +458,7 @@ const authorRead: DetailReader = async (facts, read) => {
     return named;
   }
   if (!empty(read.value)) return undefined;
-  return defaultAuthorNode(
-    facts.rules.defaultAuthor,
-    organizationIdOf(facts.rules, facts.answer, facts.origin),
-    facts.origin
-  );
+  return defaultAuthorNode(facts, facts.rules.defaultAuthor);
 };
 
 /** A detail read as a value of one kind, from the field's value alone. */
@@ -522,7 +577,7 @@ function joinedNames(names: Json | undefined): Json | undefined {
 /** How each detail is read, as the kind of fact it is. */
 const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   author: authorRead,
-  person: personRead,
+  person: profileSubjectRead,
   itemReviewed: async (facts, read) =>
     (await namedOf(facts.ctx, facts.input, read, facts.origin))?.name,
   // The page's own share image, from the order of who wins, unless the
@@ -796,7 +851,8 @@ interface DescribedPage {
 
 /** What a subject links to beyond the page. */
 interface SubjectLinks {
-  organization: string | undefined;
+  /** Whoever publishes the site: its organisation, or its person. */
+  publisher: string | undefined;
 }
 
 /** The details a subject is described with. */
@@ -842,7 +898,7 @@ const articleFields: SubjectFields = (details, page, links) => ({
   datePublished: details.datePublished ?? page.published,
   dateModified: details.dateModified ?? page.modified,
   author: details.author,
-  publisher: ref(links.organization),
+  publisher: ref(links.publisher),
   keywords: joinedNames(details.keywords),
   articleSection: details.articleSection,
   wordCount: details.wordCount,
@@ -871,7 +927,7 @@ const SUBJECT_FIELDS: Partial<Record<StructuredDataTypeKey, SubjectFields>> = {
     operatingSystem: details.operatingSystem,
     offers: details.price === undefined ? undefined : offerOf(details, page),
     aggregateRating: aggregateRatingOf(details),
-    publisher: ref(links.organization),
+    publisher: ref(links.publisher),
   }),
   softwareSourceCode: (details, page, links) => ({
     name: page.subjectName,
@@ -880,7 +936,7 @@ const SUBJECT_FIELDS: Partial<Record<StructuredDataTypeKey, SubjectFields>> = {
     codeRepository: details.codeRepository,
     programmingLanguage: details.programmingLanguage,
     license: details.license,
-    publisher: ref(links.organization),
+    publisher: ref(links.publisher),
   }),
   event: (details, page) => ({
     name: page.subjectName,
@@ -943,7 +999,11 @@ function ref(id: string | undefined): { "@id": string } | undefined {
 /** The site's own nodes, and the ids and name the page's nodes link to. */
 interface SiteNodes {
   nodes: StructuredDataNode[];
-  organizationId?: string;
+  /**
+   * Whoever runs the site: its organisation, or on a person's site, the
+   * person, who publishes it and whom its About page is about.
+   */
+  ownerId?: string;
   websiteId?: string;
   siteName?: string;
 }
@@ -959,58 +1019,9 @@ function brandNameOf(
   return rules.brand.name ?? answer.social?.siteName;
 }
 
-/** The organisation's `@id`, where the site has a name for it. */
-function organizationIdOf(
-  rules: StructuredDataRules,
-  answer: PageMetadataAnswer,
-  origin: string
-): string | undefined {
-  return brandNameOf(rules, answer) === undefined
-    ? undefined
-    : `${homeOf(origin)}#organization`;
-}
-
-/** Absolute addresses only: an official account is always one. */
-function linksOf(urls: readonly string[] | undefined): string[] | undefined {
-  const links = (urls ?? []).filter(url => originOf(url) !== undefined);
-  return links.length > 0 ? links : undefined;
-}
-
-/** The brand's founders, each as a person with an `@id` of their own. */
-function founderNodes(
-  founders: readonly StructuredDataPerson[],
-  origin: string,
-  organization: string | undefined
-): StructuredDataNode[] {
-  return founders.map((founder, at) =>
-    node({
-      "@type": "Person",
-      "@id": `${homeOf(origin)}#founder${at === 0 ? "" : `-${at + 1}`}`,
-      name: founder.name,
-      url:
-        founder.url === undefined ? undefined : absolute(founder.url, origin),
-      jobTitle: founder.jobTitle,
-      description: founder.description,
-      image:
-        founder.image === undefined
-          ? undefined
-          : absolute(founder.image, origin),
-      sameAs: linksOf(founder.sameAs),
-      knowsAbout:
-        founder.knowsAbout === undefined ? undefined : [...founder.knowsAbout],
-      worksFor: ref(organization),
-    })
-  );
-}
-
 /** References to the founders described beside the organisation. */
-function founderRefs(
-  founders: readonly StructuredDataNode[]
-): Json[] | undefined {
-  const refs = founders.flatMap(founder => {
-    const id = founder["@id"];
-    return typeof id === "string" ? [{ "@id": id }] : [];
-  });
+function founderRefs(people: People): Json[] | undefined {
+  const refs = people.founders.map(founder => ({ "@id": founder.id }));
   return refs.length > 0 ? refs : undefined;
 }
 
@@ -1020,7 +1031,7 @@ function organizationNode(
   name: string,
   id: string,
   origin: string,
-  founders: readonly StructuredDataNode[]
+  people: People
 ): StructuredDataNode {
   const { brand } = rules;
   const otherNames = [...(brand.otherNames ?? [])];
@@ -1052,7 +1063,7 @@ function organizationNode(
             })
           ),
     foundingDate: brand.foundingDate,
-    founder: founderRefs(founders),
+    founder: founderRefs(people),
     parentOrganization:
       parent === undefined
         ? undefined
@@ -1070,50 +1081,108 @@ function organizationNode(
 }
 
 /**
- * The organisation and the website, each where the site has a name for it:
- * the brand's name for the organisation, the site's for the website. Both
- * are addressed at the site's home, spelled as every page's address is.
+ * Whoever runs the site and the website, each where the site has a name for
+ * it: the brand's name for the organisation, the site's for the website.
+ * Both are addressed at the site's home, spelled as every page's address is.
+ * The organisation names its founders, each described beside it, on every
+ * page. On a person's site the person runs it instead: described as their
+ * People entry and the brand's facts, publishing the website, with no
+ * organisation.
  */
 function siteNodesOf(
   rules: StructuredDataRules,
   answer: PageMetadataAnswer,
   origin: string,
   language: string | undefined,
-  founders: readonly StructuredDataNode[]
+  people: People
 ): SiteNodes {
   const siteName = answer.social?.siteName ?? rules.brand.name;
   const brandName = brandNameOf(rules, answer);
-  const home = homeOf(origin);
-  const site: SiteNodes = { nodes: [] };
-  if (brandName !== undefined) {
-    site.organizationId = `${home}#organization`;
-    site.nodes.push(
-      organizationNode(rules, brandName, site.organizationId, origin, founders)
-    );
-  }
+  const site = ownerNodesOf(rules, brandName, origin, people);
   if (siteName !== undefined) {
     site.siteName = siteName;
-    site.websiteId = `${home}#website`;
-    // The brand's other names are the site's too where the site is named
-    // for the brand, which is what Google reads a site's name from.
-    const otherNames =
-      brandName?.toLowerCase() === siteName.toLowerCase()
-        ? [...(rules.brand.otherNames ?? [])]
-        : [];
+    site.websiteId = `${homeOf(origin)}#website`;
     site.nodes.push(
-      node({
-        "@type": "WebSite",
-        "@id": site.websiteId,
-        url: home,
-        name: siteName,
-        alternateName: otherNames.length > 0 ? otherNames : undefined,
-        description: rules.brand.description,
-        publisher: ref(site.organizationId),
-        inLanguage: language,
-      })
+      websiteNodeOf(rules, { siteName, brandName, origin, language }, site)
     );
   }
   return site;
+}
+
+/**
+ * Whoever runs the site, described: the person who runs a person's site,
+ * else the brand's organisation with its founders beside it, else nobody.
+ */
+function ownerNodesOf(
+  rules: StructuredDataRules,
+  brandName: string | undefined,
+  origin: string,
+  people: People
+): SiteNodes {
+  const { owner } = people;
+  if (owner !== undefined) {
+    const described = personEntryNode(owner, undefined, contactOf(rules.brand));
+    return {
+      ownerId: owner.id,
+      nodes: described === undefined ? [] : [described],
+    };
+  }
+  if (brandName === undefined) return { nodes: [] };
+  const ownerId = `${homeOf(origin)}#organization`;
+  const organization = ref(ownerId);
+  const founders = people.founders
+    .map(founder => personEntryNode(founder, organization))
+    .filter(
+      (described): described is StructuredDataNode => described !== undefined
+    );
+  return {
+    ownerId,
+    nodes: [
+      organizationNode(rules, brandName, ownerId, origin, people),
+      ...founders,
+    ],
+  };
+}
+
+/** The brand's email and telephone, where it gives them. */
+function contactOf(brand: StructuredDataRules["brand"]): {
+  email?: string;
+  telephone?: string;
+} {
+  return {
+    ...(brand.email === undefined ? {} : { email: brand.email }),
+    ...(brand.telephone === undefined ? {} : { telephone: brand.telephone }),
+  };
+}
+
+/** The website, published by whoever runs the site. */
+function websiteNodeOf(
+  rules: StructuredDataRules,
+  named: {
+    siteName: string;
+    brandName: string | undefined;
+    origin: string;
+    language: string | undefined;
+  },
+  site: SiteNodes
+): StructuredDataNode {
+  const { siteName, brandName, origin, language } = named;
+  // The brand's other names are the site's too where the site is named
+  // for the brand, which is what Google reads a site's name from.
+  const otherNames =
+    brandName?.toLowerCase() === siteName.toLowerCase()
+      ? [...(rules.brand.otherNames ?? [])]
+      : [];
+  return node({
+    "@type": "WebSite",
+    "@id": site.websiteId,
+    url: homeOf(origin),
+    name: siteName,
+    alternateName: otherNames.length > 0 ? otherNames : undefined,
+    description: rules.brand.description,
+    publisher: ref(site.ownerId),
+    inLanguage: language,
+  });
 }
 
 /** Where a page is kept: its path from the site's root and its language. */
@@ -1290,7 +1359,7 @@ function mainEntityOf(
   return (
     refTo(parts.subject) ??
     refTo(parts.itemList) ??
-    (type === "aboutPage" ? ref(site.organizationId) : undefined)
+    (type === "aboutPage" ? ref(site.ownerId) : undefined)
   );
 }
 
@@ -1308,8 +1377,7 @@ async function pageNodesOf(
   facts: PageFacts,
   page: DescribedPage,
   description: Description,
-  site: SiteNodes,
-  founders: readonly StructuredDataNode[]
+  site: SiteNodes
 ): Promise<StructuredDataNode[]> {
   const { type, values, described } = description;
   const definition = STRUCTURED_DATA_TYPES[type];
@@ -1318,7 +1386,7 @@ async function pageNodesOf(
   const subject =
     definition.page || !described
       ? undefined
-      : subjectNode(type, values, page, { organization: site.organizationId });
+      : subjectNode(type, values, page, { publisher: site.ownerId });
   const aboutBrand = ABOUT_THE_BRAND.includes(type) && described;
   const faqSection = faqSectionOf(facts, page, type);
   const pageNode = node({
@@ -1328,7 +1396,7 @@ async function pageNodesOf(
     name: page.name,
     description: page.description,
     isPartOf: ref(site.websiteId),
-    about: aboutBrand ? ref(site.organizationId) : undefined,
+    about: aboutBrand ? ref(site.ownerId) : undefined,
     primaryImageOfPage: imageNode(facts.answer.social?.image, facts.origin),
     breadcrumb: refTo(breadcrumb),
     datePublished: page.published,
@@ -1337,16 +1405,9 @@ async function pageNodesOf(
     hasPart: refTo(faqSection),
     inLanguage: page.language,
   });
-  // The brand's founders are described where the site says who it is: the
-  // founders are given only for a described About page.
-  return [
-    pageNode,
-    breadcrumb,
-    itemList,
-    subject,
-    faqSection,
-    ...founders,
-  ].filter(each => each !== undefined);
+  return [pageNode, breadcrumb, itemList, subject, faqSection].filter(
+    each => each !== undefined
+  );
 }
 
 /** The details a type is missing, the name a described thing needs first. */
@@ -1493,11 +1554,10 @@ function decidedType(
  * where the page has a canonical, the page's own.
  */
 async function graphOf(
-  facts: PageFacts,
-  decided: Pick<PageStructuredData, "type" | "chosen" | "offered">
+  given: PageFacts,
+  chosen: Pick<PageStructuredData, "type" | "chosen" | "offered">
 ): Promise<PageStructuredData> {
-  const { ctx, input, answer, rules, origin } = facts;
-  const { type } = decided;
+  const { ctx, input, answer, rules, origin } = given;
   // The page's language, or on a site of one language, the site's.
   const language =
     input.locale ?? (await ctx.publicAddresses.defaultLanguage());
@@ -1516,6 +1576,16 @@ async function graphOf(
       ? undefined
       : await keptPageOf(new URL(url), origin, input.locale);
   const home = kept?.path === "/";
+  const decided = ownersProfile(given, chosen, url, home);
+  const { type } = decided;
+  const facts: PageFacts =
+    decided.type === chosen.type
+      ? given
+      : {
+          ...given,
+          mapping: given.rule?.details?.[decided.type] ?? {},
+          ownersPage: true,
+        };
   const names = ownNamesOf(
     facts,
     home,
@@ -1526,15 +1596,7 @@ async function graphOf(
     type,
     names.subject
   );
-  const founders =
-    type === "aboutPage" && description.described
-      ? founderNodes(
-          rules.brand.founders ?? [],
-          origin,
-          organizationIdOf(rules, answer, origin)
-        )
-      : [];
-  const site = siteNodesOf(rules, answer, origin, language, founders);
+  const site = siteNodesOf(rules, answer, origin, language, facts.people);
   if (url === undefined) {
     return { ...decided, nodes: site.nodes, problems: [] };
   }
@@ -1549,14 +1611,79 @@ async function graphOf(
     published,
     modified,
   });
-  const nodes = await pageNodesOf(facts, page, description, site, founders);
-  const article = articleCardOf(description, page, site);
+  const pageNodes = await pageNodesOf(facts, page, description, site);
+  // Each node once, by its `@id`: a person the page names who is also a
+  // founder, or whoever runs the site, is the node the site already wrote.
+  const nodes = uniqueNodes([
+    ...site.nodes,
+    ...pageNodes,
+    ...facts.named.values(),
+  ]);
+  const article = articleCardOf(description, page, site, nodes);
   return {
     ...decided,
-    nodes: [...site.nodes, ...nodes],
+    nodes,
     problems: missing,
     ...(article === undefined ? {} : { article }),
   };
+}
+
+/** `nodes` with each `@id` written once: the first node of it kept. */
+function uniqueNodes(
+  nodes: readonly StructuredDataNode[]
+): StructuredDataNode[] {
+  const seen = new Set<string>();
+  return nodes.filter(each => {
+    const id = each["@id"];
+    if (typeof id !== "string") return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/**
+ * Whether nobody decided what a page is: neither its own choice, its content
+ * type's nor its route's (`structuredDataHints.type`) made it the plain web
+ * page it is, and a profile page is offered for it.
+ */
+function leftToDecide(
+  facts: Pick<PageFacts, "hints">,
+  decided: Pick<PageStructuredData, "type" | "chosen" | "offered">
+): boolean {
+  return (
+    decided.chosen === "automatic" &&
+    decided.type === "webPage" &&
+    !isStructuredDataTypeKey(facts.hints.type) &&
+    decided.offered.includes("profilePage")
+  );
+}
+
+/**
+ * On a person's site, the person's own page is a profile page about them:
+ * the home page, or the page their entry names as theirs, where nobody chose
+ * what it is and it would otherwise be a plain web page. Any other page, and
+ * any choice someone made, its route's included, is left as decided.
+ */
+function ownersProfile(
+  facts: PageFacts,
+  decided: Pick<PageStructuredData, "type" | "chosen" | "offered">,
+  url: string | undefined,
+  home: boolean
+): Pick<PageStructuredData, "type" | "chosen" | "offered"> {
+  const { owner } = facts.people;
+  if (
+    owner === undefined ||
+    url === undefined ||
+    !leftToDecide(facts, decided)
+  ) {
+    return decided;
+  }
+  const bare = (address: string) =>
+    address.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const own =
+    owner.person.url !== undefined && bare(owner.person.url) === bare(url);
+  return home || own ? { ...decided, type: "profilePage" } : decided;
 }
 
 /**
@@ -1568,14 +1695,13 @@ async function graphOf(
 function articleCardOf(
   description: Description,
   page: DescribedPage,
-  site: SiteNodes
+  site: SiteNodes,
+  nodes: readonly StructuredDataNode[]
 ): PageArticle | undefined {
   const { type, values, described } = description;
   if (SUBJECT_FIELDS[type] !== articleFields || !described) return undefined;
-  const fields = articleFields(values, page, {
-    organization: site.organizationId,
-  });
-  const authors = authorsOf(fields.author, site.nodes);
+  const fields = articleFields(values, page, { publisher: site.ownerId });
+  const authors = authorsOf(fields.author, nodes);
   const tags = Array.isArray(values.keywords)
     ? values.keywords.filter(tag => typeof tag === "string")
     : [];
@@ -1634,6 +1760,14 @@ export async function buildStructuredData(
   if (origin === undefined) {
     return { ...decided, nodes: [], problems: [noSiteAddress(decided.type)] };
   }
+  // Whoever runs the site, named by the brand's name, else the site's: an
+  // organisation, or on a person's site, the person.
+  const ownerName = brandNameOf(rules, answer);
+  const organizationId =
+    rules.brand.kind === "person" || ownerName === undefined
+      ? undefined
+      : `${homeOf(origin)}#organization`;
+  const people = peopleOf(rules, origin, ownerName, organizationId);
   return graphOf(
     {
       ctx,
@@ -1647,6 +1781,9 @@ export async function buildStructuredData(
       hints,
       contentDate: once(() => contentDateOfPage(ctx, input, document)),
       declared: once(() => declaredFields(ctx, input)),
+      people,
+      ownerId: people.owner?.id ?? organizationId,
+      named: new Map(),
     },
     decided
   );

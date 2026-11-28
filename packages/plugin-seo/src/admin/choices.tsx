@@ -35,6 +35,12 @@ export const SITE_KIND_CHOICES: readonly {
     title: "A local business",
     detail: "Adds your address and opening hours.",
   },
+  {
+    value: "person",
+    title: "A person",
+    detail:
+      "A personal site: you publish it, and your home page is your profile.",
+  },
 ];
 
 /**

@@ -53,13 +53,18 @@ import {
   type SeoContentType,
   type SwitchedOffType,
 } from "../settings/contract";
-import type { StructuredDataBrand } from "../structured-data/rules";
+import type {
+  StructuredDataBrand,
+  StructuredDataPerson,
+} from "../structured-data/rules";
 
 import { useAddressParam } from "./address";
 import { codeBrandOf } from "./brand-draft";
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import { useLeaveWarning } from "./leave-warning";
+import { PeopleTab } from "./people";
+import { codePeopleOf } from "./people-draft";
 import { ownRulesSaveProblem, useRobotsRulesCheck } from "./robots-rules";
 import { AdminLink, SeoTrail } from "./section";
 import {
@@ -278,6 +283,16 @@ function useSettingsDefaults(): SettingsDefaults {
 function useCodeBrand(): StructuredDataBrand {
   const brand = usePluginClientConfig(SEO_PLUGIN_NAME)?.brand;
   return useMemo(() => codeBrandOf(brand), [brand]);
+}
+
+/**
+ * The People the site's code gives (the plugin's `structuredData.people`
+ * option), handed to the screen with its client config, for the People tab
+ * to show while the settings list none of their own.
+ */
+function useCodePeople(): StructuredDataPerson[] {
+  const people = usePluginClientConfig(SEO_PLUGIN_NAME)?.people;
+  return useMemo(() => codePeopleOf(people), [people]);
 }
 
 /** Whether a save answered with the stored document, version and all. */
@@ -519,6 +534,7 @@ function SettingsPanel({
 }): JSX.Element {
   // The brand facts the site's code gives, which the Organization tab shows.
   const codeBrand = useCodeBrand();
+  const codePeople = useCodePeople();
   switch (tab) {
     case "general":
       return <GeneralTab {...tabProps} serverAddresses={serverAddresses} />;
@@ -526,6 +542,18 @@ function SettingsPanel({
       return <ShareImagesTab {...tabProps} />;
     case "brand":
       return <BrandTab {...tabProps} codeBrand={codeBrand} />;
+    case "people": {
+      const home =
+        serverAddresses[0] ?? tabProps.draft.productionAddresses[0]?.trim();
+      return (
+        <PeopleTab
+          {...tabProps}
+          codePeople={codePeople}
+          codeBrand={codeBrand}
+          {...(home === undefined || home === "" ? {} : { home })}
+        />
+      );
+    }
     case "crawlers":
       return (
         <CrawlersTab

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { StructuredDataRules } from "../../structured-data/rules";
+import {
+  rulesFromOptions,
+  type StructuredDataRules,
+} from "../../structured-data/rules";
+import { peopleProblem, storedPeopleOf } from "../people-stored";
 import { structuredDataSettingsProblem } from "../structured-data-choices";
 import { structuredDataRulesOf } from "../structured-data-rules";
 
@@ -240,5 +244,103 @@ describe("structured data choices kept in the settings", () => {
     expect(
       structuredDataSettingsProblem({ posts: { type: "Recipe" } })
     ).toMatch(/posts\.type "Recipe" is not a type offered/);
+  });
+});
+
+describe("the People and who runs the site, from the SEO settings", () => {
+  const sara = { name: "Sara Khan", url: "/authors/sara-khan" };
+  const mobeen = { name: "Mobeen Abdullah", founder: true };
+
+  it("takes the settings' People whole once they list anyone, else the options'", () => {
+    const base = { ...fromOptions, people: [sara] };
+    expect(
+      structuredDataRulesOf(base, { brand: {}, types: {}, people: [mobeen] })
+        .people
+    ).toEqual([mobeen]);
+    expect(
+      structuredDataRulesOf(base, { brand: {}, types: {}, people: [] }).people
+    ).toEqual([sara]);
+    expect(
+      structuredDataRulesOf(base, { brand: {}, types: {} }).people
+    ).toEqual([sara]);
+  });
+
+  it("makes the site a person's where the settings choose it, over the options' kind", () => {
+    const base = {
+      ...fromOptions,
+      brand: { ...fromOptions.brand, kind: "organization" as const },
+    };
+    expect(
+      structuredDataRulesOf(base, {
+        brand: {},
+        types: {},
+        ownerKind: "person",
+      }).brand.kind
+    ).toBe("person");
+    expect(
+      structuredDataRulesOf(base, { brand: {}, types: {} }).brand.kind
+    ).toBe("organization");
+  });
+});
+
+describe("a stored list of People", () => {
+  it("accepts people and teams with the facts a person has, and nothing", () => {
+    expect(peopleProblem([])).toBeNull();
+    expect(
+      peopleProblem([
+        {
+          name: "Mobeen Abdullah",
+          otherNames: ["Mobeen"],
+          id: "https://mobeenabdullah.com/#person",
+          url: "https://mobeenabdullah.com/",
+          image: "/media/mobeen.jpg",
+          jobTitle: "Founder",
+          description: "Builds Nextly.",
+          sameAs: ["https://github.com/mobeenabdullah"],
+          knowsAbout: ["TypeScript"],
+          worksFor: { name: "Revnix", url: "https://revnix.com" },
+          founder: true,
+        },
+        { name: "Rext AI Team", type: "organization" },
+      ])
+    ).toBeNull();
+  });
+
+  it.each([
+    [{ name: "Sara" }, "People must be a list"],
+    [[{ name: " " }], "Person 1: needs a name"],
+    [
+      [{ name: "Sara Khan", sameAs: ["github.com/sara"] }],
+      "Sara Khan: profiles must each be a whole address",
+    ],
+    [[{ name: "Sara Khan", id: "/#person" }], "Sara Khan: id must be a whole"],
+    [[{ name: "Sara Khan", url: "about" }], "Sara Khan: must be an address"],
+    [[{ name: "Sara Khan", type: "robot" }], "Sara Khan: must be a person or"],
+    [[{ name: "Sara Khan", worksFor: { url: "x" } }], "work for needs a name"],
+    [[{ name: "Sara Khan", age: 30 }], "Sara Khan has no fact called age"],
+  ])("refuses %j, naming %s", (value, said) => {
+    expect(peopleProblem(value)).toContain(said);
+  });
+
+  it("reads a stored list trimmed, and one that is not a list as none", () => {
+    expect(
+      storedPeopleOf([{ name: "  Sara Khan ", jobTitle: " ", otherNames: [] }])
+    ).toEqual([{ name: "Sara Khan" }]);
+    expect(storedPeopleOf([{ name: "Sara", sameAs: ["x"] }])).toBeUndefined();
+    expect(storedPeopleOf("Sara")).toBeUndefined();
+  });
+
+  it("refuses People in the options that are not people, when the plugin is created", () => {
+    expect(() =>
+      rulesFromOptions(undefined, {
+        people: [{ name: "Sara Khan", sameAs: ["github.com/sara"] }],
+      })
+    ).toThrow(/structuredData\.people: Sara Khan: profiles/);
+    expect(() =>
+      rulesFromOptions(undefined, {
+        // A kind no site is, as a config read from JSON could hold.
+        brand: JSON.parse('{ "kind": "family" }'),
+      })
+    ).toThrow(/structuredData\.brand\.kind/);
   });
 });

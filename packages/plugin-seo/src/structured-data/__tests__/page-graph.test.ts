@@ -561,6 +561,8 @@ describe("the site's own nodes", () => {
         url: "https://revnix.com",
         foundingDate: "2020",
       },
+      // The founders on every page, each by the `@id` every page names.
+      founder: [{ "@id": `${ORIGIN}/about#person` }],
       sameAs: ["https://x.com/rextaihq"],
     });
     expect(nodeOf(nodes, "WebSite")).toEqual({
@@ -800,7 +802,7 @@ describe("kinds of page", () => {
     });
     expect(nodeOf(nodes, "Person")).toEqual({
       "@type": "Person",
-      "@id": `${ORIGIN}/#founder`,
+      "@id": `${ORIGIN}/about#person`,
       name: "Sara Khan",
       url: `${ORIGIN}/about`,
       jobTitle: "Founder",
@@ -808,11 +810,11 @@ describe("kinds of page", () => {
       worksFor: { "@id": `${ORIGIN}/#organization` },
     });
     expect(nodeOf(nodes, "Organization")?.founder).toEqual([
-      { "@id": `${ORIGIN}/#founder` },
+      { "@id": `${ORIGIN}/about#person` },
     ]);
   });
 
-  it("describes a Contact page its content type chose, about the organisation, naming no founder", async () => {
+  it("describes a Contact page its content type chose, about the organisation", async () => {
     const { nodes } = await buildStructuredData(
       context(),
       singleInput("contact", { id: "s2", title: "Get in touch." }),
@@ -824,8 +826,10 @@ describe("kinds of page", () => {
       name: "Get in touch.",
       about: { "@id": `${ORIGIN}/#organization` },
     });
-    expect(nodeOf(nodes, "Person")).toBeUndefined();
-    expect(nodeOf(nodes, "Organization")).not.toHaveProperty("founder");
+    // The founders are named on every page, the Contact page too.
+    expect(nodeOf(nodes, "Organization")?.founder).toEqual([
+      { "@id": `${ORIGIN}/about#person` },
+    ]);
   });
 
   it("describes a page listing entries as a collection, with the list its route gives", async () => {

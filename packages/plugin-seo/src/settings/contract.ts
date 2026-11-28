@@ -13,8 +13,17 @@ export const SEO_PLUGIN_NAME = "@nextlyhq/plugin-seo";
 /** The Single the settings live in. */
 export const SEO_SETTINGS_SLUG = "seo-settings";
 
-/** The kinds of site setup asks about, which decide what Google is told. */
-export const SITE_KINDS = ["company", "blog", "shop", "local"] as const;
+/**
+ * The kinds of site setup asks about, which decide what Google is told. A
+ * person's site (`person`) is published by that person, not a company.
+ */
+export const SITE_KINDS = [
+  "company",
+  "blog",
+  "shop",
+  "local",
+  "person",
+] as const;
 export type SiteKind = (typeof SITE_KINDS)[number];
 
 /** What AI tools are asked to do with the site's pages. */

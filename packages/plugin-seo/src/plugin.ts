@@ -830,6 +830,11 @@ function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
   ) as StructuredDataBrand;
 }
 
+/** The People the options give, as a plain JSON copy like the brand's. */
+function codePeopleOption(options: SeoPluginOptions): unknown {
+  return JSON.parse(JSON.stringify(options.structuredData?.people ?? []));
+}
+
 /** Every built-in preset role, by slug. */
 const PRESET_ROLES = ["admin", "editor", "author", "viewer"] as const;
 
@@ -1239,6 +1244,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // where the settings hold none of their own. Every one is public
         // already: each page's structured data states it.
         brand: codeBrandOption(options),
+        // The People the options give, which the People tab shows while
+        // the settings list none: public too, as each page names them.
+        people: codePeopleOption(options),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each

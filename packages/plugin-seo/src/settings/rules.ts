@@ -20,7 +20,11 @@ import {
 import { productionAddressesOf } from "../canonical";
 import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
-import type { StructuredDataTypeRule } from "../structured-data/rules";
+import type {
+  StructuredDataOwnerKind,
+  StructuredDataPerson,
+  StructuredDataTypeRule,
+} from "../structured-data/rules";
 
 import type { AiFiles } from "./ai-files";
 import { storedAiFilesOf } from "./ai-files-stored";
@@ -36,6 +40,7 @@ import {
   type SiteKind,
 } from "./contract";
 import { defaultTitlePattern, SEPARATORS, type Separator } from "./patterns";
+import { storedPeopleOf } from "./people-stored";
 import { productionAddressesProblem } from "./production-addresses";
 import {
   storedRobotsRulesOf,
@@ -469,6 +474,14 @@ export interface StructuredDataSettings {
   /** The site's default description, which says what the site is. */
   description?: string;
   brand: Omit<BrandFacts, "siteKind">;
+  /**
+   * Who runs the site, from the kind of site chosen: a person for a
+   * person's site, an organisation for any other kind; unset until one is
+   * chosen.
+   */
+  ownerKind?: StructuredDataOwnerKind;
+  /** The People the settings list, where they list any. */
+  people?: StructuredDataPerson[];
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   types: Readonly<Record<string, StructuredDataTypeRule>>;
 }
@@ -547,15 +560,17 @@ export async function readStructuredDataSettings(
   locale?: string
 ): Promise<StructuredDataSettings> {
   const document = await readSeoSettingsDocument(ctx, locale);
-  const { siteKind: _kind, ...brand } = await brandOf(
-    document,
-    mediaImages(ctx)
-  );
+  const { siteKind, ...brand } = await brandOf(document, mediaImages(ctx));
   const description = trimmed(document.description);
+  const people = storedPeopleOf(document.people) ?? [];
   return {
     ...(await identityOf(document, locale)),
     ...(description === undefined ? {} : { description }),
     brand,
+    ...(siteKind === undefined
+      ? {}
+      : { ownerKind: siteKind === "person" ? "person" : "organization" }),
+    ...(people.length === 0 ? {} : { people }),
     types:
       checked<Record<string, StructuredDataTypeRule>>(
         document.structuredData,
