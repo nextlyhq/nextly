@@ -90,6 +90,8 @@ export default withNextly(
 );
 ```
 
+Feeds follow the same terms: `withNextly()` rewrites `/feed.xml` and `/<folder>/feed.xml` to `<mount>/feed-files/feed.xml` and `<mount>/feed-files/<folder>/feed.xml`, which a plugin answers with root routes at `/feed-files/feed.xml` and `/feed-files/:section/feed.xml`, as the [SEO plugin's feeds](/docs/plugins/seo#rss-feeds) do. A site whose own dynamic route answers such an address (`app/[section]/feed.xml/route.ts`) passes `feedFiles: false`, since Next.js asks a rewrite before a dynamic route.
+
 A root route is matched only after core's own routes decline the path, so a plugin can never take over a core API address this way.
 
 ## The handler context

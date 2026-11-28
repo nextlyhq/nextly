@@ -38,6 +38,8 @@ import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute, ReadCodeRoutes } from "../code-pages/routes";
 import type { StatedMarkdown } from "../code-pages/stated";
 import { codePageDocument } from "../code-pages/store";
+import { feedLinksOf } from "../feeds/links";
+import type { CheckedFeed } from "../feeds/options";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
@@ -106,6 +108,8 @@ export interface AiOutputsConfig {
   codeMarkdown?: (path: string) => StatedMarkdown | undefined;
   /** The collections the sitemap is narrowed to, where it is. */
   collections?: readonly string[];
+  /** The site's RSS feeds, which llms.txt names in its head. */
+  feeds?: readonly CheckedFeed[];
 }
 
 /** The heading a page of a Single is listed under in llms.txt. */
@@ -176,7 +180,7 @@ async function linkedCopies(
 }
 
 /** What a page's head says, and the page's own name, as the outputs list it. */
-interface HeadNames {
+export interface HeadNames {
   title?: string;
   description?: string;
   /**
@@ -195,7 +199,7 @@ interface HeadNames {
  * once as the words it shows. Read here, once, so no writer reads it as
  * markup again.
  */
-const listedName = (head: HeadNames): string | undefined =>
+export const listedName = (head: HeadNames): string | undefined =>
   head.name ?? plainTitle(head.title);
 
 /** A listed page's head as the public may read it, and its published document. */
@@ -330,6 +334,7 @@ export async function llmsTxtOf(
     ...(rules.llmsFullTxt === true
       ? { fullTxt: new URL("/llms-full.txt", origin).href }
       : {}),
+    feeds: feedLinksOf(config.feeds ?? [], rules, origin),
     entries,
   });
 }
@@ -614,7 +619,7 @@ function refusedToPublic(error: unknown): boolean {
 const PUBLIC_READ = 100;
 
 /** The key a page's public reading is kept under. */
-const readingKey = (page: ListedPage): string =>
+export const readingKey = (page: ListedPage): string =>
   `${page.holder.collection}|${page.holder.id}|${page.language}`;
 
 /** The Direct API every public reading is made through. */
@@ -673,7 +678,7 @@ async function publicEntries(
  * holds more than the public may read. A page the public may not read has
  * none. One read per type and language, a hundred pages at a time.
  */
-async function publicDocuments(
+export async function publicDocuments(
   pages: readonly ListedPage[]
 ): Promise<Map<string, Record<string, unknown>>> {
   const found = new Map<string, Record<string, unknown>>();
@@ -713,7 +718,7 @@ const routePageOf = (page: ListedPage): RouteValuesPage => ({
  * route last supplied, read once for them all, so each is named as the
  * page is served.
  */
-async function publicHeads(
+export async function publicHeads(
   ctx: PluginContext,
   pages: readonly ListedPage[],
   readable: ReadonlyMap<string, Record<string, unknown>>,

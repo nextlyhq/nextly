@@ -193,6 +193,71 @@ const KEY_FILE_SOURCE = "/:key([0-9a-f]{32}).txt";
  */
 export const KEY_FILE_ROUTE_PREFIX = "/indexnow-key";
 
+/**
+ * Where a feed file is answered behind the API handler: `<prefix><address>`,
+ * so `/blog/feed.xml` reaches `<api>/feed-files/blog/feed.xml`. A plugin's
+ * root route at that path answers it. A prefix of its own, as the key file's
+ * is, so a feed under a name the built-in router claims (`/users/feed.xml`)
+ * still reaches the plugin.
+ */
+export const FEED_FILE_ROUTE_PREFIX = "/feed-files";
+
+/**
+ * The feed addresses a plugin may answer: `feed.xml` at the site's root, or
+ * in one folder of it (`/blog/feed.xml`), the names feed readers and sites
+ * use for a site's feed and a section's. On the same terms as the files
+ * above: the site's own page, route file, `public/` file or rewrite of such
+ * an address comes first.
+ */
+const ROOT_FEED_SOURCE = "/feed.xml";
+const SECTION_FEED_SOURCE = "/:section/feed.xml";
+
+/** An address the folder feed source matches, to ask whether the site rewrites every folder's. */
+const SECTION_FEED_SAMPLE = "/section/feed.xml";
+
+/**
+ * A folder name a feed rewrite can leave to the site by name: the characters
+ * an address's segment holds unescaped, none of which a route pattern reads
+ * as anything but itself once `.` is escaped.
+ */
+const PLAIN_FOLDER = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * The source of the rewrite of `/<folder>/feed.xml` to a plugin, given the
+ * sources of the site's own rewrites; none where the site rewrites every
+ * folder's feed itself. Next asks our `afterFiles` before the site's
+ * `fallback`, so a folder the site rewrites, such as `/blog/feed.xml` or
+ * `/blog/:path*`, is left out of the pattern by name and keeps reaching the
+ * site's rule. A site rule under a folder pattern this cannot read name by
+ * name (`/:lang(en|fr)/feed.xml`, `/:lang(en|fr)/:path*`) that reaches a
+ * folder's `feed.xml` keeps every folder's.
+ */
+function sectionFeedSource(
+  theirs: readonly string[],
+  matches: (source: string, path: string) => boolean
+): string | null {
+  const claimed = new Set<string>();
+  for (const source of theirs) {
+    if (matches(source, SECTION_FEED_SAMPLE)) return null;
+    const folder = /^\/([^/]+)\//.exec(source)?.[1];
+    if (folder === undefined) continue;
+    if (!PLAIN_FOLDER.test(folder)) {
+      // A folder pattern (`/:lang(en|fr)/:path*`) can't be left out by name:
+      // read as one plain folder, a rule whose rest reaches `feed.xml` keeps
+      // every folder's feed for the site.
+      const rest = source.slice(folder.length + 1);
+      if (matches(`/x${rest}`, "/x/feed.xml")) return null;
+      continue;
+    }
+    if (matches(source, `/${folder}/feed.xml`)) claimed.add(folder);
+  }
+  if (claimed.size === 0) return SECTION_FEED_SOURCE;
+  // A lookahead at the folder's start, which Next's matcher accepts inside a
+  // non-capturing group: any folder but the ones the site rewrites.
+  const names = [...claimed].map(folder => folder.replace(/\./g, "\\."));
+  return `/:section((?:(?!(?:${names.join("|")})/)[^/]+))/feed.xml`;
+}
+
 /** A key file's address, to ask whether the site rewrites such addresses itself. */
 const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
 
@@ -205,6 +270,14 @@ export interface WithNextlyOptions {
   apiRoute?: string;
   /** More root files, beyond robots.txt, sitemap.xml, llms.txt and llms-full.txt, that a plugin answers. */
   rootFiles?: readonly string[];
+  /**
+   * Whether `/feed.xml` and `/<folder>/feed.xml` reach a plugin that answers
+   * feeds, where the site serves no file of its own there. On by default.
+   * Turn it off where the site's own dynamic route answers such an address
+   * (`app/[section]/feed.xml/route.ts`): a rewrite is asked before a dynamic
+   * route, so the plugin would answer it instead.
+   */
+  feedFiles?: boolean;
   /**
    * The app's migrations folder, relative to the project root, as
    * `db.migrationsDir` in the Nextly config sets it. Defaults to
@@ -260,6 +333,32 @@ type GetPathMatch = (
   source: string
 ) => (path: string) => Record<string, unknown> | false;
 
+/** The rewrites of the feed files to the handler's feed routes, around the site's own rules. */
+function feedRewrites(
+  all: readonly Rewrite[],
+  matches: (source: string, path: string) => boolean,
+  apiRoute: string
+): Rewrite[] {
+  const theirs = all.flatMap(rule =>
+    typeof rule.source === "string" ? [rule.source] : []
+  );
+  const rewrites: Rewrite[] = [];
+  if (!theirs.some(source => matches(source, ROOT_FEED_SOURCE))) {
+    rewrites.push({
+      source: ROOT_FEED_SOURCE,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${ROOT_FEED_SOURCE}`,
+    });
+  }
+  const section = sectionFeedSource(theirs, matches);
+  if (section !== null) {
+    rewrites.push({
+      source: section,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${SECTION_FEED_SOURCE}`,
+    });
+  }
+  return rewrites;
+}
+
 /**
  * The site's own rewrites, with each root file rewritten to the API handler
  * after them. `afterFiles` is checked once the site's own pages, route files
@@ -312,12 +411,18 @@ function withRootFileRewrites(
             destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
           },
         ];
+    // The feed files, on the same terms: the root's left to a site that
+    // rewrites it itself, each folder's to a site that rewrites that folder's,
+    // and all of them where the site turns them off.
+    const feedFileRewrites =
+      options.feedFiles === false ? [] : feedRewrites(all, matches, apiRoute);
     return {
       beforeFiles: phases.beforeFiles ?? [],
       afterFiles: [
         ...(phases.afterFiles ?? []),
         ...rootRewrites,
         ...keyFileRewrites,
+        ...feedFileRewrites,
       ],
       fallback: phases.fallback ?? [],
     };
