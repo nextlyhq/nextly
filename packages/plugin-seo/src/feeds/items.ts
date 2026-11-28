@@ -23,6 +23,7 @@ import {
 } from "../outputs/ai-outputs";
 import { listPages, type ListedPage } from "../outputs/listing";
 import type { ReadRules } from "../resolver/provider";
+import { listedPageTypeOf } from "../structured-data/graph";
 import type {
   DetailMapping,
   ReadStructuredDataRules,
@@ -71,23 +72,32 @@ interface CodeCandidate {
 
 type Candidate = EntryCandidate | CodeCandidate;
 
-/** A value as a date, where it is one. */
+/**
+ * A value as a date, where it is one. A `Date` that holds no time (`new
+ * Date("not a date")`) is none: asked for its text, it throws, which would
+ * take the whole feed down for one source's bad item.
+ */
 function asDate(value: unknown): Date | undefined {
-  const text = value instanceof Date ? value.toISOString() : dateOf(value);
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : new Date(value);
+  }
+  const text = dateOf(value);
   if (text === undefined) return undefined;
   const date = new Date(text);
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 /**
- * The fields a content type's structured data reads each detail from: the
- * mapping for the type its pages are described as, else the first it
- * names, else none, so each detail is read from the field named like it.
+ * The fields a page's structured data reads each detail from: the mapping
+ * for the type the page is described as (`listedPageTypeOf`, the one
+ * decision its structured data makes), else none, so each detail is read
+ * from the field named like it, as its structured data reads it.
  */
-function mappingOf(rule: StructuredDataTypeRule | undefined): DetailMapping {
-  const details = rule?.details ?? {};
-  const chosen = rule?.type === undefined ? undefined : details[rule.type];
-  return chosen ?? Object.values(details)[0] ?? {};
+function mappingOf(
+  document: Readonly<Record<string, unknown>>,
+  rule: StructuredDataTypeRule | undefined
+): DetailMapping {
+  return rule?.details?.[listedPageTypeOf(document, rule)] ?? {};
 }
 
 /**
@@ -246,7 +256,7 @@ async function entryCandidates(
     if (document === undefined) continue;
     const published = publishedOf(
       document,
-      mappingOf(rules?.types[page.holder.collection])
+      mappingOf(document, rules?.types[page.holder.collection])
     );
     const updated = asDate(page.lastModified);
     candidates.push({
@@ -351,7 +361,7 @@ export async function feedItemsOf(
     const credits = await creditsOf(
       ctx,
       candidate,
-      mappingOf(rules?.types[page.holder.collection]),
+      mappingOf(candidate.document, rules?.types[page.holder.collection]),
       origin
     );
     items.push({

@@ -70,6 +70,19 @@ async function boot(dialect: TestDialect) {
         collections: ["posts", "members"],
         singles: ["home", "blog"],
         baseUrl: SITE,
+        // Posts are articles by default, dated by different fields for each
+        // type a post may choose to be described as.
+        structuredData: {
+          types: {
+            posts: {
+              type: "article",
+              details: {
+                article: { datePublished: "publishedAt" },
+                blogPosting: { datePublished: "writtenAt" },
+              },
+            },
+          },
+        },
         feeds: {
           site: { path: "/feed.xml", sources: ["posts", releases] },
           blog: {
@@ -92,6 +105,7 @@ async function boot(dialect: TestDialect) {
           text({ name: "slug" }),
           textarea({ name: "excerpt" }),
           date({ name: "publishedAt" }),
+          date({ name: "writtenAt" }),
           text({ name: "author" }),
           text({ name: "category" }),
           // Kept from the public, and so from every feed.
@@ -241,6 +255,25 @@ describe.each(getConfiguredTestDialects())("RSS feeds (%s)", dialect => {
       expect.stringMatching(/^https:\/\/acme\.example#posts:/),
     ]);
     expect(site.body).toContain("<title>Acme</title>");
+  });
+
+  it("dates a page by the field mapped for the type the page chooses to be described as", async () => {
+    const t = await boot(dialect);
+    await post(t, "as-article", "published", {
+      publishedAt: "2026-11-10T09:00:00.000Z",
+      writtenAt: "2026-01-01T09:00:00.000Z",
+    });
+    await post(t, "as-blog-posting", "published", {
+      publishedAt: "2026-01-01T09:00:00.000Z",
+      writtenAt: "2026-11-20T09:00:00.000Z",
+      seo: { structuredDataType: "blogPosting" },
+    });
+
+    const items = itemsOf((await feed("/blog/feed.xml")).body);
+    expect(items.map(item => [item.link, item.pubDate])).toEqual([
+      [`${SITE}/blog/as-blog-posting`, "Fri, 20 Nov 2026 09:00:00 GMT"],
+      [`${SITE}/blog/as-article`, "Tue, 10 Nov 2026 09:00:00 GMT"],
+    ]);
   });
 
   it("answers not found where no feed is", async () => {

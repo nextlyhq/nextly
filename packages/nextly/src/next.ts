@@ -209,16 +209,49 @@ export const FEED_FILE_ROUTE_PREFIX = "/feed-files";
  * above: the site's own page, route file, `public/` file or rewrite of such
  * an address comes first.
  */
-const FEED_FILE_SOURCES = ["/feed.xml", "/:section/feed.xml"] as const;
+const ROOT_FEED_SOURCE = "/feed.xml";
+const SECTION_FEED_SOURCE = "/:section/feed.xml";
+
+/** An address the folder feed source matches, to ask whether the site rewrites every folder's. */
+const SECTION_FEED_SAMPLE = "/section/feed.xml";
 
 /**
- * An address each feed source matches, to ask whether the site rewrites such
- * addresses itself.
+ * A folder name a feed rewrite can leave to the site by name: the characters
+ * an address's segment holds unescaped, none of which a route pattern reads
+ * as anything but itself once `.` is escaped.
  */
-const FEED_FILE_SAMPLES: Readonly<Record<string, string>> = {
-  "/feed.xml": "/feed.xml",
-  "/:section/feed.xml": "/section/feed.xml",
-};
+const PLAIN_FOLDER = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * The source of the rewrite of `/<folder>/feed.xml` to a plugin, given the
+ * sources of the site's own rewrites; none where the site rewrites every
+ * folder's feed itself. Next asks our `afterFiles` before the site's
+ * `fallback`, so a folder the site rewrites, such as `/blog/feed.xml` or
+ * `/blog/:path*`, is left out of the pattern by name and keeps reaching the
+ * site's rule. A site rule naming `feed.xml` under a folder pattern this
+ * cannot read name by name (`/:lang(en|fr)/feed.xml`) keeps every folder's.
+ */
+function sectionFeedSource(
+  theirs: readonly string[],
+  matches: (source: string, path: string) => boolean
+): string | null {
+  const claimed = new Set<string>();
+  for (const source of theirs) {
+    if (matches(source, SECTION_FEED_SAMPLE)) return null;
+    const folder = /^\/([^/]+)\//.exec(source)?.[1];
+    if (folder === undefined) continue;
+    if (!PLAIN_FOLDER.test(folder)) {
+      if (source.includes("feed.xml")) return null;
+      continue;
+    }
+    if (matches(source, `/${folder}/feed.xml`)) claimed.add(folder);
+  }
+  if (claimed.size === 0) return SECTION_FEED_SOURCE;
+  // A lookahead at the folder's start, which Next's matcher accepts inside a
+  // non-capturing group: any folder but the ones the site rewrites.
+  const names = [...claimed].map(folder => folder.replace(/\./g, "\\."));
+  return `/:section((?:(?!(?:${names.join("|")})/)[^/]+))/feed.xml`;
+}
 
 /** A key file's address, to ask whether the site rewrites such addresses itself. */
 const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
@@ -295,6 +328,32 @@ type GetPathMatch = (
   source: string
 ) => (path: string) => Record<string, unknown> | false;
 
+/** The rewrites of the feed files to the handler's feed routes, around the site's own rules. */
+function feedRewrites(
+  all: readonly Rewrite[],
+  matches: (source: string, path: string) => boolean,
+  apiRoute: string
+): Rewrite[] {
+  const theirs = all.flatMap(rule =>
+    typeof rule.source === "string" ? [rule.source] : []
+  );
+  const rewrites: Rewrite[] = [];
+  if (!theirs.some(source => matches(source, ROOT_FEED_SOURCE))) {
+    rewrites.push({
+      source: ROOT_FEED_SOURCE,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${ROOT_FEED_SOURCE}`,
+    });
+  }
+  const section = sectionFeedSource(theirs, matches);
+  if (section !== null) {
+    rewrites.push({
+      source: section,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${SECTION_FEED_SOURCE}`,
+    });
+  }
+  return rewrites;
+}
+
 /**
  * The site's own rewrites, with each root file rewritten to the API handler
  * after them. `afterFiles` is checked once the site's own pages, route files
@@ -347,23 +406,11 @@ function withRootFileRewrites(
             destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
           },
         ];
-    // The feed files, on the same terms: each source left to a site that
-    // rewrites such an address itself, and all of them where the site turns
-    // them off.
+    // The feed files, on the same terms: the root's left to a site that
+    // rewrites it itself, each folder's to a site that rewrites that folder's,
+    // and all of them where the site turns them off.
     const feedFileRewrites =
-      options.feedFiles === false
-        ? []
-        : FEED_FILE_SOURCES.filter(
-            source =>
-              !all.some(
-                rule =>
-                  typeof rule.source === "string" &&
-                  matches(rule.source, FEED_FILE_SAMPLES[source] ?? source)
-              )
-          ).map(source => ({
-            source,
-            destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${source}`,
-          }));
+      options.feedFiles === false ? [] : feedRewrites(all, matches, apiRoute);
     return {
       beforeFiles: phases.beforeFiles ?? [],
       afterFiles: [
