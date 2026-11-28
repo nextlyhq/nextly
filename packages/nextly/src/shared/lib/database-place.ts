@@ -41,6 +41,12 @@ export interface ServerParts {
   host: string;
   port: string;
   database: string;
+  /**
+   * Set where `host` is a socket's path resolved against the project folder,
+   * which is spelled as that folder is: with a drive and backslashes on
+   * Windows, so it does not start with `/` as every other socket path does.
+   */
+  socket?: true;
 }
 
 /**
@@ -357,11 +363,14 @@ function serverParts(
     return undefined;
   }
   const defaults = driverDefaults(dialect, env);
-  const parts = {
+  const parts: ServerParts = {
     host:
       socket?.path || host || (named === NO_HOST ? "" : named) || defaults.host,
     port: port || parsed.port || defaults.port,
     database: database || defaults.database,
+    ...(socket?.resolved === true && socket.path !== ""
+      ? { socket: true }
+      : {}),
   };
   return partsReadable(parts, socket) ? parts : undefined;
 }
@@ -460,7 +469,7 @@ export function placeOf(address: DatabaseAddress): DatabasePlace {
     case "server":
       return address.parts &&
         !address.disagrees &&
-        hostIsThisMachine(address.parts.host)
+        (address.parts.socket === true || hostIsThisMachine(address.parts.host))
         ? "local"
         : "live";
     default:
