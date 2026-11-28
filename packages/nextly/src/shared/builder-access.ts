@@ -10,13 +10,14 @@
  * Reading entities stays open in every environment: production still lists collections and
  * singles to manage their entries, and entry writes are never refused here.
  *
- * Kept apart from `builder-refusal.ts` because this one reads the stored configuration through
- * the route handler, and the code-side schema saves (the Direct API, a plugin's services, the
- * start) must not import the route handler.
+ * Kept apart from `builder-refusal.ts` because this one reads the route's stored configuration
+ * (the route handler's config store, `route-handler/handler-config`), which the code-side schema
+ * saves (the Direct API, a plugin's services, the start) must not depend on. The store alone is
+ * imported, not the route handler, so a reader of this module does not load the request path.
  */
 
 import type { NextlyError } from "../errors/nextly-error";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { getHandlerConfig } from "../route-handler/handler-config";
 
 import {
   builderDisabledError,

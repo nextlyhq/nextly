@@ -71,6 +71,7 @@ import { boundCaller } from "../../domains/widgets/declaration/read-services";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../../init/boot-migrations-gate";
 import { getCoreVersion } from "../../plugins/core-version";
+import { getHandlerConfig } from "../../route-handler/handler-config";
 import { isProductionRuntime } from "../../shared/builder-refusal";
 import { lastStorageWriteFailure } from "../../storage/last-write-failure";
 
@@ -198,14 +199,11 @@ async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
 
 /**
  * The site's own name for the deployment (`admin.environment.label`), when it
- * gives one. Read from the booted config on demand, so this module does not
- * load the route handler's.
+ * gives one. Read from the route handler's config store, imported on its own,
+ * so this module does not load the route handler.
  */
-async function environmentLabel(): Promise<{ label?: string }> {
+function environmentLabel(): { label?: string } {
   try {
-    const { getHandlerConfig } = await import(
-      "../../route-handler/auth-handler"
-    );
     const label = getHandlerConfig()?.admin?.environment?.label;
     return typeof label === "string" && label.trim() !== "" ? { label } : {};
   } catch {
@@ -259,10 +257,10 @@ async function readSystemHealth(): Promise<SystemHealthData> {
   const adapter = container.get<AdapterLike>("adapter");
   const config = container.get<NextlyServiceConfig>("config");
   const version = getCoreVersion();
-  const [facts, latest, label, email, jobs] = await Promise.all([
+  const label = environmentLabel();
+  const [facts, latest, email, jobs] = await Promise.all([
     readProblemFacts(),
     readLatestVersion(version),
-    environmentLabel(),
     orNull(() =>
       readEmailHealth(
         adapter.getDrizzle(),

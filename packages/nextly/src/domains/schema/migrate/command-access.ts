@@ -22,7 +22,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { PresetDeclarationSource } from "../../../auth/preset-reach";
-import { withCommandServicesLent } from "../../../cli/utils/lend-command-services";
 import type { Logger } from "../../../cli/utils/logger";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import { describeError } from "../../../errors/describe-error";
@@ -83,6 +82,11 @@ async function onCommandConnection<T>(
   const writing = inCommit
     ? withGrantsExpiryRequired
     : <R>(run: () => Promise<R>): Promise<R> => run();
+  // Loaded around the write that needs it: the lent services reach the
+  // registry services and the jobs, which the command's other paths never load.
+  const { withCommandServicesLent } = await import(
+    "../../../cli/utils/lend-command-services"
+  );
   return withCommandServicesLent(
     adapter,
     logger,

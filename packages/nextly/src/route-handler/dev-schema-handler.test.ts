@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setHandlerConfig } from "./auth-handler";
+import { setHandlerConfig } from "./handler-config";
 import { handleDevSchemaRequest } from "./dev-schema-handler";
 
 let dir: string;

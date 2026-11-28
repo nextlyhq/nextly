@@ -22,7 +22,7 @@ import {
 } from "../builder-refusal";
 
 const mockGetHandlerConfig = vi.fn();
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   getHandlerConfig: () => mockGetHandlerConfig(),
 }));
 

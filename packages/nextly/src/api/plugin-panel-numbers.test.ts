@@ -12,7 +12,7 @@ import { requireAuthentication } from "../auth/middleware";
 import { requireNextly } from "../direct-api/nextly";
 import { recordKeptOffDashboard } from "../domains/widgets/kept-off-dashboard";
 import { NextlyError } from "../errors/nextly-error";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { getHandlerConfig } from "../route-handler/handler-config";
 import { readAttentionDigest } from "../services/dashboard/attention-source";
 
 import { getPluginPanelNumbers } from "./plugin-panel-numbers";
@@ -30,7 +30,7 @@ vi.mock("./authenticated-read", () => ({
   readCaller: vi.fn(async () => ({ user: { id: "reader" } })),
 }));
 vi.mock("../init", () => ({ getCachedNextly: vi.fn(async () => ({})) }));
-vi.mock("../route-handler/auth-handler", () => ({
+vi.mock("../route-handler/handler-config", () => ({
   getHandlerConfig: vi.fn(),
 }));
 vi.mock("../services/dashboard/attention-source", () => ({

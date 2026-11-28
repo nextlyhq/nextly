@@ -32,12 +32,12 @@ import {
   userMenuItemId,
   validUserMenuItem,
 } from "./header-item";
-import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import { pluginEntitySlugs } from "./plugin-entity-slugs";
 import {
   resolvedPluginPlacement,
   resolvePluginLanding,
@@ -389,38 +389,6 @@ function listFiltersMeta(
         : {}),
     })
   );
-}
-
-/** A plugin's collections, Singles and field groups, by registered slug. */
-export interface PluginEntitySlugs {
-  collections: string[];
-  singles: string[];
-  fieldGroups: string[];
-}
-
-/**
- * The slugs a plugin's entities are registered under: each declared slug
- * through the host's rename, as every list and link in the admin addresses
- * them. A declared slug a host renamed names nothing the admin can find.
- *
- * One answer for the plugin metadata the admin reads and for the lists that
- * separate the plugins' entities from the site's, so an entity a host renamed
- * is the plugin's in both.
- */
-export function pluginEntitySlugs(plugin: PluginDefinition): PluginEntitySlugs {
-  const renameMap = plugin.renameMap ?? {};
-  return {
-    collections: pluginCollectionSlugs(plugin).map(declared =>
-      renamedSlug(renameMap, declared)
-    ),
-    singles:
-      plugin.contributes?.singles?.map(s => renamedSlug(renameMap, s.slug)) ??
-      [],
-    fieldGroups:
-      plugin.contributes?.fieldGroups?.map(c =>
-        renamedSlug(renameMap, c.slug)
-      ) ?? [],
-  };
 }
 
 /** A plugin's own item, where it chose to put it; nothing for none. */

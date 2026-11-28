@@ -29,7 +29,7 @@ vi.mock("node:fs", async importOriginal => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 
