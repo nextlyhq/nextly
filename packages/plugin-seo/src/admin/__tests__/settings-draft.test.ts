@@ -845,6 +845,42 @@ describe("rebasedDraft and the People", () => {
   });
 });
 
+describe("a person's other names", () => {
+  it("keeps a name with a comma in it whole when another fact is edited", () => {
+    const listed = draftOf({
+      id: "s1",
+      _rev: "2",
+      people: [{ name: "John Smith", otherNames: ["Smith, John", "J. Smith"] }],
+    });
+    const draft: SettingsDraft = {
+      ...listed,
+      people: [{ ...listed.people[0], jobTitle: "Editor" }],
+    };
+
+    expect(
+      changesOf(
+        {
+          id: "s1",
+          _rev: "2",
+          people: [
+            { name: "John Smith", otherNames: ["Smith, John", "J. Smith"] },
+          ],
+        },
+        draft
+      )
+    ).toEqual({
+      people: [
+        {
+          name: "John Smith",
+          otherNames: ["Smith, John", "J. Smith"],
+          jobTitle: "Editor",
+        },
+      ],
+      _rev: "2",
+    });
+  });
+});
+
 describe("rebasedDraft and the verification codes", () => {
   it("keeps a code another person saved for one service while this draft edits another's", () => {
     const before = draftOf({

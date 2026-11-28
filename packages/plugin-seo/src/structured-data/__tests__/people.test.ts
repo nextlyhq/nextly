@@ -537,6 +537,22 @@ describe("a person's site", () => {
     expect(persons(nodes).map(node => node["@id"])).toEqual([PERSON_ID]);
   });
 
+  it("makes the home page a profile of the person even where it has a name of its own", async () => {
+    const people = MOBEEN_RULES.people ?? [];
+    const { nodes, type } = await buildStructuredData(
+      context(),
+      entryInput("pages", { id: "h1", title: "Welcome", name: "Home" }),
+      answerAt("/", "Welcome"),
+      { ...MOBEEN_RULES, people: [{ ...people[0], url: "/about" }] }
+    );
+
+    expect(type).toBe("profilePage");
+    expect(nodeOf(nodes, "ProfilePage")?.mainEntity).toEqual({
+      "@id": `${ORIGIN}/about#person`,
+    });
+    expect(persons(nodes).map(node => node.name)).toEqual(["Mobeen Abdullah"]);
+  });
+
   it("leaves the home page as its route says it is", async () => {
     const { type } = await buildStructuredData(
       context(),

@@ -327,6 +327,11 @@ interface PageFacts {
    * once, beside the page's own, and named by reference wherever it appears.
    */
   named: Map<string, StructuredDataNode>;
+  /**
+   * Set where the page is a profile only because it is the own page of the
+   * person who runs a person's site (`ownersProfile`): it is about them.
+   */
+  ownersPage?: true;
 }
 
 /**
@@ -382,9 +387,15 @@ const personRead: DetailReader = async (facts, read) => {
  * The person a profile page is about: the one the page names, whose own page
  * it is where nothing else gives them one, so they go by the `@id` a post
  * naming them by their entry gives them; or on a person's site, where the
- * page names nobody, the person who runs it.
+ * page names nobody or is the person's own page, the person who runs it.
  */
 const profileSubjectRead: DetailReader = async (facts, read) => {
+  // The owner's own page made a profile is about them, unless its content
+  // type maps whom it is about: a field named like a person only by chance,
+  // such as a page's own `name`, is not read as one.
+  if (facts.ownersPage === true && facts.mapping.person === undefined) {
+    return ref(facts.people.owner?.id);
+  }
   const named = await namedOf(facts.ctx, facts.input, read, facts.origin);
   if (named !== undefined) {
     const page =
@@ -1562,7 +1573,11 @@ async function graphOf(
   const facts: PageFacts =
     decided.type === chosen.type
       ? given
-      : { ...given, mapping: given.rule?.details?.[decided.type] ?? {} };
+      : {
+          ...given,
+          mapping: given.rule?.details?.[decided.type] ?? {},
+          ownersPage: true,
+        };
   const names = ownNamesOf(
     facts,
     home,

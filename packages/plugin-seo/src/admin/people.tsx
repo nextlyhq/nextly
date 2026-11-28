@@ -24,6 +24,7 @@ import type {
 import { CODE_LIST_NOTE } from "./brand-details";
 import {
   EMPTY_PERSON,
+  otherNamesOf,
   personDraftOf,
   personDraftProblem,
   type PersonDraft,
@@ -58,10 +59,7 @@ const UNKNOWN_ORIGIN = "https://site.invalid";
 
 /** What of a person as typed decides the identifier pages give them. */
 function identityOf(draft: PersonDraft): StructuredDataPerson {
-  const otherNames = draft.otherNames
-    .split(",")
-    .map(each => each.trim())
-    .filter(each => each !== "");
+  const otherNames = otherNamesOf(draft.otherNames);
   return {
     name: draft.name.trim(),
     type: draft.type,
@@ -177,8 +175,9 @@ function PersonCard({
       </SettingsRowGroup>
       <TextRow
         label="Other names"
-        description="Names a page may credit them by. Separate with commas."
+        description="Names a page may credit them by, one a line."
         value={person.otherNames}
+        multiline
         onChange={field("otherNames")}
       />
       <TextRow

@@ -42,7 +42,7 @@ import {
 import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
 import { isPersonalSite, ownerNameOf } from "./people";
-import { peopleDraftProblem } from "./people-draft";
+import { otherNamesOf, peopleDraftProblem } from "./people-draft";
 import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
   networkOf,
@@ -554,7 +554,7 @@ function PersonalSiteNote({
   const name = ownerNameOf(draft, codeBrand);
   const key = name.toLowerCase().replace(/\s+/g, " ");
   const entry = draft.people.find(person =>
-    [person.name, ...person.otherNames.split(",")].some(
+    [person.name, ...otherNamesOf(person.otherNames)].some(
       each => each.trim().toLowerCase().replace(/\s+/g, " ") === key
     )
   );

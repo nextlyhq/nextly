@@ -13,7 +13,7 @@ import type { StructuredDataPerson } from "../structured-data/rules";
 /** One person (or team) as the form holds them: each fact as typed. */
 export interface PersonDraft {
   name: string;
-  /** Other names they go by, separated by commas. */
+  /** Other names they go by, one a line, since a name may hold a comma. */
   otherNames: string;
   type: "person" | "organization";
   /** Their own page: from the site's root, or a whole address. */
@@ -63,7 +63,7 @@ export function personDraftOf(person: Record<string, unknown>): PersonDraft {
   const employer = isRecord(person.worksFor) ? person.worksFor : {};
   return {
     name: text(person.name),
-    otherNames: texts(person.otherNames).join(", "),
+    otherNames: texts(person.otherNames).join("\n"),
     type: person.type === "organization" ? "organization" : "person",
     url: text(person.url),
     id: text(person.id),
@@ -91,6 +91,10 @@ const split = (value: string, by: RegExp): string[] =>
     .split(by)
     .map(each => each.trim())
     .filter(each => each !== "");
+
+/** The other names as typed, one a line, each trimmed, blanks left out. */
+export const otherNamesOf = (value: string): string[] =>
+  split(value, /\s*\n\s*/);
 
 /** `{ [key]: value.trim() }` where the value is not blank. */
 const kept = <K extends string>(
@@ -120,7 +124,7 @@ function isBlankPerson(draft: PersonDraft): boolean {
 function storedPerson(draft: PersonDraft): StructuredDataPerson {
   return {
     name: draft.name.trim(),
-    ...keptList("otherNames", split(draft.otherNames, /,/)),
+    ...keptList("otherNames", otherNamesOf(draft.otherNames)),
     ...(draft.type === "organization" ? { type: "organization" as const } : {}),
     ...kept("url", draft.url),
     ...kept("id", draft.id),
