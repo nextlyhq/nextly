@@ -26,7 +26,11 @@ export const Homepage = defineSingle({
   // which is what exercises the page builder's own recording here.
   versions: { drafts: true },
   fields: [
-    text({ name: "title" }),
+    // The site's own title for its home page, which `/` states in its head and
+    // the browser tab. A Single's own `title` starts at its `defaultValue`, not
+    // at the Single's label, so without one a fresh site's home page had no
+    // title at all until an author typed one.
+    text({ name: "title", defaultValue: "Homepage" }),
     blocks({ name: "layout", label: "Layout", blocks: { allow: ["core/*"] } }),
   ],
 });
