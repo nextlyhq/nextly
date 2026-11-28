@@ -99,6 +99,22 @@ const BATCH = 100;
  */
 const KEPT_FOR_MS = 90 * 24 * 60 * 60 * 1000;
 
+/**
+ * The time a row is recorded at, read from the timing API rather than the
+ * clock.
+ *
+ * The record is written while `next build` prerenders a page, and under Cache
+ * Components a prerender refuses `new Date()` and `Date.now()` outside a cache
+ * scope, failing the build, because a value that changes between renders
+ * must not reach the page. This one never reaches the page: it is bookkeeping
+ * that dates a build's rows so old builds can be dropped, the kind of value
+ * Next.js names the timing API for. `performance.timeOrigin` plus
+ * `performance.now()` is the same wall-clock time in milliseconds.
+ */
+function recordingTime(): Date {
+  return new Date(performance.timeOrigin + performance.now());
+}
+
 /** The keys of `keys` the table already holds: one read. */
 async function keptKeys(
   ctx: PluginContext,
@@ -120,7 +136,7 @@ function rowOf(buildId: string, address: RecordedAddress) {
     path: address.path,
     route: address.route ?? null,
     declared: address.declared,
-    recordedAt: new Date(),
+    recordedAt: recordingTime(),
   };
 }
 
@@ -206,7 +222,7 @@ async function dropOldBuilds(
   buildId: string
 ): Promise<void> {
   const columns = ctx.db.table(codeAddresses);
-  const before = new Date(Date.now() - KEPT_FOR_MS);
+  const before = new Date(recordingTime().getTime() - KEPT_FOR_MS);
   const old = and(ne(columns.buildId, buildId), lt(columns.recordedAt, before));
   if (old !== undefined) await ctx.db.delete(codeAddresses).where(old);
 }
