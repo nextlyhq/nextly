@@ -288,6 +288,50 @@ describe("one person, one node", () => {
     });
   });
 
+  it("tells two people sharing a page apart by the name a page gives", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", {
+        ...POST,
+        author: { id: "a3", name: "Ali Raza", slug: "team" },
+      }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        people: [
+          { name: "Sara Khan", url: "/authors/team" },
+          { name: "Ali Raza", url: "/authors/team" },
+        ],
+      })
+    );
+
+    expect(nodeOf(nodes, "BlogPosting")?.author).toEqual({
+      "@id": `${ORIGIN}/#person-ali-raza`,
+    });
+  });
+
+  it("keeps two different names that spell the same identifier two people", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, writer: "Anne Marie" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        people: [
+          { name: "Anne-Marie", jobTitle: "Editor" },
+          { name: "Anne Marie", jobTitle: "Writer" },
+        ],
+      })
+    );
+
+    expect(nodeOf(nodes, "BlogPosting")?.author).toEqual({
+      "@id": `${ORIGIN}/#person-anne-marie-2`,
+    });
+    expect(
+      persons(nodes).find(
+        each => each["@id"] === `${ORIGIN}/#person-anne-marie-2`
+      )?.jobTitle
+    ).toBe("Writer");
+  });
+
   it("gives a profile page's subject named as text the page's own address", async () => {
     const { nodes } = await buildStructuredData(
       context(),

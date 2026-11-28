@@ -41,6 +41,7 @@ import {
 } from "./choices";
 import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
+import { isPersonalSite, ownerNameOf } from "./people";
 import { peopleDraftProblem } from "./people-draft";
 import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
@@ -438,16 +439,6 @@ function CodeProfiles({
   );
 }
 
-/** A person's site describes the person who runs it, not a company. */
-function isPersonalSite(
-  draft: SettingsDraft,
-  codeBrand: StructuredDataBrand
-): boolean {
-  return draft.siteKind === null
-    ? codeBrand.kind === "person"
-    : draft.siteKind === "person";
-}
-
 /** The Organization tab's words for a company's site and a person's. */
 const BRAND_WORDS = {
   company: {
@@ -499,7 +490,9 @@ export function BrandTab({
           onChange={siteKind => change(current => ({ ...current, siteKind }))}
         />
       </SettingsRowGroup>
-      {personal ? <PersonalSiteNote draft={draft} codeName={codeName} /> : null}
+      {personal ? (
+        <PersonalSiteNote draft={draft} codeBrand={codeBrand} />
+      ) : null}
       <TextRow
         label="Name"
         description={words.name}
@@ -553,12 +546,12 @@ export function BrandTab({
  */
 function PersonalSiteNote({
   draft,
-  codeName,
+  codeBrand,
 }: {
   draft: SettingsDraft;
-  codeName: string | undefined;
+  codeBrand: StructuredDataBrand;
 }): JSX.Element {
-  const name = (draft.brandName.trim() || codeName || draft.siteName).trim();
+  const name = ownerNameOf(draft, codeBrand);
   const key = name.toLowerCase().replace(/\s+/g, " ");
   const entry = draft.people.find(person =>
     [person.name, ...person.otherNames.split(",")].some(

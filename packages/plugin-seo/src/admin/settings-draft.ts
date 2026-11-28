@@ -713,7 +713,7 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
-    people: rebasedSet(draft.people, before.people, after.people),
+    people: rebasedPeople(draft.people, before.people, after.people),
     verificationCodes: rebasedVerification(
       draft.verificationCodes,
       before.verificationCodes,
@@ -822,6 +822,74 @@ function rebasedEntries<T>(
     else next[key] = edited;
   }
   return next;
+}
+
+/** Who a person is across two versions of the list: their name, as matched. */
+const personKey = (person: PersonDraft): string =>
+  person.name.trim().replace(/\s+/g, " ").toLowerCase();
+
+/** The People by who they are; nothing where two share a name. */
+function peopleByKey(
+  people: readonly PersonDraft[]
+): Map<string, PersonDraft> | undefined {
+  const byKey = new Map(people.map(person => [personKey(person), person]));
+  return byKey.size === people.length ? byKey : undefined;
+}
+
+/** `theirs`, with each fact edited here since `old` as edited here. */
+function mergedPersonDraft(
+  mine: PersonDraft,
+  old: PersonDraft,
+  theirs: PersonDraft
+): PersonDraft {
+  const next: PersonDraft = { ...theirs };
+  for (const key of Object.keys(mine) as (keyof PersonDraft)[]) {
+    if (!same(mine[key], old[key])) Object.assign(next, { [key]: mine[key] });
+  }
+  return next;
+}
+
+/**
+ * The newer People, each person told apart by their name: one edited on
+ * both sides is one entry, its facts edited here kept and the rest taken as
+ * stored now; one removed here stays removed; one added on either side is
+ * kept. Where a list names two people alike, it is moved item by item.
+ */
+function rebasedPeople(
+  draft: readonly PersonDraft[],
+  before: readonly PersonDraft[],
+  after: readonly PersonDraft[]
+): PersonDraft[] {
+  const was = peopleByKey(before);
+  const here = peopleByKey(draft);
+  if (was === undefined || here === undefined || !peopleByKey(after)) {
+    return rebasedSet(draft, before, after);
+  }
+  const next = after.flatMap(person =>
+    rebasedPerson(
+      person,
+      was.get(personKey(person)),
+      here.get(personKey(person))
+    )
+  );
+  draft.forEach((person, index) => {
+    const key = personKey(person);
+    if (next.some(each => personKey(each) === key)) return;
+    // Removed elsewhere and left as it was here: it stays removed.
+    if (same(was.get(key), person)) return;
+    next.splice(Math.min(index, next.length), 0, person);
+  });
+  return next;
+}
+
+/** One person of the newer list, as moved: none where removed here. */
+function rebasedPerson(
+  theirs: PersonDraft,
+  old: PersonDraft | undefined,
+  mine: PersonDraft | undefined
+): PersonDraft[] {
+  if (mine === undefined) return old === undefined ? [theirs] : [];
+  return [old === undefined ? mine : mergedPersonDraft(mine, old, theirs)];
 }
 
 /**

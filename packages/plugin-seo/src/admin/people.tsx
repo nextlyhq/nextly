@@ -15,8 +15,11 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { useId, type JSX } from "react";
 
-import { defaultPersonId } from "../structured-data/people";
-import type { StructuredDataPerson } from "../structured-data/rules";
+import { listedPersonIdsOf } from "../structured-data/people";
+import type {
+  StructuredDataBrand,
+  StructuredDataPerson,
+} from "../structured-data/rules";
 
 import { CODE_LIST_NOTE } from "./brand-details";
 import {
@@ -36,6 +39,8 @@ export interface PeopleTabProps {
   codePeople: readonly StructuredDataPerson[];
   /** The site's main production address, which a default identifier is made at. */
   home?: string;
+  /** The brand facts the site's code gives, for whether the site is a person's. */
+  codeBrand?: StructuredDataBrand;
 }
 
 /** The kinds an entry can be, as the card offers them. */
@@ -45,34 +50,65 @@ const KINDS = [
 ] as const;
 
 /**
- * The identifier a person goes by where none is given, as pages make it
- * (`defaultPersonId`): their page's address with `#person`, else one made
- * from their name at the site's home. Nothing where the site's home is not
- * known and their page is not a whole address.
+ * An origin no site has (`.invalid` is reserved), standing in for the site's
+ * while its production address is not given, so an identifier made at it is
+ * known to be unknown.
  */
-function defaultIdOf(
-  person: PersonDraft,
-  home: string | undefined
-): string | undefined {
-  const base = home === undefined ? undefined : `${home.replace(/\/+$/, "")}/`;
-  let url: string | undefined;
+const UNKNOWN_ORIGIN = "https://site.invalid";
+
+/** What of a person as typed decides the identifier pages give them. */
+function identityOf(draft: PersonDraft): StructuredDataPerson {
+  const otherNames = draft.otherNames
+    .split(",")
+    .map(each => each.trim())
+    .filter(each => each !== "");
+  return {
+    name: draft.name.trim(),
+    type: draft.type,
+    ...(otherNames.length === 0 ? {} : { otherNames }),
+    ...(draft.url.trim() === "" ? {} : { url: draft.url.trim() }),
+    ...(draft.id.trim() === "" ? {} : { id: draft.id.trim() }),
+  };
+}
+
+/**
+ * The identifier each person as typed goes by where none is given, as the
+ * site's pages resolve the whole list (`listedPersonIdsOf`): two people
+ * sharing a page each get one from their name, for one. Nothing for one the
+ * site's address is needed for while it is not given.
+ */
+function placeholderIdsOf(
+  people: readonly PersonDraft[],
+  home: string | undefined,
+  ownerName?: string
+): (string | undefined)[] {
+  let origin = UNKNOWN_ORIGIN;
   try {
-    const page = new URL(person.url.trim(), base);
-    if (person.url.trim() !== "" && /^https?:$/.test(page.protocol)) {
-      url = page.href;
-    }
+    if (home !== undefined) origin = new URL(home).origin;
   } catch {
-    // An address that is not one yet: the name's identifier instead.
+    // Not an address yet: as if none were given.
   }
-  if (base === undefined && url === undefined) return undefined;
-  return defaultPersonId(
-    {
-      name: person.name,
-      type: person.type,
-      ...(url === undefined ? {} : { url }),
-    },
-    base ?? ""
+  return listedPersonIdsOf(people.map(identityOf), origin, ownerName).map(id =>
+    id.startsWith(`${UNKNOWN_ORIGIN}/`) ? undefined : id
   );
+}
+
+/** Whether a site is a person's: as its settings say, else as its code does. */
+export function isPersonalSite(
+  draft: Pick<SettingsDraft, "siteKind">,
+  codeBrand: StructuredDataBrand
+): boolean {
+  return draft.siteKind === null
+    ? codeBrand.kind === "person"
+    : draft.siteKind === "person";
+}
+
+/** The name whoever runs the site goes by: the brand's, else the site's. */
+export function ownerNameOf(
+  draft: Pick<SettingsDraft, "brandName" | "siteName">,
+  codeBrand: StructuredDataBrand
+): string {
+  return (draft.brandName.trim() || codeBrand.name || draft.siteName).trim();
 }
 
 /** One person's card: each fact, and the identifier every site names them by. */
@@ -80,20 +116,20 @@ function PersonCard({
   person,
   set,
   remove,
-  home,
+  placeholderId,
   brandName,
 }: {
   person: PersonDraft;
   set: (next: PersonDraft) => void;
   remove: () => void;
-  home: string | undefined;
+  /** The identifier pages give them where none is typed, where known. */
+  placeholderId: string | undefined;
   brandName: string;
 }): JSX.Element {
   const kindId = useId();
   const problem = personDraftProblem(person);
   const named = person.name.trim() === "" ? "this person" : person.name.trim();
   const isPerson = person.type === "person";
-  const placeholderId = defaultIdOf(person, home);
   const field =
     (fact: keyof PersonDraft) =>
     (value: string): void =>
@@ -271,6 +307,18 @@ function CodePeople({
   );
 }
 
+/** Each card's identifier where none is typed, as the site's pages give it. */
+function cardIdsOf(
+  draft: SettingsDraft,
+  home: string | undefined,
+  codeBrand: StructuredDataBrand
+): (string | undefined)[] {
+  const owner = isPersonalSite(draft, codeBrand)
+    ? ownerNameOf(draft, codeBrand)
+    : undefined;
+  return placeholderIdsOf(draft.people, home, owner);
+}
+
 /**
  * The People tab: one card per person, each edited in place, and room for
  * another. A name a page gives is matched to a person here by their page's
@@ -282,8 +330,10 @@ export function PeopleTab({
   change,
   codePeople,
   home,
+  codeBrand = {},
 }: PeopleTabProps): JSX.Element {
   const people = draft.people;
+  const ids = cardIdsOf(draft, home, codeBrand);
   const setPeople = (next: (people: PersonDraft[]) => PersonDraft[]) =>
     change(current => ({ ...current, people: next(current.people) }));
   const showsCode = people.length === 0 && codePeople.length > 0;
@@ -300,7 +350,7 @@ export function PeopleTab({
         <PersonCard
           key={index}
           person={person}
-          home={home}
+          placeholderId={ids[index]}
           brandName={draft.brandName || draft.siteName}
           set={next =>
             setPeople(all =>

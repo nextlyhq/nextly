@@ -549,6 +549,7 @@ function SettingsPanel({
         <PeopleTab
           {...tabProps}
           codePeople={codePeople}
+          codeBrand={codeBrand}
           {...(home === undefined || home === "" ? {} : { home })}
         />
       );

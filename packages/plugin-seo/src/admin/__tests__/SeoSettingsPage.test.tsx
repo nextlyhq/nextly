@@ -755,6 +755,30 @@ describe("the People tab", () => {
     ]);
   });
 
+  it("shows two people sharing a page the identifiers pages give them, one from each name", () => {
+    serving({
+      _rev: "5",
+      siteName: "Example Studio",
+      productionAddresses: ["https://example.com"],
+      people: [
+        { name: "Sara Khan", url: "/about" },
+        { name: "Ali Raza", url: "/about" },
+      ],
+      setupStep: 3,
+    });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    expect(
+      screen
+        .getAllByLabelText("Identifier")
+        .map(field => field.getAttribute("placeholder"))
+    ).toEqual([
+      "https://example.com/#person-sara-khan",
+      "https://example.com/#person-ali-raza",
+    ]);
+  });
+
   it("says how the identifier is made where no address can be shown yet", () => {
     serving({ _rev: "5", siteName: "Example Studio", setupStep: 3 });
     render(<SeoSettingsPage />);

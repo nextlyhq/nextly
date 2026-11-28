@@ -780,6 +780,71 @@ describe("a draft moved onto newer settings", () => {
   });
 });
 
+describe("rebasedDraft and the People", () => {
+  const listed = draftOf({
+    id: "s1",
+    people: [
+      { name: "Sara Khan", jobTitle: "Founder", description: "Writes." },
+      { name: "Ali Raza" },
+    ],
+  });
+
+  it("merges two edits to one person fact by fact, keeping one entry", () => {
+    // Here: Sara's bio edited.
+    const draft: SettingsDraft = {
+      ...listed,
+      people: listed.people.map(person =>
+        person.name === "Sara Khan"
+          ? { ...person, description: "Writes about search." }
+          : person
+      ),
+    };
+    // Elsewhere meanwhile: her job title changed, and a person added.
+    const after = draftOf({
+      id: "s1",
+      people: [
+        { name: "Sara Khan", jobTitle: "CEO", description: "Writes." },
+        { name: "Ali Raza" },
+        { name: "Hina Ali" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after).people;
+    expect(rebased.map(person => person.name)).toEqual([
+      "Sara Khan",
+      "Ali Raza",
+      "Hina Ali",
+    ]);
+    expect(rebased[0]).toMatchObject({
+      jobTitle: "CEO",
+      description: "Writes about search.",
+    });
+  });
+
+  it("keeps a person removed here removed, and one added here added", () => {
+    const draft: SettingsDraft = {
+      ...listed,
+      people: [listed.people[0], { ...listed.people[1], name: "Omar Shah" }],
+    };
+    const after = draftOf({
+      id: "s1",
+      people: [
+        { name: "Sara Khan", jobTitle: "CEO", description: "Writes." },
+        { name: "Ali Raza", jobTitle: "Editor" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after).people;
+    // Ali was renamed here: the new name stands, and his old entry does not
+    // come back beside it.
+    expect(rebased.map(person => person.name)).toEqual([
+      "Sara Khan",
+      "Omar Shah",
+    ]);
+    expect(rebased[0]?.jobTitle).toBe("CEO");
+  });
+});
+
 describe("rebasedDraft and the verification codes", () => {
   it("keeps a code another person saved for one service while this draft edits another's", () => {
     const before = draftOf({

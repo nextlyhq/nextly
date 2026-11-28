@@ -139,7 +139,7 @@ const kindOf = (person: Pick<StructuredDataPerson, "type">): string =>
  * page, say) are still two people. `person.url` is absolute, as an entry's
  * is once placed; the People tab shows the same identifier by this rule.
  */
-export function defaultPersonId(
+function defaultPersonId(
   person: Pick<StructuredDataPerson, "name" | "url" | "type">,
   home: string,
   sharesPage = false
@@ -151,23 +151,48 @@ export function defaultPersonId(
     : `${home}#${kind}-${nameFragment(person.name)}`;
 }
 
-/** Each entry's `@id`: the one it gives, else its default one. */
-function identified(
-  people: readonly StructuredDataPerson[],
-  home: string
-): PersonEntry[] {
+/** How many entries name each page, by its address as matched. */
+function pageCounts(
+  people: readonly StructuredDataPerson[]
+): Map<string, number> {
   const pages = new Map<string, number>();
   for (const person of people) {
     const page = person.url === undefined ? undefined : addressKey(person.url);
     if (page !== undefined) pages.set(page, (pages.get(page) ?? 0) + 1);
   }
+  return pages;
+}
+
+/** `id`, or where an earlier entry took it, `id-2`, `id-3` and so on. */
+function unusedId(id: string, used: Set<string>): string {
+  let next = id;
+  for (let count = 2; used.has(next); count += 1) next = `${id}-${count}`;
+  used.add(next);
+  return next;
+}
+
+/**
+ * Each entry's `@id`: the one it gives, else its default one. Two different
+ * names can make one default (`Anne-Marie` and `Anne Marie`), so a default
+ * an earlier entry already goes by is numbered, keeping the two people two.
+ */
+function identified(
+  people: readonly StructuredDataPerson[],
+  home: string
+): PersonEntry[] {
+  const pages = pageCounts(people);
+  const used = new Set<string>();
   return people.map(person => {
     if (person.id !== undefined && originOf(person.id) !== undefined) {
+      used.add(person.id);
       return { id: person.id, person };
     }
     const page = person.url === undefined ? undefined : addressKey(person.url);
     const shared = page !== undefined && (pages.get(page) ?? 0) > 1;
-    return { id: defaultPersonId(person, home, shared), person };
+    return {
+      id: unusedId(defaultPersonId(person, home, shared), used),
+      person,
+    };
   });
 }
 
@@ -252,22 +277,40 @@ function ownedPeople(
   return all.some(each => goesBy(each, key)) ? all : [facts, ...all];
 }
 
-/** The entries by their page's address and by each name, the first winning. */
+/**
+ * The entries by their page's address, each page with every entry that names
+ * it, and by each name, the first winning.
+ */
 function indexesOf(entries: readonly PersonEntry[]): {
-  byPage: Map<string, PersonEntry>;
+  byPage: Map<string, PersonEntry[]>;
   byName: Map<string, PersonEntry>;
 } {
-  const byPage = new Map<string, PersonEntry>();
+  const byPage = new Map<string, PersonEntry[]>();
   const byName = new Map<string, PersonEntry>();
   for (const entry of entries) {
     const page =
       entry.person.url === undefined ? undefined : addressKey(entry.person.url);
-    if (page !== undefined && !byPage.has(page)) byPage.set(page, entry);
+    if (page !== undefined)
+      byPage.set(page, [...(byPage.get(page) ?? []), entry]);
     for (const name of namesOf(entry.person)) {
       if (!byName.has(nameKey(name))) byName.set(nameKey(name), entry);
     }
   }
   return { byPage, byName };
+}
+
+/**
+ * The entry whose page a name was given with: the one entry naming that
+ * page, or where several share it (an About page, say), the one going by the
+ * name given; none where none of them does.
+ */
+function pageEntryOf(
+  sharing: readonly PersonEntry[] | undefined,
+  key: string
+): PersonEntry | undefined {
+  if (sharing === undefined) return undefined;
+  if (sharing.length === 1) return sharing[0];
+  return sharing.find(entry => goesBy(entry.person, key));
 }
 
 /**
@@ -319,7 +362,7 @@ export function peopleOf(
       const page = named.url === undefined ? undefined : addressKey(named.url);
       const key = nameKey(named.name);
       return (
-        (page === undefined ? undefined : byPage.get(page)) ??
+        pageEntryOf(page === undefined ? undefined : byPage.get(page), key) ??
         byName.get(key) ??
         (key === ownerKey ? site : undefined)
       );
@@ -329,6 +372,38 @@ export function peopleOf(
       : entries.filter(entry => entry.person.founder === true),
     ...(owner === undefined ? {} : { owner }),
   };
+}
+
+/**
+ * The `@id` each of `people` goes by on the site's pages, in their order,
+ * resolved as a page's graph resolves the whole list: entries of one person
+ * read as one, a page shared by two entries giving each an `@id` from their
+ * name, and a default two names would share numbered. On a person's site
+ * the entry going by `ownerName` is the person who runs it, at the site's
+ * home unless their page is given. The People tab shows these.
+ */
+export function listedPersonIdsOf(
+  people: readonly StructuredDataPerson[],
+  origin: string,
+  ownerName?: string
+): string[] {
+  const home = `${origin}/`;
+  const owner = ownerName === undefined ? undefined : nameKey(ownerName);
+  const all = merged(people).map(each =>
+    placed(
+      owner !== undefined && goesBy(each, owner)
+        ? { ...each, type: "person", url: each.url ?? home }
+        : each,
+      origin
+    )
+  );
+  const entries = identified(all, home);
+  return people.map(person => {
+    const entry = entries[all.findIndex(each => samePerson(each, person))];
+    return entry === undefined
+      ? defaultPersonId(placed(person, origin), home)
+      : entry.id;
+  });
 }
 
 /** The organisation a person works for, as structured data names it. */
