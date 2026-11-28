@@ -82,6 +82,8 @@ function justStarted(): { ctx: PluginContext; read: () => void } {
       withTransactionBounds: <R>(_bounds: unknown, work: () => Promise<R>) =>
         work(),
     },
+    // A root route at a fixed address, so the route caught no part of it.
+    params: {},
   } as unknown as PluginContext;
   return { ctx, read: () => read() };
 }

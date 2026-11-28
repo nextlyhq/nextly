@@ -42,6 +42,16 @@ const stored = {
   socialProfiles: [
     { network: "LinkedIn", url: "https://www.linkedin.com/company/rext-ai" },
   ],
+  people: [
+    {
+      name: "Sara Khan",
+      otherNames: ["S. Khan"],
+      url: "/about",
+      sameAs: ["https://github.com/sara", "https://x.com/sara"],
+      worksFor: { name: "Revnix", url: "https://revnix.com" },
+      founder: true,
+    },
+  ],
   patterns: { posts: { title: "{Title} | {Site name}" } },
   setupStep: 1,
   plainTextCopies: true,
@@ -90,6 +100,23 @@ describe("the form's values, from the stored settings", () => {
         parentDescription: "",
         parentFoundingDate: "",
       },
+      people: [
+        {
+          name: "Sara Khan",
+          otherNames: "S. Khan",
+          type: "person",
+          url: "/about",
+          id: "",
+          image: "",
+          jobTitle: "",
+          description: "",
+          sameAs: "https://github.com/sara\nhttps://x.com/sara",
+          knowsAbout: "",
+          worksForName: "Revnix",
+          worksForUrl: "https://revnix.com",
+          founder: true,
+        },
+      ],
       patterns: { posts: { title: "{Title} | {Site name}" } },
       setupStep: 1,
       setupDismissed: false,
@@ -100,6 +127,7 @@ describe("the form's values, from the stored settings", () => {
       llmsTxt: false,
       llmsFullTxt: false,
       llmsIntro: "",
+      aiFiles: {},
       plainTextCopies: true,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -138,6 +166,7 @@ describe("the form's values, from the stored settings", () => {
         parentDescription: "",
         parentFoundingDate: "",
       },
+      people: [],
       patterns: {},
       setupStep: 0,
       setupDismissed: false,
@@ -148,6 +177,7 @@ describe("the form's values, from the stored settings", () => {
       llmsTxt: false,
       llmsFullTxt: false,
       llmsIntro: "",
+      aiFiles: {},
       plainTextCopies: false,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -749,6 +779,107 @@ describe("a draft moved onto newer settings", () => {
     const rebased = rebasedDraft(draft, before, before);
     expect(rebased.patterns).toEqual({ posts: { title: "{Title}" } });
     expect(rebased.hiddenTypes).toEqual([]);
+  });
+});
+
+describe("rebasedDraft and the People", () => {
+  const listed = draftOf({
+    id: "s1",
+    people: [
+      { name: "Sara Khan", jobTitle: "Founder", description: "Writes." },
+      { name: "Ali Raza" },
+    ],
+  });
+
+  it("merges two edits to one person fact by fact, keeping one entry", () => {
+    // Here: Sara's bio edited.
+    const draft: SettingsDraft = {
+      ...listed,
+      people: listed.people.map(person =>
+        person.name === "Sara Khan"
+          ? { ...person, description: "Writes about search." }
+          : person
+      ),
+    };
+    // Elsewhere meanwhile: her job title changed, and a person added.
+    const after = draftOf({
+      id: "s1",
+      people: [
+        { name: "Sara Khan", jobTitle: "CEO", description: "Writes." },
+        { name: "Ali Raza" },
+        { name: "Hina Ali" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after).people;
+    expect(rebased.map(person => person.name)).toEqual([
+      "Sara Khan",
+      "Ali Raza",
+      "Hina Ali",
+    ]);
+    expect(rebased[0]).toMatchObject({
+      jobTitle: "CEO",
+      description: "Writes about search.",
+    });
+  });
+
+  it("keeps a person removed here removed, and one added here added", () => {
+    const draft: SettingsDraft = {
+      ...listed,
+      people: [listed.people[0], { ...listed.people[1], name: "Omar Shah" }],
+    };
+    const after = draftOf({
+      id: "s1",
+      people: [
+        { name: "Sara Khan", jobTitle: "CEO", description: "Writes." },
+        { name: "Ali Raza", jobTitle: "Editor" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after).people;
+    // Ali was renamed here: the new name stands, and his old entry does not
+    // come back beside it.
+    expect(rebased.map(person => person.name)).toEqual([
+      "Sara Khan",
+      "Omar Shah",
+    ]);
+    expect(rebased[0]?.jobTitle).toBe("CEO");
+  });
+});
+
+describe("a person's other names", () => {
+  it("keeps a name with a comma in it whole when another fact is edited", () => {
+    const listed = draftOf({
+      id: "s1",
+      _rev: "2",
+      people: [{ name: "John Smith", otherNames: ["Smith, John", "J. Smith"] }],
+    });
+    const draft: SettingsDraft = {
+      ...listed,
+      people: [{ ...listed.people[0], jobTitle: "Editor" }],
+    };
+
+    expect(
+      changesOf(
+        {
+          id: "s1",
+          _rev: "2",
+          people: [
+            { name: "John Smith", otherNames: ["Smith, John", "J. Smith"] },
+          ],
+        },
+        draft
+      )
+    ).toEqual({
+      people: [
+        {
+          name: "John Smith",
+          otherNames: ["Smith, John", "J. Smith"],
+          jobTitle: "Editor",
+        },
+      ],
+      _rev: "2",
+    });
   });
 });
 

@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "../../plugins/plugin-context";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

@@ -9,6 +9,7 @@
  * @module admin/settings-draft
  */
 import { isRecord } from "../plain-values";
+import { aiFilesOf, storedAiFiles, type AiFiles } from "../settings/ai-files";
 import {
   AI_CRAWLER_CHOICES,
   largeImagePreviewsOn,
@@ -50,6 +51,7 @@ import {
   storedBrandDetails,
   type BrandDetailsDraft,
 } from "./brand-draft";
+import { peopleDraftOf, storedPeople, type PersonDraft } from "./people-draft";
 
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
@@ -104,6 +106,11 @@ export interface SettingsDraft {
    * founded and who owns it.
    */
   brandDetails: BrandDetailsDraft;
+  /**
+   * The people (and teams) the site names, each one person on every page
+   * that names them.
+   */
+  people: PersonDraft[];
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
@@ -124,6 +131,12 @@ export interface SettingsDraft {
   llmsFullTxt: boolean;
   /** What the site tells AI tools in its own words, at the top of llms.txt. */
   llmsIntro: string;
+  /**
+   * How the files for AI tools are shaped: llms.txt's sections, the site's
+   * own sections of links, what llms-full.txt holds and how large it grows,
+   * the folders with files of their own and the fields left out of copies.
+   */
+  aiFiles: AiFiles;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
   /** The site's own robots.txt lines. */
@@ -302,6 +315,7 @@ export function draftOf(
     logo: mediaId(stored.logo),
     socialProfiles: profilesOf(stored.socialProfiles),
     brandDetails: brandDetailsDraftOf(stored.brandDetails),
+    people: peopleDraftOf(stored.people),
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
@@ -329,6 +343,7 @@ export function draftOf(
     llmsTxt: stored.llmsTxt === true,
     llmsFullTxt: stored.llmsFullTxt === true,
     llmsIntro: text(stored.llmsIntro),
+    aiFiles: aiFilesOf(stored.aiFiles),
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),
@@ -640,6 +655,8 @@ function storedForm(
     robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
     brandDetails: storedBrandDetails(draft.brandDetails),
+    aiFiles: storedAiFiles(draft.aiFiles),
+    people: storedPeople(draft.people),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -705,6 +722,7 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
+    people: rebasedPeople(draft.people, before.people, after.people),
     verificationCodes: rebasedVerification(
       draft.verificationCodes,
       before.verificationCodes,
@@ -772,6 +790,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "typesWithSeoOff",
   "productionAddresses",
   "socialProfiles",
+  "people",
   "verificationCodes",
   "brandDetails",
 ]);
@@ -812,6 +831,74 @@ function rebasedEntries<T>(
     else next[key] = edited;
   }
   return next;
+}
+
+/** Who a person is across two versions of the list: their name, as matched. */
+const personKey = (person: PersonDraft): string =>
+  person.name.trim().replace(/\s+/g, " ").toLowerCase();
+
+/** The People by who they are; nothing where two share a name. */
+function peopleByKey(
+  people: readonly PersonDraft[]
+): Map<string, PersonDraft> | undefined {
+  const byKey = new Map(people.map(person => [personKey(person), person]));
+  return byKey.size === people.length ? byKey : undefined;
+}
+
+/** `theirs`, with each fact edited here since `old` as edited here. */
+function mergedPersonDraft(
+  mine: PersonDraft,
+  old: PersonDraft,
+  theirs: PersonDraft
+): PersonDraft {
+  const next: PersonDraft = { ...theirs };
+  for (const key of Object.keys(mine) as (keyof PersonDraft)[]) {
+    if (!same(mine[key], old[key])) Object.assign(next, { [key]: mine[key] });
+  }
+  return next;
+}
+
+/**
+ * The newer People, each person told apart by their name: one edited on
+ * both sides is one entry, its facts edited here kept and the rest taken as
+ * stored now; one removed here stays removed; one added on either side is
+ * kept. Where a list names two people alike, it is moved item by item.
+ */
+function rebasedPeople(
+  draft: readonly PersonDraft[],
+  before: readonly PersonDraft[],
+  after: readonly PersonDraft[]
+): PersonDraft[] {
+  const was = peopleByKey(before);
+  const here = peopleByKey(draft);
+  if (was === undefined || here === undefined || !peopleByKey(after)) {
+    return rebasedSet(draft, before, after);
+  }
+  const next = after.flatMap(person =>
+    rebasedPerson(
+      person,
+      was.get(personKey(person)),
+      here.get(personKey(person))
+    )
+  );
+  draft.forEach((person, index) => {
+    const key = personKey(person);
+    if (next.some(each => personKey(each) === key)) return;
+    // Removed elsewhere and left as it was here: it stays removed.
+    if (same(was.get(key), person)) return;
+    next.splice(Math.min(index, next.length), 0, person);
+  });
+  return next;
+}
+
+/** One person of the newer list, as moved: none where removed here. */
+function rebasedPerson(
+  theirs: PersonDraft,
+  old: PersonDraft | undefined,
+  mine: PersonDraft | undefined
+): PersonDraft[] {
+  if (mine === undefined) return old === undefined ? [theirs] : [];
+  return [old === undefined ? mine : mergedPersonDraft(mine, old, theirs)];
 }
 
 /**

@@ -29,7 +29,7 @@ import {
 } from "../domains/schema/ui-schema/mutate";
 import { NextlyError } from "../errors";
 
-import { getHandlerConfig } from "./auth-handler";
+import { getHandlerConfig } from "./handler-config";
 
 const KIND_BY_SEGMENT: Record<string, ManifestKind> = {
   collection: "collections",

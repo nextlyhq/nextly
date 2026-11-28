@@ -30,6 +30,7 @@ export type ProblemKind =
   | "proxyNotWired"
   | "connection"
   | "plainCopy"
+  | "llmsFullCut"
   | "noAddress"
   | "redirectChain"
   | "datesToday"
@@ -79,6 +80,12 @@ export const KIND_TEXT: Readonly<
     title: "Plain-text copy could not be made",
     explain:
       "The page didn't render for its copy, so AI tools reading llms-full.txt or its .md copy are given its description instead of its words. Try again once the page loads.",
+    siteWide: true,
+  },
+  llmsFullCut: {
+    title: "llms-full.txt stops short",
+    explain:
+      "The file reached the most it may hold, so AI tools reading it miss the pages after that. Choose a larger size, or have it hold fewer pages, in Settings.",
     siteWide: true,
   },
   redirectChain: {
@@ -219,6 +226,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   canonical: "error",
   connection: "warning",
   plainCopy: "warning",
+  llmsFullCut: "warning",
   redirectChain: "warning",
   datesToday: "warning",
   languageCode: "warning",
@@ -285,6 +293,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "proxyNotWired",
   "connection",
   "plainCopy",
+  "llmsFullCut",
   "redirectChain",
   "datesToday",
   "languageCode",

@@ -180,16 +180,24 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * collection's code, the settling of a left Builder save at migrate, and the
  * CLI's first line. CI and a local run both measured 109 and 1,508; the tail
  * mean's pin holds.
- * Both rose, to 130 and 1,593, as a debt to pay back: CI and a local run both
- * measured 127 and 1,558 after the merges of 2026-11-25 to 11-27. Eighteen
- * files crossed the heavy line with no single new edge: each gained 25 to 60
- * modules spread over many features on chains it already held (into
- * `di/register` through the route handler's auth, the plugin hook boot and
- * the Builder access check, and into a dialect's schema bundle through
- * `database/index` and `database/dialect-tables`), and one new test
- * (`migrate:check`'s pending changes) loads them by design. Raised on the
- * owner's word of 2026-11-28 so the release is not held; the trim that makes
- * those edges lazy follows and brings both back down.
+ * The heavy files' pin came down to 103 when six imports stopped loading what
+ * their files never run, after features had taken the suite to 127 heavy files
+ * and a tail mean of 1,558, over both pins. The readers of the route's stored
+ * configuration (the builder's availability, the list and Single dispatchers,
+ * the dashboard's readers, and the service registry publishing the plugins it
+ * booted) take it from the route handler's config store
+ * (`route-handler/handler-config`), not the route handler and its auth routes;
+ * the list dispatchers take a plugin's entity slugs from a module of their own
+ * (`plugins/plugin-entity-slugs`), not the admin metadata builder; a schema
+ * read that shows a workflow takes its steps' actions from
+ * `workflows/step-actions`, not the step-taking; the drop guard, an
+ * extension's publish and the migrate commands take the core table names from
+ * `schemas/core-table-names`, not every table's definition; the collection
+ * metadata service loads the schema pipeline where a create or an update
+ * applies a change; and the migrate commands lend their services where a write
+ * runs. The widget declarations' tests and the list, Single and collection
+ * dispatchers' went back under the heavy line: 100 and 1,503 measured. The
+ * tail mean's pin holds at 1,520, its measurement within the margin.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -197,7 +205,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 130, tailMeanModules: 1_593 };
+export const BUDGET = { heavyFiles: 103, tailMeanModules: 1_520 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdapter } from "../../database/factory";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

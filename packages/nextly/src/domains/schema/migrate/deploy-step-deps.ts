@@ -13,7 +13,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { MigrateCoreDeps } from "../../../cli/commands/migrate";
 import type { CommandContext } from "../../../cli/program";
 import type { SupportedDialect } from "../../../cli/utils/adapter";
-import { withCommandServicesLent } from "../../../cli/utils/lend-command-services";
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
 import { describeError } from "../../../errors/describe-error";
 import { PermissionSeedService } from "../../auth/services/permission-seed-service";
@@ -84,6 +83,12 @@ async function markOrphansOnRunConnection(
   logger: CommandContext["logger"]
 ): Promise<void> {
   const serviceLogger = serviceLoggerOf(logger);
+  // Loaded where the marks are written: the lent services reach the
+  // registry services and the jobs, which a migration that marks nothing
+  // never loads.
+  const { withCommandServicesLent } = await import(
+    "../../../cli/utils/lend-command-services"
+  );
   const result = await withCommandServicesLent(adapter, serviceLogger, () =>
     new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
       scope.declared,

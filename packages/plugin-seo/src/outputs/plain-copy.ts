@@ -29,6 +29,7 @@ import { humanizeFieldName } from "@nextlyhq/plugin-sdk";
 import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
 
 import { isRecord, textOf } from "../plain-values";
+import { leftOutInCode } from "../settings/ai-files";
 
 /** A field as the type declares it, as far as a copy needs it. */
 export interface CopyField {
@@ -41,6 +42,11 @@ export interface CopyField {
   options?: unknown;
   /** The type a relationship field names pages of. */
   relationTo?: unknown;
+  /**
+   * The field's data for plugins: `{ seo: { copy: false } }` leaves it out
+   * of every copy (`leftOutInCode`).
+   */
+  custom?: unknown;
 }
 
 /** Another page a relationship field names: its title, and its address where it has one. */
@@ -94,10 +100,16 @@ export interface CopySource {
   skip?: readonly string[];
   /** The pages its relationship fields name, as the caller read them. */
   related?: RelatedPages;
+  /**
+   * Write the fields the site's code leaves out of copies too
+   * (`custom: { seo: { copy: false } }`): only to tell whether leaving them
+   * out is what left a copy without words.
+   */
+  keepLeftOut?: boolean;
 }
 
 /** Fields that are the page's address, SEO or bookkeeping, never its words. */
-const NOT_CONTENT: ReadonlySet<string> = new Set([
+export const NOT_CONTENT: ReadonlySet<string> = new Set([
   "id",
   "slug",
   "seo",
@@ -445,6 +457,8 @@ interface Collecting {
   skip?: ReadonlySet<string>;
   /** The pages relationship fields name. */
   related?: RelatedPages;
+  /** Whether fields the site's code leaves out are written all the same. */
+  keepLeftOut?: boolean;
 }
 
 /** Collects the words of a value held by one kind of field. */
@@ -455,6 +469,7 @@ const deeper = (at: Collecting): Collecting => ({
   parts: at.parts,
   depth: at.depth + 1,
   ...(at.related === undefined ? {} : { related: at.related }),
+  ...(at.keepLeftOut === true ? { keepLeftOut: true } : {}),
 });
 
 /** Elements whose content is never words a reader sees: a drawing, code, styles. */
@@ -778,6 +793,10 @@ const FIELD_READERS: Readonly<Record<string, FieldReader>> = {
   relationship: relationshipField,
 };
 
+/** Whether a copy reads the words of a field of `type`; every other type is left out. */
+export const copyReads = (type: string): boolean =>
+  Object.hasOwn(FIELD_READERS, type);
+
 /** The words of each of `fields` in `document`, in their order. */
 function fieldsWords(
   fields: readonly CopyField[],
@@ -788,11 +807,41 @@ function fieldsWords(
   for (const field of fields) {
     const read = FIELD_READERS[field.type];
     if (read === undefined || field.name === undefined) continue;
-    if (NOT_CONTENT.has(field.name)) continue;
-    if (at.depth === 0 && field.name === at.titleField) continue;
-    if (at.depth === 0 && at.skip?.has(field.name) === true) continue;
+    if (leftOutOfCopy(field, field.name, at)) continue;
     read(field, document[field.name], at);
   }
+}
+
+/**
+ * Whether the field `name` is left out where `at` collects: never words
+ * (its address, SEO or bookkeeping), left out by the site's code at any
+ * depth, or, at the top, the field the heading was read from or one the
+ * caller skips.
+ */
+function leftOutOfCopy(
+  field: CopyField,
+  name: string,
+  at: Collecting
+): boolean {
+  if (NOT_CONTENT.has(name)) return true;
+  if (at.keepLeftOut !== true && leftOutInCode(field)) return true;
+  return (
+    at.depth === 0 && (name === at.titleField || at.skip?.has(name) === true)
+  );
+}
+
+/** Where the top level of `source`'s fields is collected into `parts`. */
+function topLevelOf(source: CopySource, parts: string[]): Collecting {
+  return {
+    parts,
+    depth: 0,
+    ...(source.titleField === undefined
+      ? {}
+      : { titleField: source.titleField }),
+    ...(source.skip === undefined ? {} : { skip: new Set(source.skip) }),
+    ...(source.related === undefined ? {} : { related: source.related }),
+    ...(source.keepLeftOut === true ? { keepLeftOut: true } : {}),
+  };
 }
 
 /** Every rich text value in `value`, at any depth, into `parts`. */
@@ -854,15 +903,7 @@ export function plainCopyOf(source: CopySource): string {
         richTextWords(value, parts, 0);
       }
     } else {
-      fieldsWords(source.fields, source.document, {
-        parts,
-        depth: 0,
-        ...(source.titleField === undefined
-          ? {}
-          : { titleField: source.titleField }),
-        ...(source.skip === undefined ? {} : { skip: new Set(source.skip) }),
-        ...(source.related === undefined ? {} : { related: source.related }),
-      });
+      fieldsWords(source.fields, source.document, topLevelOf(source, parts));
     }
   });
   const body = `${parts.join("\n\n")}\n`;

@@ -36,7 +36,7 @@ import { getCachedNextly } from "../init";
 import type { PluginItemCount } from "../plugins/admin-contributions";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { publishedPluginPanel } from "../plugins/plugin-panel";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { getHandlerConfig } from "../route-handler/handler-config";
 import { readAttentionDigest } from "../services/dashboard/attention-source";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 

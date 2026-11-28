@@ -46,7 +46,7 @@ vi.mock("../../cli/commands/migrate", () => ({
   // would serve, so it refuses.
   migrateCore: async () => ({ applied: 0, coreChanged: false, ran: false }),
 }));
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

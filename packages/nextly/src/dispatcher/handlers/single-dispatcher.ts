@@ -810,7 +810,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
       // The site's own Singles or the plugins', as conditions on the same
       // query: the plugins' list only narrows what the reader may read.
-      const slugLists = await slugListsForOwner(owner, "singles", readable);
+      const slugLists = slugListsForOwner(owner, "singles", readable);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,

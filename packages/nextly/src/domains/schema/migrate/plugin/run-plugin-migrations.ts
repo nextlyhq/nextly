@@ -29,7 +29,7 @@
  * @module domains/schema/migrate/plugin/run-plugin-migrations
  * @since 1.0.0
  */
-import { CORE_TABLE_NAMES } from "../../../../schemas/core-schema";
+import { CORE_TABLE_NAMES } from "../../../../schemas/core-table-names";
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import {
   pluginEntitySources,

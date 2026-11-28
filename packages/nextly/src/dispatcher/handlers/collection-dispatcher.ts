@@ -116,6 +116,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
+import { getHandlerConfig } from "../../route-handler/handler-config";
 import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import type {
   DynamicCollectionRecord,
@@ -836,7 +837,7 @@ const COLLECTIONS_METHODS: Record<
       );
       // The site's own collections or the plugins', as conditions on the
       // same query: the plugins' list only narrows what the reader may read.
-      const slugLists = await slugListsForOwner(owner, "collections", readable);
+      const slugLists = slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -904,13 +905,9 @@ const COLLECTIONS_METHODS: Record<
       });
       // Fold plugin view overrides (contributes.admin.views, D23) onto the
       // collection so the list page's injection slots resolve. Collection slots
-      // win; plugin fills empties (see applyPluginAdminViews). The route
-      // handler's config store is loaded here, not imported at the top: it
-      // reaches the auth routes and every plugin's context, several hundred
-      // modules the other collection operations never need.
-      const { getHandlerConfig } = await import(
-        "../../route-handler/auth-handler"
-      );
+      // win; plugin fills empties (see applyPluginAdminViews). The plugins
+      // come from the route handler's config store, imported on its own so
+      // this dispatcher does not load the auth routes or the request path.
       const config = getHandlerConfig();
       const [collectionWithViews] = applyPluginAdminViews(
         [collection as CollectionWithAdmin],

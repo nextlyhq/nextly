@@ -659,6 +659,10 @@ const pageMetadataAnswerSchema = z.object({
   formats: z
     .record(z.string().regex(/^[a-z]+\/[a-z0-9.+-]+$/i), z.string())
     .optional(),
+  // Each feed a link of its own, by its address and the name a reader shows.
+  feeds: z
+    .array(z.object({ url: z.string().min(1), title: z.string() }))
+    .optional(),
   // JSON only, the one form a cached answer and a script element both hold:
   // a node holding anything else refuses the answer.
   structuredData: z.array(z.record(z.string(), z.json())).optional(),

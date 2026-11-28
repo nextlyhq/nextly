@@ -363,26 +363,27 @@ in `optionalDependsOn`.
 
 ## Configuration
 
-| Option            | Type                                                             | Default            | What it does                                                                                                     |
-| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `collections`     | `string[]`                                                       | every type         | The collections that get the `seo` group, where the site names its types                                         |
-| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage, where the site names its types                         |
-| `exclude`         | `string[]`                                                       | none               | Experimental. Types left without SEO, where no list is named                                                     |
-| `include`         | `string[]`                                                       | none               | Experimental. Plugin collections given SEO as well, where no list is named                                       |
-| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                                               |
-| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                  |
-| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                           |
-| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
-| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
-| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
-| `structuredData`  | `{ brand, types, defaultAuthor, breadcrumbs }`                   | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
-| `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                             |
-| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
-| `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
-| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`          | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies   |
-| `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
-| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
-| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
+| Option            | Type                                                                        | Default            | What it does                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `collections`     | `string[]`                                                                  | every type         | The collections that get the `seo` group, where the site names its types                                                             |
+| `singles`         | `string[]`                                                                  | none               | The Singles that get the `seo` group, such as a homepage, where the site names its types                                             |
+| `exclude`         | `string[]`                                                                  | none               | Experimental. Types left without SEO, where no list is named                                                                         |
+| `include`         | `string[]`                                                                  | none               | Experimental. Plugin collections given SEO as well, where no list is named                                                           |
+| `fields`          | `FieldConfig[]`                                                             | the nine above     | The fields placed inside the group                                                                                                   |
+| `baseUrl`         | `string`                                                                    | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                                      |
+| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }`            | `true`             | Controls the sitemap at `/sitemap.xml`                                                                                               |
+| `robots`          | `boolean`                                                                   | `true`             | Controls `/robots.txt`                                                                                                               |
+| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                            | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                                      |
+| `hiddenTypes`     | `string[]`                                                                  | none               | Content types hidden from search as a whole, until the SEO settings name some                                                        |
+| `structuredData`  | `{ brand, people, types, defaultAuthor, breadcrumbs }`                      | none               | Brand facts, [People](#people-one-person-on-every-page), and each content type's [structured data](#structured-data) type and fields |
+| `socialCard`      | `{ siteName, language, xAccount }`                                          | none               | The site's name, language and X account on every page's [social card](#social-cards)                                                 |
+| `pagePermissions` | `boolean`                                                                   | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                                                  |
+| `nextBuildDir`    | `string`                                                                    | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code)                     |
+| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`                     | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies                       |
+| `gonePage`        | `string`                                                                    | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                                    |
+| `feeds`           | `{ [name]: { path, sources, title, description, link, limit, everyPage } }` | none               | Experimental. The site's [RSS feeds](#rss-feeds)                                                                                     |
+| `urlFor`          | `(entry, collection) => string \| null \| undefined`                        | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                                            |
+| `basePath`        | `string`, or a function                                                     | none               | Deprecated, as `urlFor`                                                                                                              |
 
 ## The sitemap and robots.txt
 
@@ -861,7 +862,8 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
 
 - **`/llms.txt`** is a plain list of the site's pages, in the format the
   [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
-  default description beneath it, and each page as a link under its content type, by its
+  default description beneath it, and each page as a link under its section (its content type,
+  unless you [shape the files](#shaping-the-files)), by its
   [own name](#a-pages-own-name) and with the description its head carries, worked out from
   what the public may read of the page; a page the public may not read is listed by its
   address alone. It lists exactly the pages the sitemap lists, by
@@ -873,15 +875,18 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   no longer read them.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
-  escaped so it never becomes a heading.
+  escaped so it never becomes a heading. The proposal reserves headings for its sections of
+  links, so a section of your own goes in **Your own sections** instead
+  ([Shaping the files](#shaping-the-files)).
 - **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
   llms.txt's head, then every page llms.txt lists, in its order, each as its own name, its
   address (`Source:`) and the words of its plain-text copy. A page built in code is written
   from the Markdown `codeAddresses` gives for it, else from the page as it renders, four
   pages at a time and within 20 seconds for the whole file; a page whose words can't be had
   (it doesn't render, or the file's time ran out) is written with its description and listed
-  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past 5 MB and
-  ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
+  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past its
+  size, 5 MB unless you choose a smaller one, and ends by pointing to llms.txt for the rest;
+  **Problems** then lists it as **llms-full.txt stops short**, with how many pages it left out. llms.txt links it while it is on. It is not
   part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
   vendor's logs), others read llms.txt and each page's copy instead.
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
@@ -965,6 +970,65 @@ to where it was asked for: its copy, or llms-full.txt. A copy made with the page
 it renders or once it has stored words of its own, takes the problem off.
 With copies on, llms.txt links these pages' copies too, and their head links them.
 
+### Shaping the files
+
+With llms.txt on, **SEO > Settings > Search engines and AI** shapes both files. Every choice is
+kept in one new field of the settings Single (`aiFiles`), so a site that applies its schema with
+migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading; until it does,
+the files are written as before.
+
+- **Sections of llms.txt** lists the groups its pages are listed under, in their order: each
+  content type by its label, every Single's page under **Pages**, and the pages built in code by
+  the folder they fill (`/docs` and `/docs/start` under **Docs**, a page such as `/pricing` at
+  the root under **Other pages**). Rename a group, move it up or down, and give two groups one
+  heading to list them as one section. **Optional** lists a group's pages under the
+  `## Optional` section, written last, which the [llms.txt proposal](https://llmstxt.org) lets AI
+  tools skip when they need less. **Leave out** takes a group out of llms.txt and llms-full.txt;
+  the sitemap still lists its pages.
+- **Your own sections** adds sections of links llms.txt lists besides your pages: a heading, and
+  one link a line as a Markdown list item, `- [API reference](https://example.com/api): Every endpoint`.
+  An address from the site's root (`/pricing`) is made whole. Headings and links are plain words:
+  markup, a heading's `#` or an address that is not a web address is refused. A section with a
+  heading of your pages' joins it, after its pages; one named **Optional** is listed last.
+- **What llms-full.txt holds**: every page llms.txt lists, the pages of the sections you choose,
+  or the pages whose address starts with one of the paths you write, one a line (`/docs/` takes
+  in `/docs` and every page under it), so a site can publish its docs alone. **Stops at** chooses
+  its size, from 1 to 5 MB.
+- **Folders with their own files** gives a folder its own llms files, one folder a line:
+  `docs` serves `/docs/llms.txt` and, with llms-full.txt on, `/docs/llms-full.txt`, each holding
+  only the pages under `/docs`, named by the site and the folder (`# Acme: Docs`). The proposal
+  has a file cover the addresses under its path, and an AI tool use the most specific one. The
+  site's llms.txt names each folder's file after its feeds. Another folder's address is not found.
+  `withNextly()` sends these addresses to the plugin, as it does the feeds; a site whose own
+  dynamic route answers one passes `folderLlmsFiles: false` (see
+  [Answering a file at the site root](/docs/plugins/routes#answering-a-file-at-the-site-root)).
+- **Preview of llms.txt** shows its first 200 lines with the choices as you edit them, before you
+  save, and before llms.txt is switched on.
+
+A content type's row on **Content types** lists its fields under **In plain-text copies**, ticked
+while its `.md` copies and llms-full.txt write them; untick one, such as a button's label or a
+field of notes for staff that the public may read but the page never shows, to leave it out. A
+field copies don't write (a number, a date, code, JSON, or a Page Builder layout, whose words come
+from the rendered page) is shown greyed. A field the site's code
+leaves out is greyed too:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Tools = defineCollection({
+  slug: "tools",
+  fields: [
+    text({ name: "name" }),
+    // Never in a plain-text copy or llms-full.txt, whatever the settings say.
+    text({ name: "ctaLabel", custom: { seo: { copy: false } } }),
+  ],
+});
+```
+
+`custom: { seo: { copy: false } }` leaves the field out at any depth, inside a group or a
+repeater too. A field group (a component) is copied as the rich text it holds, read from its
+stored value, so a field inside one is left out by unticking the field group itself.
+
 ### A page's own name
 
 llms.txt, llms-full.txt and each copy's heading list a page by its own name, the one
@@ -993,6 +1057,172 @@ seoPlugin({
 
 Keys are a collection's slug or `single:<slug>`; values a field's name or a dotted path into a
 group. A value that is neither is refused when the site starts.
+
+## RSS feeds
+
+Experimental. The plugin serves the site's RSS 2.0 feeds, each named in the `feeds` option:
+where it is served, what it is made from and how many of the newest items it holds. Feed
+readers, newsletter tools and some AI tools follow a site's feed to learn what is new. There
+is no feed until the options name one, and no admin screen for them: a feed is code, set
+where the site sets its plugin, so adding one needs no migration.
+
+```ts
+import { seoPlugin, type FeedItem } from "@nextlyhq/plugin-seo";
+
+// Pages the site builds in code, such as a changelog's release notes.
+const releases = [
+  {
+    version: "1.4.0",
+    title: "Feeds for every section",
+    date: "2026-11-26",
+    summary: "Each section of the site can have a feed of its own.",
+  },
+];
+
+function releaseNotes(): FeedItem[] {
+  return releases.map(release => ({
+    id: `release:${release.version}`,
+    title: release.title,
+    url: `/changelog#${release.version}`,
+    published: release.date,
+    description: release.summary,
+  }));
+}
+
+seoPlugin({
+  collections: ["posts", "tools"],
+  baseUrl: "https://example.com",
+  feeds: {
+    everything: { path: "/feed.xml", sources: ["posts", "tools"] },
+    blog: {
+      path: "/blog/feed.xml",
+      title: "Example blog",
+      description: "New posts from the Example team",
+      sources: ["posts"],
+      limit: 30,
+    },
+    changelog: { path: "/changelog/feed.xml", sources: [releaseNotes] },
+  },
+});
+```
+
+| Option        | Type                       | Default                                   | What it does                                                 |
+| ------------- | -------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| `path`        | `string`                   | none                                      | Where it is served: `/feed.xml`, or `feed.xml` in one folder |
+| `sources`     | `(string \| FeedSource)[]` | none                                      | Collections' slugs, and functions giving items built in code |
+| `title`       | `string`                   | the site's name                           | The feed's name, as a reader lists it                        |
+| `description` | `string`                   | the site's default description            | What it holds                                                |
+| `link`        | `string`                   | its folder (`/blog` for `/blog/feed.xml`) | The page that lists what it holds, from the site's root      |
+| `limit`       | `number`, 10 to 50         | `20`                                      | How many of the newest items it holds                        |
+| `everyPage`   | `boolean`                  | `true` for `/feed.xml`, else `false`      | Whether every page's head links it                           |
+
+The options are checked when the site starts: an address of another shape (`/blog/rss.xml`,
+`/a/b/feed.xml`), a source that is neither a slug nor a function, a limit out of range, or two
+feeds at one address is refused, so a mistake fails at boot rather than as a feed that never
+answers.
+
+### What a feed holds
+
+A collection's items are the pages of it the [sitemap lists](#what-the-sitemap-lists), by the
+same rules: published, not hidden from search, their own canonical, with an address. Of those,
+only the ones a visitor with no session may read are in it, read as that visitor reads them
+(the Public role's grants and the type's and fields' read rules), so a draft, a hidden page or
+a page kept from the public is never an item, and no item holds a word the public may not
+read. A page is listed once, in the site's default language. Singles are not sources.
+
+Each item has:
+
+- **`title`**: the page's [own name](#a-pages-own-name), as llms.txt names it: `Pricing`,
+  not `Pricing | Acme`.
+- **`link`**: its canonical address, whole.
+- **`guid`**: `https://example.com#posts:<id>`, the site's origin, the collection and the
+  entry's id, marked `isPermaLink="false"`. It stays the same when the page's slug changes, so
+  a reader never shows the page twice.
+- **`pubDate`**: the date the type maps to `datePublished` in its
+  [structured data](#structured-data), else the first field named like it (`publishedAt`),
+  else when the page was first published, else when it was made.
+- **`description`**: the description its head carries, as plain text.
+- **`dc:creator`**: its author, by name, as structured data names them, never an email
+  address. RSS's own `author` element must be an email, so it is not written.
+- **`category`**: each section and tag structured data reads for the page, by name.
+
+A code source is a function given the site's origin (`{ origin }`) and giving items, newest
+first or in any order, as plain objects (`FeedItem`): `id`, `title`, `url` (from the site's
+root or whole) and `published` (a `Date` or ISO 8601 text), with `updated`, `description`,
+`author` and `categories` where it has them. Its guid is the site's origin and its `id`, so
+give an id that never changes, such as `release:1.4.0`. An item without an id, a title, an
+address or a published date is left out and logged, and a source that throws gives no items
+and is logged, so one broken source never takes the feed down.
+
+A feed's items from all its sources are put together, newest first, and the newest up to its
+limit are held. An item with no date comes after every dated one.
+
+The channel names the feed's `title`, its `link` (whole), its `description`, the site's
+default language, an `atom:link rel="self"` with the feed's own address, and a
+`lastBuildDate`: its newest item's last change, never the time it was asked for, so a reader
+asking again sees nothing new until something is. Every address is whole, every date is
+written as RFC 822 asks (`Thu, 26 Nov 2026 09:30:00 GMT`), every value is escaped (`&`, `<`
+and quotes in a title included), and any character XML 1.0 cannot hold is taken out, so one
+stray control character in a post never stops a reader parsing the whole feed. The output
+follows the rules the [W3C Feed Validation Service](https://validator.w3.org/feed/) checks.
+
+Full post text (`content:encoded`), share images as `enclosure` and Atom are not served yet.
+
+### How a feed is served
+
+`withNextly()` rewrites `/feed.xml` and `/<folder>/feed.xml` to the plugin, so there is no
+route file to write. A feed is answered as `application/rss+xml; charset=utf-8`, cacheable
+for five minutes (`Cache-Control: public, max-age=300, s-maxage=300`): the many readers
+polling a feed are answered from a cache, and a page published, changed or taken down shows
+within five minutes. Where the site's address is not known (no `baseUrl`, and no address the
+site records), a feed names the address it was asked at and is never cached
+(`Cache-Control: no-store`). An address of that shape no feed names is not found.
+
+A feed lists pages, so, like the sitemap, it waits for the address record when a server has
+only just started, and answers `503` with `Retry-After` while a real catch-up outlasts that
+wait. No copy of it is kept to serve meanwhile: it carries pages' names and descriptions,
+which a kept copy would go on serving after the public may no longer read them.
+
+The rewrite is checked after the site's own files and routes, so a site that ships its own
+`public/feed.xml`, `app/feed.xml/route.ts` or `app/blog/feed.xml/route.ts`, or rewrites the
+address itself, keeps serving its own, as with [the other root files](/docs/plugins/routes#answering-a-file-at-the-site-root).
+A dynamic route is the exception: Next.js asks the rewrite before a route such as
+`app/[section]/feed.xml/route.ts`, so the plugin would answer there instead. A site with one
+turns the feed rewrites off:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly({ reactStrictMode: true }, { feedFiles: false });
+```
+
+### Finding a feed from a page
+
+Each page's head links the feeds it belongs to, so a feed reader given any page's address finds
+them:
+
+```html
+<link
+  rel="alternate"
+  type="application/rss+xml"
+  title="Example blog"
+  href="https://example.com/blog/feed.xml"
+/>
+```
+
+A feed with `everyPage` on (`/feed.xml`, by default) is linked from every page. Any other feed
+is linked from its listing page (its `link`) and from each page of a collection it is made
+from. The link is part of the head's metadata, which Next.js writes into the first HTML for the
+crawlers [`nextlyHtmlLimitedBots`](/docs/guides/routing-and-seo) names, not only streamed after
+it. With [llms.txt](#llmstxt-and-plain-text-copies) on, its head names each feed too.
+
+### Moving from the site's own feed
+
+A site that already serves a feed names it in `feeds`, at the same address so subscribers keep
+it, then deletes its own route file: while that file is there, it is what the address serves.
+Readers know an item by its guid, and the plugin's guids are its own, so a reader that followed
+the old feed may show its latest items once more as new after the switch.
 
 ## Languages
 
@@ -1118,18 +1348,19 @@ The first time someone opens the section, three short questions come first: the 
 address, what kind of site it is and what AI tools may do, and a logo with a default share image.
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
 with a line on the page to finish later. Every answer stays editable on the tabs. Each tab has an
-address of its own (`?tab=general`, `types`, `images`, `brand`, `crawlers`, `connections`), so a
+address of its own (`?tab=general`, `types`, `images`, `brand`, `people`, `crawlers`, `connections`), so a
 link lands on it, and **Save changes** under any tab saves every tab's changes; **Cancel** lets go of
 them:
 
-| Tab                   | What it holds                                                                                                                                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                                                               |
-| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                                                                     |
-| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                                                                            |
-| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here                                                          |
-| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt, llms-full.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on, and what AI tools should know |
-| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                                                                          |
+| Tab                   | What it holds                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                                                                                                                 |
+| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                                                                                                                       |
+| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                                                                                                                              |
+| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. On [a person's site](#a-persons-site) the same tab holds the person's name, photo, profiles and short bio. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here |
+| People                | The [people and teams](#people-one-person-on-every-page) the site names: each one's name, other names, page, photo, job title, bio, profiles, topics, workplace, whether they founded the organization, and the identifier every site names them by. The code's People are shown read-only until one is added here                                                                                    |
+| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt, llms-full.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on, and what AI tools should know                                                   |
+| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                                                                                                                            |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -1489,7 +1720,9 @@ A page is described as one linked graph, each node naming the others by `@id`:
 
 - the **organisation** that owns the site (`<home>#organization`), from the brand facts: its name,
   other names, logo, description, official profiles, email and phone, contact points, founding date
-  and parent organisation, each where given;
+  and parent organisation, each where given, and its founders, each described beside it as one of
+  the site's [People](#people-one-person-on-every-page), on every page. On
+  [a person's site](#a-persons-site) the person is described instead;
 - the **website** (`<home>#website`), named by the site name, with the brand's other names (which
   Google reads a site's name from), its description and its language. A page read in no particular
   language is in the site's default language;
@@ -1540,11 +1773,15 @@ What each type states beyond what it needs, where the page has it:
 
 - an **article** of any kind: when it was last changed, its keywords (such as its tags), its
   section (such as its category), its word count (a field holding one, or else the words of the
-  page's `content` or `body`, rich text included) and its language. Its author is a person with
-  their job title and, where they have a page of their own, that page and an `@id` made from it, so
-  every post by one author names one person;
-- an **About page** is about the organisation, and names its founders (`brand.founders`), each
-  with an `@id` the organisation's `founder` names; a **Contact page** is about the organisation;
+  page's `content` or `body`, rich text included) and its language. Its author is the one of the
+  site's [People](#people-one-person-on-every-page) the page names, by reference to their one
+  node; else a person with their job title and, where they have a page of their own, that page and
+  an `@id` made from it, so every post by one author names one person;
+- an **About page** and a **Contact page** are about the organisation (the person, on a person's
+  site);
+- a **profile page** is about the person its `person` detail names, as one of the site's People
+  where they are one. A person named there as text is the one whose page it is, so they go by
+  `<the page>#person`, the `@id` a post naming them by their author entry gives them too;
 - a **software app** states its category, operating system and image, a price only where the
   page gives one, and a rating only where the page gives one with its count. Google shows an app as
   a rich result only with both a price and a rating; without them the app is still described, and
@@ -1646,12 +1883,94 @@ production address is the origin, and each brand fact saved on **Organization** 
 names, logo, social profiles, description, email, telephone, contact points, founding date, and
 each fact of the parent organisation) wins over the same fact here, one at a time, so moving a fact
 from the code to the admin changes nothing else. A list (other names, profiles, contact points) is
-one fact, taken whole from the settings once they hold one. The founders, a contact point's
-languages and the parent organisation's profiles are given only here. The brand is named by its
+one fact, taken whole from the settings once they hold one. The founders (unless the settings'
+People mark some), a contact point's languages and the parent organisation's profiles are given
+only here. The brand is named by its
 own name, from the settings or these options, before the site's name, and described by the site's
 default description only where neither gives a description. A content type's choice kept in the
 settings wins over the one given here. Whatever the settings leave empty, the options still answer,
 and the Organization tab shows each such value in its field, marked as set in the site's code.
+
+### People: one person on every page
+
+A site names the same people in many places: its founders, the author of each post, the default
+author, the person a profile page is about. Each of the site's **People** is described as one node
+with one `@id` wherever a page names them, so search and answer engines read one person rather
+than several of the same name. List them on **SEO › Settings › People**, or in code:
+
+```ts
+seoPlugin({
+  collections: ["posts", "authors"],
+  baseUrl: "https://example.com",
+  structuredData: {
+    brand: { name: "Example Studio" },
+    people: [
+      {
+        name: "Sam Rivera",
+        otherNames: ["Sam"],
+        // The same identifier on every site this person appears on.
+        id: "https://samrivera.example/#person",
+        url: "https://samrivera.example/",
+        image: "https://samrivera.example/media/sam.jpg",
+        jobTitle: "Founder",
+        sameAs: ["https://github.com/samrivera"],
+        knowsAbout: ["TypeScript"],
+        worksFor: { name: "Northwind", url: "https://northwind.example" },
+        founder: true,
+      },
+      // A team account is described as an organisation.
+      { name: "Example Studio Team", type: "organization", url: "/team" },
+    ],
+  },
+});
+```
+
+- **Matching.** A person a page names is one of the People where their page's address (an author
+  entry's own page) is the one listed, or where the name is the same as theirs or one of their
+  other names, ignoring case and spacing. Only the same name matches, never a near one; a name
+  that matches nobody is described from what the page holds, as before. The brand's own name is
+  the site's organisation.
+- **The `@id`.** The `id` given, an absolute address; else `<their page>#person` (or
+  `#organization` for a team); else, for a person with no page or one sharing a page with another
+  entry (an About page, say), one made from their name at the site's home,
+  `<home>#person-<name>`. The People tab shows the identifier each one gets. To make one person
+  of the same human across several sites, give every site the same `id`, such as the one their own
+  site gives them, and the same profiles: each site still describes them, since a graph must
+  define what it names.
+- **Founders.** The People marked `founder` are the organisation's `founder` on every page, each
+  working for it unless their entry names another workplace. Where none is marked, the
+  `brand.founders` option's are named, each the People entry of the same name where there is one.
+  Founders were described only on the About page before, at `<home>#founder`; they now go by
+  their People `@id`.
+- **The settings and the code.** The People saved in the settings are one fact: once the
+  settings list anyone, the code's list is not read. The People tab shows the code's People
+  read-only until then, and adding one copies them in.
+
+`defaultAuthor: { name }` is matched to the People the same way, so a site crediting unsigned
+posts to a person credits them to that person's one node.
+
+### A person's site
+
+Choose **A person** as the kind of site (or give `brand: { kind: "person" }` in code) for a
+personal site. The person publishes it:
+
+- the person (`<home>#person`, or their People entry's `id`) is described on every page from the
+  Organization tab's facts (the name, the photo saved as the logo, the profiles, the short bio,
+  the email and telephone), with their People entry of the same name adding their job title,
+  workplace and topics; a fact the entry gives wins over the tab's;
+- the website's `publisher`, an article's `publisher` and `defaultAuthor: "organization"` name the
+  person, and an About page is about them;
+- the home page, or the page their entry names as theirs, is a **profile page** whose subject is
+  the person, unless someone chose another type for it; a profile page that names nobody is about
+  them too;
+- no organisation is described. Where they work is named by their entry's `worksFor`, as
+  `<its home>#organization`, the `@id` that organisation's own site gives itself.
+
+The People and a person's site kind are new values of the settings Single. A site that applies its
+schema with migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading;
+until it does, the People tab's list is read as empty, and People can't be saved; the other
+settings save as before.
+The kind is a new choice of an existing field and needs no migration of its own.
 
 ### What a route tells structured data
 

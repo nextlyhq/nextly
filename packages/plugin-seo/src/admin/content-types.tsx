@@ -49,6 +49,7 @@ import type { DetailSource } from "../structured-data/rules";
 import { fitSummary, textFit } from "../tab/problems";
 
 import { useAddressParam } from "./address";
+import { CopyFieldsChoice } from "./ai-files";
 import { AdminLink } from "./section";
 import {
   FROM_THE_PAGE,
@@ -633,7 +634,10 @@ function StructuredData({
   );
 }
 
-/** One content type's settings: its title pattern, hiding, and structured data. */
+/**
+ * One content type's settings: its title pattern, hiding, structured data,
+ * and the fields its plain-text copies write.
+ */
 function TypeSettings({
   type,
   draft,
@@ -671,6 +675,7 @@ function TypeSettings({
         setMapping={setMapping}
       />
       <FaqSectionRow type={type} draft={draft} change={change} />
+      <CopyFieldsChoice type={type} draft={draft} change={change} />
     </div>
   );
 }

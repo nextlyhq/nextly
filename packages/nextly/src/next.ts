@@ -193,6 +193,92 @@ const KEY_FILE_SOURCE = "/:key([0-9a-f]{32}).txt";
  */
 export const KEY_FILE_ROUTE_PREFIX = "/indexnow-key";
 
+/**
+ * Where a feed file is answered behind the API handler: `<prefix><address>`,
+ * so `/blog/feed.xml` reaches `<api>/feed-files/blog/feed.xml`. A plugin's
+ * root route at that path answers it. A prefix of its own, as the key file's
+ * is, so a feed under a name the built-in router claims (`/users/feed.xml`)
+ * still reaches the plugin.
+ */
+export const FEED_FILE_ROUTE_PREFIX = "/feed-files";
+
+/**
+ * The feed addresses a plugin may answer: `feed.xml` at the site's root, or
+ * in one folder of it (`/blog/feed.xml`), the names feed readers and sites
+ * use for a site's feed and a section's. On the same terms as the files
+ * above: the site's own page, route file, `public/` file or rewrite of such
+ * an address comes first.
+ */
+const ROOT_FEED_SOURCE = "/feed.xml";
+const SECTION_FEED_SOURCE = "/:section/feed.xml";
+
+/**
+ * Where a folder's llms files are answered behind the API handler:
+ * `<prefix><address>`, so `/docs/llms.txt` reaches
+ * `<api>/llms-files/docs/llms.txt`. A plugin's root route at that path
+ * answers it, on the same terms as a folder's feed.
+ */
+export const LLMS_FILE_ROUTE_PREFIX = "/llms-files";
+
+/**
+ * The llms files a folder of the site may have of its own, as the llms.txt
+ * proposal allows a file to cover the addresses under its path.
+ */
+const FOLDER_LLMS_FILES = ["llms.txt", "llms-full.txt"] as const;
+
+/**
+ * A folder name no site's rule names, to ask whether a rule reaches every
+ * folder's file rather than one folder's.
+ */
+const ANY_FOLDER_SAMPLE = "nextly-any-folder-7f3a";
+
+/**
+ * A folder name a folder file's rewrite can leave to the site by name: the
+ * characters an address's segment holds unescaped, none of which a route
+ * pattern reads as anything but itself once `.` is escaped.
+ */
+const PLAIN_FOLDER = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * The source of the rewrite of `/<folder>/<file>` to a plugin, given the
+ * sources of the site's own rewrites; none where the site rewrites every
+ * folder's `file` itself. Next asks our `afterFiles` before the site's
+ * `fallback`, so a folder the site rewrites, such as `/blog/feed.xml` or
+ * `/blog/:path*`, is left out of the pattern by name and keeps reaching the
+ * site's rule. A site rule under a folder pattern this cannot read name by
+ * name (`/:lang(en|fr)/feed.xml`, `/:lang(en|fr)/:path*`) that reaches a
+ * folder's `file` keeps every folder's.
+ */
+function sectionFileSource(
+  theirs: readonly string[],
+  matches: (source: string, path: string) => boolean,
+  file: string
+): string | null {
+  const claimed = new Set<string>();
+  for (const source of theirs) {
+    // Asked of a folder no site names, so a rule for one folder (even one
+    // called `section`) is left out by name below rather than read as a
+    // rule for every folder.
+    if (matches(source, `/${ANY_FOLDER_SAMPLE}/${file}`)) return null;
+    const folder = /^\/([^/]+)\//.exec(source)?.[1];
+    if (folder === undefined) continue;
+    if (!PLAIN_FOLDER.test(folder)) {
+      // A folder pattern (`/:lang(en|fr)/:path*`) can't be left out by name:
+      // read as one plain folder, a rule whose rest reaches the file keeps
+      // every folder's for the site.
+      const rest = source.slice(folder.length + 1);
+      if (matches(`/x${rest}`, `/x/${file}`)) return null;
+      continue;
+    }
+    if (matches(source, `/${folder}/${file}`)) claimed.add(folder);
+  }
+  if (claimed.size === 0) return `/:section/${file}`;
+  // A lookahead at the folder's start, which Next's matcher accepts inside a
+  // non-capturing group: any folder but the ones the site rewrites.
+  const names = [...claimed].map(folder => folder.replace(/\./g, "\\."));
+  return `/:section((?:(?!(?:${names.join("|")})/)[^/]+))/${file}`;
+}
+
 /** A key file's address, to ask whether the site rewrites such addresses itself. */
 const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
 
@@ -205,6 +291,23 @@ export interface WithNextlyOptions {
   apiRoute?: string;
   /** More root files, beyond robots.txt, sitemap.xml, llms.txt and llms-full.txt, that a plugin answers. */
   rootFiles?: readonly string[];
+  /**
+   * Whether `/feed.xml` and `/<folder>/feed.xml` reach a plugin that answers
+   * feeds, where the site serves no file of its own there. On by default.
+   * Turn it off where the site's own dynamic route answers such an address
+   * (`app/[section]/feed.xml/route.ts`): a rewrite is asked before a dynamic
+   * route, so the plugin would answer it instead.
+   */
+  feedFiles?: boolean;
+  /**
+   * Whether `/<folder>/llms.txt` and `/<folder>/llms-full.txt` reach a
+   * plugin that answers a folder's own llms files, where the site serves no
+   * file of its own there. On by default. Turn it off where the site's own
+   * dynamic route answers such an address (`app/[section]/llms.txt/route.ts`):
+   * a rewrite is asked before a dynamic route, so the plugin would answer it
+   * instead.
+   */
+  folderLlmsFiles?: boolean;
   /**
    * The app's migrations folder, relative to the project root, as
    * `db.migrationsDir` in the Nextly config sets it. Defaults to
@@ -260,6 +363,52 @@ type GetPathMatch = (
   source: string
 ) => (path: string) => Record<string, unknown> | false;
 
+/** The rewrites of the feed files to the handler's feed routes, around the site's own rules. */
+function feedRewrites(
+  theirs: readonly string[],
+  matches: (source: string, path: string) => boolean,
+  apiRoute: string
+): Rewrite[] {
+  const rewrites: Rewrite[] = [];
+  if (!theirs.some(source => matches(source, ROOT_FEED_SOURCE))) {
+    rewrites.push({
+      source: ROOT_FEED_SOURCE,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${ROOT_FEED_SOURCE}`,
+    });
+  }
+  const section = sectionFileSource(theirs, matches, "feed.xml");
+  if (section !== null) {
+    rewrites.push({
+      source: section,
+      destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${SECTION_FEED_SOURCE}`,
+    });
+  }
+  return rewrites;
+}
+
+/**
+ * The rewrites of a folder's llms files to the handler's routes for them,
+ * around the site's own rules: each folder's left to a site that rewrites
+ * that folder's file itself.
+ */
+function folderLlmsRewrites(
+  theirs: readonly string[],
+  matches: (source: string, path: string) => boolean,
+  apiRoute: string
+): Rewrite[] {
+  return FOLDER_LLMS_FILES.flatMap(file => {
+    const source = sectionFileSource(theirs, matches, file);
+    return source === null
+      ? []
+      : [
+          {
+            source,
+            destination: `${apiRoute}${LLMS_FILE_ROUTE_PREFIX}/:section/${file}`,
+          },
+        ];
+  });
+}
+
 /**
  * The site's own rewrites, with each root file rewritten to the API handler
  * after them. `afterFiles` is checked once the site's own pages, route files
@@ -312,12 +461,31 @@ function withRootFileRewrites(
             destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
           },
         ];
+    // The feed files, on the same terms: the root's left to a site that
+    // rewrites it itself, each folder's to a site that rewrites that folder's,
+    // and all of them where the site turns them off.
+    // The sources of the site's own rules, which the folder files' rewrites
+    // are shaped around.
+    const theirSources = all.flatMap(rule =>
+      typeof rule.source === "string" ? [rule.source] : []
+    );
+    const feedFileRewrites =
+      options.feedFiles === false
+        ? []
+        : feedRewrites(theirSources, matches, apiRoute);
+    // A folder's own llms files, on the same terms as a folder's feed.
+    const llmsFileRewrites =
+      options.folderLlmsFiles === false
+        ? []
+        : folderLlmsRewrites(theirSources, matches, apiRoute);
     return {
       beforeFiles: phases.beforeFiles ?? [],
       afterFiles: [
         ...(phases.afterFiles ?? []),
         ...rootRewrites,
         ...keyFileRewrites,
+        ...feedFileRewrites,
+        ...llmsFileRewrites,
       ],
       fallback: phases.fallback ?? [],
     };

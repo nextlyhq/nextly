@@ -8,6 +8,7 @@
  */
 import { indexNowLine, type ConnectionAttempt } from "../connections/contract";
 import type { CopyFailure } from "../outputs/copy-failures";
+import type { FullFileCut } from "../outputs/full-file-cut";
 import type { ListingProblem } from "../outputs/listing";
 import type { ProxyStatus } from "../redirects/contract";
 
@@ -319,5 +320,27 @@ export function plainCopyProblems(failures: readonly CopyFailure[]): Problem[] {
     what: `${failure.url}: ${failure.reason}`,
     action: "Try again",
     fix: { place: "site", href: failure.retry },
+  }));
+}
+
+/** A size in bytes as the list says it: in megabytes, to one place where needed. */
+const megabytes = (size: number): string =>
+  `${Number((size / (1024 * 1024)).toFixed(1))} MB`;
+
+/**
+ * Each llms-full.txt that stopped short at its size, named by its address,
+ * with how many pages it left out: fixed in the settings, by a larger size
+ * or fewer pages, and taken off once the file fits.
+ */
+export function llmsFullCutProblems(cuts: readonly FullFileCut[]): Problem[] {
+  return cuts.map(cut => ({
+    kind: "llmsFullCut",
+    subject: {
+      label: cut.file,
+      detail: `Stopped at ${megabytes(cut.limit)}`,
+    },
+    what: `${cut.file} stopped at ${megabytes(cut.limit)}, leaving out ${cut.leftOut} ${cut.leftOut === 1 ? "page" : "pages"}.`,
+    action: "Open Search engines and AI",
+    fix: { place: "settings", tab: "crawlers" },
   }));
 }

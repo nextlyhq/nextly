@@ -24,7 +24,7 @@ vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: async () => ({ config: loaded.config }),
   clearConfigCache: () => undefined,
 }));
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

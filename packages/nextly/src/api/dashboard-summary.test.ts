@@ -62,7 +62,7 @@ vi.mock("../domains/widgets/declaration/read-services", () => ({
 vi.mock("../domains/widgets/declaration/declared-widgets", () => ({
   declaredWidget: vi.fn(),
 }));
-vi.mock("../route-handler/auth-handler", () => ({
+vi.mock("../route-handler/handler-config", () => ({
   getHandlerConfig: vi.fn(() => undefined),
 }));
 

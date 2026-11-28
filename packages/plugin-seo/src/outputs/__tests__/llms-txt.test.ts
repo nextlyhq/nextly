@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { llmsFullTxt, llmsTxt } from "../llms-txt";
+import { llmsFullFile, llmsFullTxt, llmsTxt } from "../llms-txt";
 
 describe("llms.txt", () => {
   it("names the site, then lists each page under its type, in the order given", () => {
@@ -225,5 +225,103 @@ describe("what the site says to AI tools, and the whole site in one file", () =>
           "The rest of the site's pages are listed in [llms.txt](https://acme.example/llms.txt)."
         )
     ).toBe(true);
+  });
+});
+
+describe("llms.txt's sections", () => {
+  it("writes the Optional section last, whatever its place, and the site's own sections after the pages', joining one of the same heading", () => {
+    const file = llmsTxt({
+      name: "Acme",
+      entries: [
+        {
+          section: "Optional",
+          title: "Old news",
+          url: "https://acme.example/old",
+        },
+        {
+          section: "Docs",
+          title: "Start",
+          url: "https://acme.example/docs/start",
+        },
+      ],
+      extraSections: [
+        {
+          heading: "Docs",
+          links: [
+            {
+              title: "API",
+              url: "https://acme.example/api",
+              notes: "Every endpoint",
+            },
+          ],
+        },
+        {
+          heading: "optional",
+          links: [{ title: "Changelog", url: "https://acme.example/changes" }],
+        },
+        {
+          heading: "Elsewhere",
+          links: [{ title: "Status", url: "https://status.acme.example/" }],
+        },
+      ],
+    });
+    expect(file).toBe(
+      [
+        "# Acme",
+        "",
+        "## Docs",
+        "",
+        "- [Start](https://acme.example/docs/start)",
+        "- [API](https://acme.example/api): Every endpoint",
+        "",
+        "## Elsewhere",
+        "",
+        "- [Status](https://status.acme.example/)",
+        "",
+        "## Optional",
+        "",
+        "- [Old news](https://acme.example/old)",
+        "- [Changelog](https://acme.example/changes)",
+        "",
+      ].join("\n")
+    );
+  });
+
+  it("names the folders with an llms.txt of their own, and a folder's file points to its own llms-full.txt", () => {
+    const site = llmsTxt({
+      name: "Acme",
+      folderFiles: [
+        { title: "Docs", url: "https://acme.example/docs/llms.txt" },
+      ],
+      entries: [],
+    });
+    expect(site).toContain(
+      "Parts of the site with an llms.txt of their own: [Docs](https://acme.example/docs/llms.txt)."
+    );
+    const folder = llmsTxt({
+      name: "Acme: Docs",
+      folder: true,
+      fullTxt: "https://acme.example/docs/llms-full.txt",
+      entries: [],
+    });
+    expect(folder).toContain(
+      "All of it in one file: [llms-full.txt](https://acme.example/docs/llms-full.txt)."
+    );
+  });
+});
+
+describe("llms-full.txt's size", () => {
+  it("says how many pages it holds, and whether it stopped short", async () => {
+    const pages = [1, 2, 3].map(n => ({
+      title: `Page ${n}`,
+      url: `https://acme.example/${n}`,
+      body: "Words. ".repeat(40),
+    }));
+    const whole = await llmsFullFile({ name: "Acme", pages });
+    expect(whole).toMatchObject({ written: 3, cut: false });
+    const cut = await llmsFullFile({ name: "Acme", pages, maxBytes: 600 });
+    expect(cut.cut).toBe(true);
+    expect(cut.written).toBeLessThan(3);
+    expect(cut.text.match(/^Source: /gm)?.length ?? 0).toBe(cut.written);
   });
 });

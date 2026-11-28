@@ -303,6 +303,45 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
+    it("gives structured data the People saved and a person's site kind, and refuses a person with a fact that is not one", async () => {
+      const { t, ctx } = await boot();
+      const mobeen = {
+        name: "Mobeen Abdullah",
+        id: "https://mobeenabdullah.com/#person",
+        url: "https://mobeenabdullah.com/",
+        sameAs: ["https://github.com/mobeenabdullah"],
+        worksFor: { name: "Revnix", url: "https://revnix.com" },
+        founder: true,
+      };
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteKind: "person",
+          people: [mobeen, { name: "Rext AI Team", type: "organization" }],
+        },
+      });
+
+      expect(await readStructuredDataSettings(ctx)).toMatchObject({
+        ownerKind: "person",
+        people: [mobeen, { name: "Rext AI Team", type: "organization" }],
+      });
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            people: [{ name: "Sara Khan", sameAs: ["github.com/sara"] }],
+          },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      // The People saved before are kept.
+      expect((await readStructuredDataSettings(ctx)).people).toEqual([
+        mobeen,
+        { name: "Rext AI Team", type: "organization" },
+      ]);
+    });
+
     it("gives structured data each language's own production address", async () => {
       const { t, ctx } = await boot(["en", "de"], {
         en: "https://example.com",

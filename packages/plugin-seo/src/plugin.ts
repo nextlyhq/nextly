@@ -77,6 +77,12 @@ import {
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { watchContentDates } from "./content-dates/hooks";
 import { startFingerprintUpgrade } from "./content-dates/upgrade";
+import { withFeedLinks } from "./feeds/head";
+import {
+  checkedFeeds,
+  type CheckedFeed,
+  type FeedOption,
+} from "./feeds/options";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -139,6 +145,7 @@ import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
 import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
+import { aiFilesPreviewRoute } from "./settings/ai-files-route";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -462,6 +469,38 @@ export interface SeoPluginOptions {
    * ```
    */
   searchConsole?: { clientId: string; clientSecret: string | Secret<string> };
+  /**
+   * @experimental The site's RSS 2.0 feeds, by name: where each is served,
+   * what it is made from and how many of the newest items it holds. A
+   * source is a collection's slug, whose published pages the sitemap lists
+   * and the public may read, or a function giving items built in code.
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   feeds: {
+   *     blog: { path: "/blog/feed.xml", title: "Example blog", sources: ["posts"] },
+   *     changelog: {
+   *       path: "/changelog/feed.xml",
+   *       sources: [async () => (await releases()).map(release => ({
+   *         id: `release:${release.version}`,
+   *         title: release.title,
+   *         url: `/changelog#${release.version}`,
+   *         published: release.date,
+   *       }))],
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * A feed is served at `/feed.xml` or `feed.xml` in one folder, which
+   * `withNextly` sends to the plugin where the site serves nothing there.
+   * Every page's head links `/feed.xml`; a feed elsewhere is linked from its
+   * listing page (its `link`, its folder by default) and the pages it is
+   * made from, unless `everyPage` says otherwise. llms.txt names each feed.
+   */
+  feeds?: Record<string, FeedOption>;
 }
 
 /**
@@ -653,6 +692,21 @@ function configuredOrigin(
 }
 
 /**
+ * The configured origin, `{ origin }`, that the site's feeds and the links
+ * to them name it by, wherever a feed is named and a baseUrl set, whether or
+ * not the sitemap is served: a feed is read from anywhere, often through a
+ * proxy that asks at an internal host, and names the site's own addresses.
+ */
+function feedOrigin(
+  options: SeoPluginOptions,
+  feeds: readonly CheckedFeed[]
+): { origin?: string } {
+  return feeds.length > 0 && options.baseUrl !== undefined
+    ? { origin: resolveBaseOrigin(options.baseUrl) }
+    : {};
+}
+
+/**
  * What the site's root files are served with. A configured baseUrl must be an
  * absolute http(s) origin, or every listed address is invalid: checked at
  * construction so a typo fails at boot, and only where the sitemap, which
@@ -665,13 +719,15 @@ function rootFilesConfig(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown" | "feeds">
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
+  const { origin: feedSite } = feedOrigin(options, code.feeds ?? []);
   return {
     ...configuredOrigin(options, sitemap),
     ...readers,
     ...code,
+    ...(feedSite === undefined ? {} : { feedOrigin: feedSite }),
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -691,7 +747,7 @@ function siteFileRoutes(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown" | "feeds">
 ): PluginRoute[] {
   const config = rootFilesConfig(options, readers, collections, code);
   const routes = rootFileRoutes(config);
@@ -772,6 +828,11 @@ function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
   return JSON.parse(
     JSON.stringify(options.structuredData?.brand ?? {})
   ) as StructuredDataBrand;
+}
+
+/** The People the options give, as a plain JSON copy like the brand's. */
+function codePeopleOption(options: SeoPluginOptions): unknown {
+  return JSON.parse(JSON.stringify(options.structuredData?.people ?? []));
 }
 
 /** Every built-in preset role, by slug. */
@@ -911,6 +972,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // What the site states in its options, checked here so a mistyped route
   // fails when the site starts.
   const stated = statedAddressesOf(options.codeAddresses);
+  // The site's feeds, checked here so a mistyped address or source fails
+  // when the site starts.
+  const feeds = checkedFeeds(options.feeds);
   // Every page built in code the running site has: what its build files
   // name, what the build being served recorded, and what the options state.
   const codeListing = (ctx: PluginContext) =>
@@ -923,6 +987,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options,
     sitemapConfig(options, sitemapSubset)
   );
+  // The origin the feeds and the links to them name the site by.
+  const feedSiteOrigin = feedOrigin(options, feeds);
   // What the plain-text copies are served and linked by: the Proxy that
   // answers them and the head that links them make one decision.
   const plainCopies = {
@@ -970,7 +1036,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // structured data, worked out from that same answer and the settings'
   // brand facts, with the plugin's options where the settings say nothing;
   // the home page also carries the verification codes the settings hold,
-  // and, where plain-text copies are on, a listed page links its copy.
+  // and, where plain-text copies are on, a listed page links its copy, and
+  // each page links the site's feeds it is one of.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
   // A page of a type whose SEO is switched off is answered nothing, so its
@@ -980,22 +1047,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     withVerification(
       withSeoOff(
         ctx,
-        withCopyLink(
+        withFeedLinks(
           ctx,
-          withStructuredData(
+          withCopyLink(
             ctx,
-            withSocialCard(
+            withStructuredData(
               ctx,
-              withLanguageLinks(
+              withSocialCard(
                 ctx,
-                seoPageMetadata(ctx, readRules),
-                readRules
+                withLanguageLinks(
+                  ctx,
+                  seoPageMetadata(ctx, readRules),
+                  readRules
+                ),
+                readSocialCardRules
               ),
-              readSocialCardRules
+              structuredDataFromSettings(readStructuredDataRules)
             ),
-            structuredDataFromSettings(readStructuredDataRules)
+            plainCopies
           ),
-          plainCopies
+          { feeds, readRules, ...feedSiteOrigin }
         ),
         readRules
       ),
@@ -1173,6 +1244,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // where the settings hold none of their own. Every one is public
         // already: each page's structured data states it.
         brand: codeBrandOption(options),
+        // The People the options give, which the People tab shows while
+        // the settings list none: public too, as each page names them.
+        people: codePeopleOption(options),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each
@@ -1271,8 +1345,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
       },
       sitemapSubset,
-      // The llms files link a page's copy where its Markdown is given.
-      { codeRoutes, codeMarkdown: stated.markdownAt }
+      // The llms files link a page's copy where its Markdown is given, and
+      // name the site's feeds.
+      {
+        codeRoutes,
+        codeMarkdown: stated.markdownAt,
+        feeds,
+      }
     ),
     shareImageRoute(options.baseUrl),
     // The cards a page's own picture is served as where networks would not
@@ -1281,6 +1360,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(types, titleFields),
+    // The groups llms.txt lists, and llms.txt as the choices being edited
+    // would write it.
+    aiFilesPreviewRoute({ ...plainCopies, feeds }),
     // Which sitemap pages the own robots.txt rules being typed would block.
     ownRulesCheckRoute(options, {
       readRules,

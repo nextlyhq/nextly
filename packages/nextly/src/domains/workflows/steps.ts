@@ -122,6 +122,7 @@ import {
   type ReviewStateChange,
 } from "./review-state-repository";
 import { recordStageChanged, webhookActorOfEvent } from "./stage-changed";
+import { allowsPublish, primaryAction, stepAction } from "./step-actions";
 // Shared with the request for changes' notice, which keeps the comment the step accepted.
 import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
@@ -362,32 +363,9 @@ export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
   return WORKFLOW_CONTENT_EVENT_KINDS[kind].name;
 }
 
-/**
- * Whether `stage` allows publishing: the one answer a step into it and a publish from it share.
- *
- * @experimental
- */
-export function allowsPublish(workflow: Workflow, stage: string): boolean {
-  return workflow.stages.some(
-    candidate => candidate.name === stage && candidate.allowsPublish
-  );
-}
-
-/**
- * The action a step needs: the one it names, else `publish` into a stage that allows publishing,
- * else `update`. Kept as the action, since a permission's slug cannot be split back into its
- * action and resource (a resource may itself hold a hyphen). Exported so Settings shows the
- * permission each step needs from this one answer.
- *
- * @experimental
- */
-export function stepAction(
-  workflow: Workflow,
-  step: ResolvedWorkflowStep
-): string {
-  if (step.permission !== null) return step.permission;
-  return allowsPublish(workflow, step.to) ? "publish" : "update";
-}
+// What a step and a stage need is read without the step-taking below, so it
+// lives in `./step-actions`; re-exported for this module's callers.
+export { allowsPublish, primaryAction, stepAction } from "./step-actions";
 
 /**
  * The permission, as stored, a caller needs to take `step` on the collection or Single `slug`:
@@ -412,19 +390,6 @@ export function stepPermission(
  */
 export function stepNeedsPerson(step: ResolvedWorkflowStep): boolean {
   return step.kind === "approve" || step.kind === "request-changes";
-}
-
-/**
- * The action of `stage`'s primary step, or null for a stage with no step out of it.
- *
- * @experimental
- */
-export function primaryAction(
-  workflow: Workflow,
-  stage: string
-): string | null {
-  const primary = primaryStep(workflow, stage);
-  return primary ? stepAction(workflow, primary) : null;
 }
 
 /** The actions any one of which lets a caller assign in `stage`, each once. */

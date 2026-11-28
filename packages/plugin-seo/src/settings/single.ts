@@ -1,8 +1,8 @@
 /**
  * The SEO settings Single: one document of site-wide rules. The site's name,
  * production addresses, default description and share image, the title
- * pattern of each content type, the brand facts every output reads, what kind
- * of site it is, what AI tools may do, which optional outputs for AI tools
+ * pattern of each content type, the brand facts every output reads, the
+ * people the site names, what kind of site it is, what AI tools may do, which optional outputs for AI tools
  * are switched on, the codes other services verify the site with, whether
  * pages ask for large image previews, and how far first-time setup got.
  *
@@ -27,9 +27,11 @@ import {
 
 import { holdsManageSeo } from "../permissions";
 
+import { aiFilesStoredProblem } from "./ai-files-stored";
 import { brandDetailsProblem } from "./brand-details";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
+import { peopleProblem } from "./people-stored";
 import { productionAddressesProblem } from "./production-addresses";
 import { robotsRulesProblem } from "./robots-rules-stored";
 import {
@@ -102,6 +104,7 @@ export function seoSettingsSingle(): SingleConfig {
           { label: "A blog or publication", value: "blog" },
           { label: "An online shop", value: "shop" },
           { label: "A local business", value: "local" },
+          { label: "A person", value: "person" },
         ],
       }),
       select({
@@ -132,6 +135,15 @@ export function seoSettingsSingle(): SingleConfig {
         name: "brandDetails",
         label: "Brand details",
         validate: refusing(brandDetailsProblem),
+      }),
+      // The people (and teams) the site names, each described as one node
+      // with one identifier on every page: founders, authors and the person
+      // a personal site is about. One value, so a fact added later changes
+      // no column.
+      json({
+        name: "people",
+        label: "People",
+        validate: refusing(peopleProblem),
       }),
       json({
         name: "patterns",
@@ -181,6 +193,15 @@ export function seoSettingsSingle(): SingleConfig {
       // What the site tells AI tools in its own words, after llms.txt's
       // summary.
       textarea({ name: "llmsIntro", label: "What AI tools should know" }),
+      // How the files for AI tools are shaped: llms.txt's sections, the
+      // site's own sections of links, what llms-full.txt holds and how large
+      // it grows, the folders with files of their own, and the fields left
+      // out of copies. One value, so a choice added later changes no column.
+      json({
+        name: "aiFiles",
+        label: "AI files",
+        validate: refusing(aiFilesStoredProblem),
+      }),
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",

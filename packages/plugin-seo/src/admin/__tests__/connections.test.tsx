@@ -122,6 +122,9 @@ beforeEach(() => {
     "",
     "/admin/plugins/nextlyhq-plugin-seo/settings"
   );
+  // The AI files rows ask for their preview once llms.txt is on: answered
+  // with nothing, so the rows draw without it.
+  vi.mocked(writePluginRoute).mockResolvedValue(undefined);
 });
 
 const switchNamed = (name: string) => screen.getByRole("switch", { name });

@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CORE_WIDGET_IDS } from "../../domains/widgets/core-widgets";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

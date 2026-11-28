@@ -29,7 +29,7 @@ vi.mock("../../../di/container", () => ({
 // collection and Single a host renamed. Only `getHandlerConfig`, the one
 // export the list dispatchers read, so the test does not load the module
 // itself, which reaches the auth routes and every plugin's context.
-vi.mock("../../../route-handler/auth-handler", () => ({
+vi.mock("../../../route-handler/handler-config", () => ({
   getHandlerConfig: () => ({
     plugins: [
       {

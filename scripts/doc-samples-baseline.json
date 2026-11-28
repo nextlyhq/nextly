@@ -301,8 +301,8 @@
       "compiled": 3
     },
     "docs/plugins/seo.mdx": {
-      "samples": 32,
-      "compiled": 21
+      "samples": 36,
+      "compiled": 24
     },
     "docs/plugins/services.mdx": {
       "samples": 20,
@@ -670,8 +670,8 @@
       "reader-file #1 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/seo.mdx": {
-      "reader-file #18 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #19 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #22 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #23 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #8 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #9 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },

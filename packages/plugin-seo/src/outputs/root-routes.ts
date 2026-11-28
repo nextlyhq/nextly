@@ -12,8 +12,11 @@ import {
   addressRecordReadyWithin,
 } from "../address-record/catch-up";
 import type { ReadCodeRoutes } from "../code-pages/routes";
+import { feedXmlOf } from "../feeds/feed";
+import type { CheckedFeed } from "../feeds/options";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
+import { servesFolderFiles } from "../settings/ai-files";
 import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
@@ -43,6 +46,13 @@ export interface RootFilesConfig {
   codeRoutes?: ReadCodeRoutes;
   /** The Markdown the options give for a page built in code, which its copy is made of. */
   codeMarkdown?: AiOutputsConfig["codeMarkdown"];
+  /** The site's RSS feeds, as its options name them. */
+  feeds?: readonly CheckedFeed[];
+  /**
+   * The configured origin the feeds name the site by, where a baseUrl is
+   * set, whether or not the sitemap is served.
+   */
+  feedOrigin?: string;
 }
 
 /**
@@ -247,6 +257,7 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       },
     });
   }
+  routes.push(...feedRoutes(config));
   routes.push(
     llmsRoute(
       "/llms.txt",
@@ -261,18 +272,47 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       "file of every page",
       config,
       rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
-      llmsFullTxtOf
+      (ctx, origin, outputs, rules) =>
+        llmsFullTxtOf(ctx, origin, outputs, rules)
+    ),
+    // A folder's own files, at the addresses `withNextly` sends
+    // `/<folder>/llms.txt` and `/<folder>/llms-full.txt` to.
+    llmsRoute(
+      `${LLMS_FILE_PREFIX}/:section/llms.txt`,
+      "list of pages",
+      config,
+      rules => rules.llmsTxt === true,
+      (ctx, origin, outputs, rules, folder) =>
+        llmsTxtOf(ctx, origin, outputs, rules, folder)
+    ),
+    llmsRoute(
+      `${LLMS_FILE_PREFIX}/:section/llms-full.txt`,
+      "file of every page",
+      config,
+      rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
+      (ctx, origin, outputs, rules, folder) =>
+        llmsFullTxtOf(ctx, origin, outputs, rules, undefined, folder)
     )
   );
   return routes;
 }
 
 /**
+ * Where `withNextly` sends a folder's llms files behind the API handler:
+ * the address under `LLMS_FILE_ROUTE_PREFIX` of `nextly/next`, which is
+ * `/llms-files`.
+ */
+const LLMS_FILE_PREFIX = "/llms-files";
+
+/**
  * A route serving one of the llms files, only once switched on in the SEO
  * settings, so it is not found until then; it lists what the sitemap lists,
- * narrowed as it is. No copy of it is kept to serve while the address record
- * catches up: it carries pages' titles, descriptions or words, which a kept
- * copy would go on serving after the public may no longer read them.
+ * narrowed as it is. A route under {@link LLMS_FILE_PREFIX} serves a
+ * folder's file, the folder the route caught, and is not found for a folder
+ * the settings give no files of its own. No copy of it is kept to serve
+ * while the address record catches up: it carries pages' titles,
+ * descriptions or words, which a kept copy would go on serving after the
+ * public may no longer read them.
  */
 function llmsRoute(
   path: string,
@@ -283,7 +323,8 @@ function llmsRoute(
     ctx: PluginRouteContext,
     origin: string,
     outputs: AiOutputsConfig,
-    rules: SiteRules
+    rules: SiteRules,
+    folder?: string
   ) => Promise<string | null>
 ): PluginRoute {
   return {
@@ -294,6 +335,10 @@ function llmsRoute(
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
       if (!on(rules)) return notFound();
+      const { section } = ctx.params;
+      if (section !== undefined && !servesFolderFiles(rules, section)) {
+        return notFound();
+      }
       const waiting = await catchingUp(ctx, what, undefined);
       if (waiting !== null) return waiting;
       const { origin, headers } = await originOf(
@@ -316,10 +361,81 @@ function llmsRoute(
           ...(config.sitemap?.collections === undefined
             ? {}
             : { collections: config.sitemap.collections }),
+          ...(config.feeds === undefined ? {} : { feeds: config.feeds }),
         },
-        rules
+        rules,
+        section
       );
       return answered(ctx, undefined, body, headers);
     },
   };
+}
+
+/**
+ * Where `withNextly` sends a feed's address behind the API handler: the
+ * address under `FEED_FILE_ROUTE_PREFIX` of `nextly/next`, which is
+ * `/feed-files`.
+ */
+const FEED_FILE_PREFIX = "/feed-files";
+
+/**
+ * How long a reader, and a cache between, may keep a feed: five minutes, so
+ * the many readers polling a feed are answered from a cache, and a page
+ * published, changed or taken down shows within that.
+ */
+const FEED_CACHE = "public, max-age=300, s-maxage=300";
+
+/**
+ * The routes serving the site's feeds: both shapes of address `withNextly`
+ * rewrites (`/feed.xml`, `/<folder>/feed.xml`), each answering the feed the
+ * options name at the address asked for, and not found where none is. None
+ * where the options name no feed. No copy of a feed is kept to serve while
+ * the address record catches up: it carries pages' titles and descriptions,
+ * which a kept copy would go on serving after the public may no longer read
+ * them.
+ */
+function feedRoutes(config: RootFilesConfig): PluginRoute[] {
+  const feeds = config.feeds ?? [];
+  if (feeds.length === 0) return [];
+  const byPath = new Map(feeds.map(feed => [feed.path, feed]));
+  const handler: PluginRoute["handler"] = async (req, ctx) => {
+    // The address the site was asked for, from the folder the route caught.
+    const { section } = ctx.params;
+    const feed = byPath.get(
+      section === undefined ? "/feed.xml" : `/${section}/feed.xml`
+    );
+    if (feed === undefined) return notFound();
+    const waiting = await catchingUp(ctx, "feed", undefined);
+    if (waiting !== null) return waiting;
+    const { origin, headers, own } = await originOf(
+      req,
+      ctx,
+      config.feedOrigin === undefined
+        ? config
+        : { ...config, origin: config.feedOrigin },
+      "application/rss+xml; charset=utf-8"
+    );
+    const body = await feedXmlOf(ctx, feed, {
+      origin,
+      readRules: config.readRules,
+      ...(config.readStructuredDataRules === undefined
+        ? {}
+        : { readStructuredDataRules: config.readStructuredDataRules }),
+    });
+    // Kept by caches only for the site's own origin: an answer naming the
+    // host a request named is never kept (`originOf`).
+    return new Response(body, {
+      headers: own ? { ...headers, "cache-control": FEED_CACHE } : headers,
+    });
+  };
+  return [
+    `${FEED_FILE_PREFIX}/feed.xml`,
+    `${FEED_FILE_PREFIX}/:section/feed.xml`,
+  ].map(path => ({
+    method: "GET" as const,
+    path,
+    mount: "root" as const,
+    public: true,
+    handler,
+  }));
 }

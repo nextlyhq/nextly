@@ -49,12 +49,11 @@ import {
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispatcher/browser";
 import { writeRegistryRows } from "../../schema/schema-version";
-import {
-  applyCollectionSchemaChange,
-  collectionFileRoad,
-  type CollectionFileRoad,
-  type CollectionSchemaChange,
-  refuseNewCollectionIndexNamesTaken,
+// Only the types: the schema pipeline that applies a change is loaded where a save applies one
+// (`loadSchemaApply`).
+import type {
+  CollectionFileRoad,
+  CollectionSchemaChange,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
@@ -84,6 +83,14 @@ interface DeletedCollectionRow {
  */
 const loadCollectionSave = () =>
   import("../../schema/builder-save/collection-save");
+
+/**
+ * The schema pipeline that applies a collection's change (the push, its
+ * questions and the index-name checks), loaded where a create or an update
+ * applies one: every boot registers this service and never saves a schema.
+ */
+const loadSchemaApply = () =>
+  import("../../schema/services/collection-schema-apply");
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -899,6 +906,7 @@ export class CollectionMetadataService extends BaseService {
         // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
         // A precondition, so it runs before the leftover below is cleared: a create it refuses
         // has changed nothing.
+        const { refuseNewCollectionIndexNamesTaken } = await loadSchemaApply();
         try {
           await refuseNewCollectionIndexNamesTaken(this.adapter, {
             slug: data.name,
@@ -1382,6 +1390,8 @@ export class CollectionMetadataService extends BaseService {
         // The save detects its own renames; every other pair is a drop and an add.
         dropAndAddUnansweredRenames: true,
       };
+      const { applyCollectionSchemaChange, collectionFileRoad } =
+        await loadSchemaApply();
       // The file creates the archive when it is missing but cannot add the kind column to an
       // archive from before rows recorded it, which the archive's writes name: brought up to date
       // before either road archives anything.

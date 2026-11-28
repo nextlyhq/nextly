@@ -44,7 +44,7 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
-import { bootedPlugins } from "../route-handler/auth-handler";
+import { bootedPlugins } from "../route-handler/handler-config";
 import { isSuperAdmin } from "../services/lib/permissions";
 import { contentKinds } from "../services/lib/registered-content-slugs";
 
