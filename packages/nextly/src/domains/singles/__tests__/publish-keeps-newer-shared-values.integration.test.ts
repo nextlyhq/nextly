@@ -60,12 +60,18 @@ async function boot(
             name: "internalScore",
             access: { read: () => false, update: () => false },
           }),
-          // Shared, with a nested field only a trusted context may write.
+          // Shared, with a nested field only a trusted context may write. A
+          // group keeps one structure in every language and translates the
+          // text inside, so its fields are marked shared.
           group({
             name: "details",
             fields: [
-              text({ name: "label" }),
-              text({ name: "note", access: { update: () => false } }),
+              text({ name: "label", localized: false }),
+              text({
+                name: "note",
+                localized: false,
+                access: { update: () => false },
+              }),
             ],
           }),
           // Shared, and not writable by a request for Spanish.

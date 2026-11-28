@@ -384,8 +384,9 @@ const CASES: Case[] = [
     expected: p(["en"], true),
   },
   {
-    // A Single kept per language seeds its default language's translation
-    // row on its first read, values or none, so that language is written.
+    // A Single's own `title` is content, not its label (`ownIdentityFieldNames`): with no
+    // translatable default, its first read seeds no translation row, so it writes the shared
+    // row alone. The case above, with a translatable default, writes its default language.
     name: "Single default row, no translated default given",
     run: async () => {
       const read = await singles().get(SITE, {
@@ -396,7 +397,7 @@ const CASES: Case[] = [
       return (read.data as { id: string }).id;
     },
     read: "first",
-    expected: p(["en"], true),
+    expected: p([], true),
   },
 
   // Saves in place.

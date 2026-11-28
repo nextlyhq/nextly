@@ -223,11 +223,13 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // The card component's registry row comes from the cache as well, a statement off each read.
-    // Without the cache, a read asks for that row three times: field groups placed in field groups
-    // are read at any depth, and a related document's field hooks are run inside components
+    // Without the cache, a read asks for that row four times: field groups placed in field groups
+    // are read at any depth, a related document's field hooks are run inside components
     // (measured: the walk that reaches a relationship inside a component reads the card's row once
-    // more, one statement on each read, entry and page). The cache answers all three.
-    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 13 and 15", async () => {
+    // more, one statement on each read, entry and page), and the row is asked again after the
+    // card's instances are read, for the translations table it names then (`metaAfterRead`, which
+    // follows a storage migration that moved the table mid-read). The cache answers all four.
+    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 14 and 16", async () => {
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       const counted = async (read: () => Promise<unknown>) => {
@@ -246,7 +248,7 @@ describe.each(getConfiguredTestDialects())(
       };
       expect({ warm, cold }).toEqual({
         warm: { detail: 3, list: 4 },
-        cold: { detail: 13, list: 15 },
+        cold: { detail: 14, list: 16 },
       });
     });
 

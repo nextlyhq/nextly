@@ -20,6 +20,7 @@ import { buildExtensionSchema } from "../../../domains/schema/extension/build-ex
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import { resolveRegistryNameFromCatalog } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
@@ -141,6 +142,12 @@ describe.each(getConfiguredTestDialects())(
       await reconcileCore({
         db: db(),
         dialect,
+        // The registry the boot made, as `nextly migrate` names it: a new
+        // site's is on the current field-group names.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db() as T,
+        }),
         logger: { info: () => {}, warn: () => {} },
       });
       run.dialect = dialect;

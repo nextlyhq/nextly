@@ -21,5 +21,8 @@ export default defineConfig({
     // Each test boots its own instance against a shared in-memory database, so
     // the files cannot safely interleave.
     fileParallelism: false,
+    // The MySQL leg hands every package the same `--shard` of ten, and this suite has fewer files
+    // than that: a shard holding none of them passes rather than failing before a test runs.
+    passWithNoTests: true,
   },
 });

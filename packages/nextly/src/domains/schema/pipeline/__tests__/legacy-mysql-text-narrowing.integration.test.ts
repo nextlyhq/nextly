@@ -39,6 +39,7 @@ import type { CommandContext } from "../../../../cli/program";
 import type { CLIDatabaseAdapter } from "../../../../cli/utils/adapter";
 import type { LoadConfigResult } from "../../../../cli/utils/config-loader";
 import { createLogger } from "../../../../cli/utils/logger";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
 import type { ResolvedDevOptions } from "../../../../cli/commands/db-sync";
 import {
   defineConfig,
@@ -46,14 +47,15 @@ import {
   defineSingle,
   text,
 } from "../../../../config";
-import { getDialectTables } from "../../../../database/index";
 import { createAdapter } from "../../../../database/factory";
-import { SchemaRegistry } from "../../../../database/schema-registry";
 import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
+import {
+  resolveRegistryNameFromCatalog,
+  typeColumnForNewTable,
+} from "../../../field-groups/storage/resolve-storage-names";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { toMinimalEntities } from "../../migrate-create/config-entities";
 import { generateMigration } from "../../migrate-create/generate";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -116,7 +118,6 @@ const RUN_ID = randomBytes(3).toString("hex");
 const SINGLE_SLUG = `legacysite${RUN_ID}`;
 const GROUP_SLUG = `legacyseo${RUN_ID}`;
 const SINGLE_TABLE = resolveSingleTableName({ slug: SINGLE_SLUG });
-const GROUP_TABLE = resolveComponentTableName(GROUP_SLUG);
 
 const config = defineConfig({
   collections: [],
@@ -180,15 +181,32 @@ async function makeHarness(poolMax?: number): Promise<Harness> {
   };
 }
 
+/**
+ * The field group's table, as its registry row names it: the sync creates it under the naming a
+ * new site's storage is on (`fg_<slug>` on the current field-group names).
+ */
+async function groupTable(h: Harness): Promise<string> {
+  const registry = await resolveRegistryNameFromCatalog({
+    dialect: "mysql",
+    getDrizzle: <T>() => h.db as T,
+  });
+  const [rows] = (await h.root.query(
+    `SELECT table_name AS t FROM \`${registry}\` WHERE slug = ?`,
+    [GROUP_SLUG]
+  )) as unknown as [Array<{ t: string }>];
+  const table = rows[0]?.t;
+  if (table === undefined) throw new Error(`${GROUP_SLUG} is not registered`);
+  return table;
+}
+
 /** What `nextly db:sync` runs, in its order, with no terminal attached. */
 async function dbSync(h: Harness): Promise<void> {
   // The pipeline skips an apply whose desired schema it applied last; every call here is a run of
   // its own, against a database that changed underneath it.
   clearCachedSnapshot();
-  const drizzleAdapter = h.adapter as unknown as DrizzleAdapter;
-  const registry = new SchemaRegistry("mysql");
-  registry.registerStaticSchemas(getDialectTables("mysql"));
-  drizzleAdapter.setTableResolver(registry);
+  // The table resolver the CLI's adapter gets, which also reads the field-group registry under
+  // its current name (`installRegistryResolver`).
+  installRegistryResolver(h.adapter as unknown as DrizzleAdapter);
   const options = { cwd: "", autoSync: true } as ResolvedDevOptions;
   const configResult = { config } as LoadConfigResult;
   await ensureCoreTables(h.adapter, options, context);
@@ -205,11 +223,12 @@ async function dbSync(h: Harness): Promise<void> {
  */
 async function legacyTables(h: Harness, length: number): Promise<void> {
   await dbSync(h);
+  const group = await groupTable(h);
   await h.root.query(
     `ALTER TABLE \`${SINGLE_TABLE}\` MODIFY COLUMN \`title\` TEXT NULL`
   );
   await h.root.query(
-    `ALTER TABLE \`${GROUP_TABLE}\` MODIFY COLUMN \`meta_title\` TEXT NULL`
+    `ALTER TABLE \`${group}\` MODIFY COLUMN \`meta_title\` TEXT NULL`
   );
   const value = "x".repeat(length);
   await h.root.query(
@@ -217,7 +236,7 @@ async function legacyTables(h: Harness, length: number): Promise<void> {
     [randomBytes(8).toString("hex"), value, SINGLE_SLUG]
   );
   await h.root.query(
-    `INSERT INTO \`${GROUP_TABLE}\` (id, _parent_id, _parent_table, _parent_field, _order, _component_type, meta_title, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())`,
+    `INSERT INTO \`${group}\` (id, _parent_id, _parent_table, _parent_field, _order, \`${typeColumnForNewTable(group)}\`, meta_title, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())`,
     [
       randomBytes(8).toString("hex"),
       randomBytes(8).toString("hex"),
@@ -245,7 +264,7 @@ async function readBack(
   };
   return {
     title: await column(SINGLE_TABLE, "title"),
-    metaTitle: await column(GROUP_TABLE, "meta_title"),
+    metaTitle: await column(await groupTable(h), "meta_title"),
   };
 }
 
@@ -259,6 +278,8 @@ async function baselineThenCreate(h: Harness): Promise<string[]> {
     logger,
   });
   expect(adopted.kind).toBe("baselined");
+  // The one field group, under the table the sync made for it.
+  const group = await groupTable(h);
   const result = await generateMigration({
     name: "after_upgrade",
     dialect: "mysql",
@@ -267,9 +288,7 @@ async function baselineThenCreate(h: Harness): Promise<string[]> {
     singles: toMinimalEntities(config.singles ?? [], e =>
       resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
     ),
-    components: toMinimalEntities(config.fieldGroups ?? [], e =>
-      resolveComponentTableName(e.slug)
-    ),
+    components: toMinimalEntities(config.fieldGroups ?? [], () => group),
     nonInteractive: true,
   });
   expect(result).not.toBeNull();
