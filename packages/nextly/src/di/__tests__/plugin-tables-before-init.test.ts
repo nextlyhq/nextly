@@ -24,7 +24,7 @@ import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-ow
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

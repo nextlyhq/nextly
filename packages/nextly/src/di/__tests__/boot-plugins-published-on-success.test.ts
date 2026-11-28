@@ -14,7 +14,7 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 
 const setBootedConfig = vi.fn();
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: (config: unknown) => setBootedConfig(config),
 }));
 

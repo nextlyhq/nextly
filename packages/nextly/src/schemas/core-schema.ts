@@ -23,62 +23,38 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
-import {
-  CACHE_TAG_EXPIRIES_TABLE,
-  cacheTagExpiriesTables,
-} from "./cache-tag-expiries";
-import { CLI_CREDENTIALS_TABLE, cliCredentialsTables } from "./cli-credentials";
+import { cacheTagExpiriesTables } from "./cache-tag-expiries";
+import { cliCredentialsTables } from "./cli-credentials";
 import { contentEventsTables } from "./content-events";
+import { CORE_TABLE_NAMES } from "./core-table-names";
 import { dashboardPinsTables } from "./dashboard-pins";
 import { dashboardPreferencesTables } from "./dashboard-preferences";
-import {
-  DELETED_PRINCIPALS_TABLE,
-  deletedPrincipalsTables,
-} from "./deleted-principals";
+import { deletedPrincipalsTables } from "./deleted-principals";
 import { documentLockTables } from "./document-lock";
 import { emailBrandTables } from "./email-brand";
-import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
-import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
-import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
-import {
-  EXTERNAL_IDENTITIES_TABLE,
-  externalIdentitiesTables,
-} from "./external-identities";
+import { externalIdentitiesTables } from "./external-identities";
 import { fieldGroupLockTables, schemaLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
-import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
+import { limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { mediaUsageTables } from "./media-usage";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { noticesTables } from "./notices";
-import {
-  ONE_TIME_SECRETS_TABLE,
-  oneTimeSecretsTables,
-} from "./one-time-secrets";
-import {
-  PLUGIN_EVENT_DELIVERIES_TABLE,
-  PLUGIN_EVENTS_TABLE,
-  pluginEventsTables,
-} from "./plugin-events";
-import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
+import { oneTimeSecretsTables } from "./one-time-secrets";
+import { pluginEventsTables } from "./plugin-events";
+import { pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
-import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
-import {
-  RECEIVED_WEBHOOKS_TABLE,
-  receivedWebhooksTables,
-} from "./received-webhooks";
+import { rbacEpochTables } from "./rbac-epoch";
+import { receivedWebhooksTables } from "./received-webhooks";
 import { releasesTables } from "./releases";
 import { reviewStatesTables } from "./review-states";
 import { scheduleWindowsTables } from "./schedule-windows";
 import { schemaEventsTables } from "./schema-events";
-import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
-import {
-  SPENT_CHALLENGES_TABLE,
-  spentChallengesTables,
-} from "./spent-challenges";
+import { schemaOwnersTables } from "./schema-owners";
+import { spentChallengesTables } from "./spent-challenges";
 import { STORAGE_FORMAT } from "./storage-format";
 import { translationProvenanceTables } from "./translation-provenance";
 import { translationSourcesTables } from "./translation-sources";
@@ -367,80 +343,9 @@ export function getCoreSchema(
   };
 }
 
-/** Snake-case names of every core table the framework manages. */
-export const CORE_TABLE_NAMES: readonly string[] = [
-  "users",
-  "password_reset_tokens",
-  "user_invite_tokens",
-  "email_verification_tokens",
-  "refresh_tokens",
-  "roles",
-  "permissions",
-  "role_permissions",
-  "user_roles",
-  "role_inherits",
-  "api_keys",
-  "audit_log",
-  "activity_log",
-  "media",
-  "media_folders",
-  "nextly_meta",
-  // Read by live introspection. Absent here, the table is created and then invisible to every
-  // snapshot, so the drift check proposes adding it again on every run.
-  "nextly_field_group_lock",
-  "nextly_schema_lock",
-  "nextly_document_lock",
-  RBAC_EPOCH_TABLE,
-  DELETED_PRINCIPALS_TABLE,
-  PLUGIN_SETTINGS_TABLE,
-  ONE_TIME_SECRETS_TABLE,
-  RECEIVED_WEBHOOKS_TABLE,
-  PLUGIN_EVENTS_TABLE,
-  PLUGIN_EVENT_DELIVERIES_TABLE,
-  LIMIT_STORE_TABLE,
-  CLI_CREDENTIALS_TABLE,
-  CACHE_TAG_EXPIRIES_TABLE,
-  SPENT_CHALLENGES_TABLE,
-  SCHEMA_OWNERS_TABLE,
-  "nextly_widget_layout",
-  "dynamic_collections",
-  "dynamic_singles",
-  STORAGE_FORMAT.registryTable,
-  "site_settings",
-  "user_field_definitions",
-  "email_providers",
-  "email_templates",
-  "email_deliveries",
-  "email_brand",
-  EXTERNAL_IDENTITIES_TABLE,
-  EMAIL_SEND_CLAIMS_TABLE,
-  EMAIL_QUEUE_TABLE,
-  EMAIL_QUEUE_RECIPIENTS_TABLE,
-  "nextly_schema_events",
-  "nextly_i18n_archive",
-  "nextly_versions",
-  "nextly_version_views",
-  "nextly_review_states",
-  "nextly_workflow_settings",
-  "nextly_translation_provenance",
-  "nextly_translation_sources",
-  "nextly_schedule_windows",
-  "nextly_content_events",
-  "nextly_content_event_parts",
-  "nextly_preview_links",
-  "nextly_languages",
-  "nextly_releases",
-  "nextly_release_members",
-  "nextly_version_pins",
-  "nextly_jobs",
-  "nextly_events",
-  "nextly_webhooks",
-  "nextly_webhook_deliveries",
-  "nextly_notices",
-  "nextly_dashboard_pins",
-  "nextly_dashboard_preferences",
-  "nextly_media_usage",
-] as const;
+// The list of names lives in `./core-table-names`, which loads no table's
+// definition; re-exported here for this module's callers.
+export { CORE_TABLE_NAMES } from "./core-table-names";
 
 /**
  * Prefixes that identify managed user tables.

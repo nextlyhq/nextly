@@ -26,7 +26,7 @@ vi.mock("../../database/factory", async importOriginal => {
     },
   };
 });
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

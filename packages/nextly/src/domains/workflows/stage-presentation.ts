@@ -12,7 +12,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { container } from "../../di/container";
 
 import { attachedWorkflowSummary, workflowAttachedTo } from "./registry";
-import { primaryAction, stepAction } from "./steps";
+import { primaryAction, stepAction } from "./step-actions";
 import type { Workflow } from "./types";
 import {
   readWorkflowSettings,

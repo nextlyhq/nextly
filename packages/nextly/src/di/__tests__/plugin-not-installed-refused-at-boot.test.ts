@@ -33,7 +33,7 @@ vi.mock("../../cli/commands/migrate", () => ({
     return { applied: 0, coreChanged: false, ran: false };
   },
 }));
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

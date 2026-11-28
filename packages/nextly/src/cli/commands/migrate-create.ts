@@ -116,7 +116,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
-import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
+import { CORE_TABLE_NAMES } from "../../schemas/core-table-names";
 import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
 import { databaseDialectDiffers } from "../errors/areas/database";

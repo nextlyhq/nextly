@@ -316,7 +316,7 @@ import {
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { assertFieldTypeSettings } from "../plugins/validate-field-type-settings";
-import { setBootedConfig } from "../route-handler/auth-handler";
+import { setBootedConfig } from "../route-handler/handler-config";
 import {
   installTagExpiryLedger,
   withdrawTagExpiryLedger,

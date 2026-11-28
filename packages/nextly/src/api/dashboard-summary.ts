@@ -36,7 +36,7 @@ import { MAX_WIDGET_LIMIT } from "../domains/widgets/query-limits";
 import { isUnavailableSourceRefusal } from "../domains/widgets/sources";
 import { RELEASES_SOURCE_ID } from "../domains/widgets/system-source-ids";
 import { NextlyError } from "../errors/nextly-error";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { getHandlerConfig } from "../route-handler/handler-config";
 import { readAttentionDigest } from "../services/dashboard/attention-source";
 import {
   attentionPart,

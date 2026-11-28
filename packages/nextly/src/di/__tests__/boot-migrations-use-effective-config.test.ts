@@ -35,7 +35,7 @@ vi.mock("../../init/prod-migrations", () => ({
     throw new StopAtMigrations("stopped at boot migrations");
   },
 }));
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

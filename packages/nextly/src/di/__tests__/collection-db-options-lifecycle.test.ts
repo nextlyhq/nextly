@@ -16,7 +16,7 @@ import {
   publishCollectionDbOptions,
 } from "../../domains/collections/services/collection-id";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

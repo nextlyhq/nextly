@@ -18,7 +18,7 @@ import { buildServiceConfig } from "../../init/build-service-config";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { sanitizeConfig } from "../../shared/types/config";
 
-vi.mock("../../route-handler/auth-handler", () => ({
+vi.mock("../../route-handler/handler-config", () => ({
   setBootedConfig: () => undefined,
 }));
 

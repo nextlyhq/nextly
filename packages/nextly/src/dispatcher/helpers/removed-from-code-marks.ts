@@ -29,7 +29,7 @@ import {
   registryRowRemovedFromCode,
   type RemovableEntityKind,
 } from "../../domains/dynamic-collections/services/removed-from-code-writes";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
+import { getHandlerConfig } from "../../route-handler/handler-config";
 import { DEFAULT_DB_CONFIG } from "../../shared/types/config";
 
 import { getAdapterFromDI } from "./di";

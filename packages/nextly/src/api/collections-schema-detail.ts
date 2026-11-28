@@ -46,7 +46,7 @@ import {
   type CollectionWithAdmin,
 } from "../plugins/admin-views";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { getHandlerConfig } from "../route-handler/handler-config";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
