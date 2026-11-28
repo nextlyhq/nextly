@@ -19,7 +19,7 @@ import {
 import { defineCollection, defineSingle, richText, text } from "nextly";
 import { createDynamicHandlers, createNextlyProxy } from "nextly/runtime";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
@@ -320,6 +320,42 @@ describe.each(getConfiguredTestDialects())(
       expect(full).toContain("Rockets go up.");
       expect(full).not.toContain("A side note.");
       expect(full).not.toContain("Buy now");
+    });
+
+    it("never brings back from the rendered page the words the site left out of a copy", async () => {
+      const t = await boot(dialect);
+      await page(t, "posts", "hello", {
+        body: body(paragraph(words("Rockets go up."))),
+        aside: "A side note.",
+        seo: { metaDescription: "A short hello." },
+      });
+      // Pages may be rendered: the site names its production address.
+      await settings(t, {
+        llmsFullTxt: true,
+        plainTextCopies: true,
+        productionAddresses: [SITE],
+        aiFiles: { copyLeftOut: { posts: ["body", "aside"] } },
+      });
+      // The rendered page shows the words left out.
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        async () =>
+          new Response(
+            "<!doctype html><html><body><main><h1>posts hello</h1><p>Rockets go up.</p><p>A side note.</p></main></body></html>",
+            { headers: { "content-type": "text/html; charset=utf-8" } }
+          )
+      );
+      try {
+        const copy = await copyAt("/blog/hello.md");
+        expect(copy).not.toContain("Rockets go up.");
+        expect(copy).not.toContain("A side note.");
+        // Its description stands in, as for any page without words.
+        expect(copy).toContain("A short hello.");
+        const full = (await rootFile("llms-full.txt")).body;
+        expect(full).toContain(`Source: ${SITE}/blog/hello`);
+        expect(full).not.toContain("Rockets go up.");
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
 
     it("holds in llms-full.txt only the pages its settings choose: addresses under /docs/, or chosen sections", async () => {

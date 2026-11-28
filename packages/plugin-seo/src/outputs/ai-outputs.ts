@@ -614,16 +614,25 @@ async function documentBodyOf(
   page: ListedPage,
   head: ListedHead & { document: Record<string, unknown> }
 ): Promise<string | undefined> {
-  const stored = await documentCopyOf(writing.ctx, page, head.document, head, {
-    fields: writing.fields.get(page.holder.collection),
-    titleFields: writing.titleFields,
-    copyLeftOut: writing.copyLeftOut,
-  });
+  const { copy: stored, leftOutWords } = await documentCopyOf(
+    writing.ctx,
+    page,
+    head.document,
+    head,
+    {
+      fields: writing.fields.get(page.holder.collection),
+      titleFields: writing.titleFields,
+      copyLeftOut: writing.copyLeftOut,
+    }
+  );
   if (holdsWords(stored)) {
     // Its words are had: a failure noted for it before is settled.
     writing.results.made.push(page.loc);
     return stored;
   }
+  // Words the site left out are not brought back by the rendered page: its
+  // description is written instead.
+  if (leftOutWords) return undefined;
   return renderedBodyOf(writing, page);
 }
 
@@ -1184,15 +1193,22 @@ async function copyOf(
   // The stored copy without front matter, so a page whose stored fields
   // hold no words can be copied from its rendered page instead.
   const { titleFields, aiFiles } = await readRules(ctx, page.language);
-  const stored = await documentCopyOf(ctx, page, document, head, {
-    fields: await fieldsOf(ctx, page.holder.collection),
-    titleFields,
-    copyLeftOut: aiFiles?.copyLeftOut,
-  });
+  const { copy: stored, leftOutWords } = await documentCopyOf(
+    ctx,
+    page,
+    document,
+    head,
+    {
+      fields: await fieldsOf(ctx, page.holder.collection),
+      titleFields,
+      copyLeftOut: aiFiles?.copyLeftOut,
+    }
+  );
   if (holdsWords(stored)) {
     return madeCopy(ctx, page, withFrontMatter(aboutOf(page, head), stored));
   }
-  if (render) {
+  // Words the site left out are not brought back by the rendered page.
+  if (render && !leftOutWords) {
     const rendered = await renderedCopyFor(ctx, page, head, retryAt);
     if (rendered !== null) return rendered;
   }
@@ -1204,8 +1220,11 @@ async function copyOf(
  * page's own name (`pageNameOf`), the field it was read from said once,
  * and a Single's `title` that is Nextly's left out; each page a
  * relationship field names written by its title, linked to its address;
- * the fields the site leaves out of its type's copies (`copyLeftOut`) left
- * out; without front matter, which each caller adds where it wants one.
+ * the fields the site leaves out of its type's copies (`copyLeftOut`, and
+ * `custom.seo.copy` in its code) left out; without front matter, which each
+ * caller adds where it wants one. `leftOutWords` says that a copy with no
+ * words has none because of what the site left out, so the caller does not
+ * bring those words back from the rendered page.
  */
 async function documentCopyOf(
   ctx: PluginContext,
@@ -1221,25 +1240,33 @@ async function documentCopyOf(
     titleFields: TitleFields | undefined;
     copyLeftOut: CopyLeftOut | undefined;
   }
-): Promise<string> {
-  const skip = [
-    ...(head.labelTitle === true ? ["title"] : []),
-    ...(copyLeftOut?.[page.holder.collection] ?? []),
-  ];
+): Promise<{ copy: string; leftOutWords: boolean }> {
+  const ownSkip = head.labelTitle === true ? ["title"] : [];
+  const chosen = copyLeftOut?.[page.holder.collection] ?? [];
   const title = listedName(head);
   const related =
     fields === undefined
       ? undefined
       : await relatedPagesOf(ctx, fields, document, page, titleFields);
-  return plainCopyOf({
-    ...(title === undefined ? {} : { title }),
-    ...(head.nameField === undefined ? {} : { titleField: head.nameField }),
-    document,
-    ...(fields === undefined ? {} : { fields }),
-    base: page.loc,
-    ...(skip.length === 0 ? {} : { skip }),
-    ...(related === undefined ? {} : { related }),
-  });
+  const write = (skip: readonly string[], keepLeftOut: boolean) =>
+    plainCopyOf({
+      ...(title === undefined ? {} : { title }),
+      ...(head.nameField === undefined ? {} : { titleField: head.nameField }),
+      document,
+      ...(fields === undefined ? {} : { fields }),
+      base: page.loc,
+      ...(skip.length === 0 ? {} : { skip }),
+      ...(related === undefined ? {} : { related }),
+      ...(keepLeftOut ? { keepLeftOut: true } : {}),
+    });
+  const copy = write([...ownSkip, ...chosen], false);
+  // Only a copy left with no words is written again, with every field, to
+  // tell whether the site's choices took its words.
+  const leftOutWords =
+    !holdsWords(copy) &&
+    fields !== undefined &&
+    holdsWords(write(ownSkip, true));
+  return { copy, leftOutWords };
 }
 
 /**

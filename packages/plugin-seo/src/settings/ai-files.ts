@@ -151,6 +151,19 @@ const LINK_LINE = /^[-*] \[([^[\]]+)\]\(([^()\s]+)\)(?::\s*(.*))?$/;
 /** An address an extra link may point to: a whole web address, or one from the site's root. */
 const LINK_ADDRESS = /^(?:https?:\/\/[^\s/]+\.[^\s]*|\/[^\s]*)$/i;
 
+/**
+ * Whether `url` reads as an address as the files write it, made whole
+ * against the site's origin: the same parse, so an address accepted here
+ * never fails the file that writes it.
+ */
+function parsesAsAddress(url: string): boolean {
+  try {
+    return new URL(url, "https://example.com").href !== "";
+  } catch {
+    return false;
+  }
+}
+
 /** Markup a link's words may not hold: an HTML tag or a heading's start. */
 const MARKUP = /<[a-z/!]|`/i;
 
@@ -161,7 +174,7 @@ export function extraLinkProblem(line: string): string | null {
     return `"${line.trim()}" is not a link. Write each as - [Name](https://…), with notes after a colon.`;
   }
   const [, title = "", url = "", notes] = read;
-  if (!LINK_ADDRESS.test(url)) {
+  if (!LINK_ADDRESS.test(url) || !parsesAsAddress(url)) {
     return `${url} is not a web address. Start it with https:// or with / for a page of this site.`;
   }
   if (MARKUP.test(title) || (notes !== undefined && MARKUP.test(notes))) {

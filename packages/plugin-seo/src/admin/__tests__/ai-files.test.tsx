@@ -52,11 +52,21 @@ function Rows({
   const [draft, setDraft] = useState(() => draftOf({ id: "s1", ...stored }));
   latest = draft;
   return (
-    <AiFilesRows
-      draft={draft}
-      change={next => setDraft(current => next(current))}
-      host="acme.example"
-    />
+    <>
+      <AiFilesRows
+        draft={draft}
+        change={next => setDraft(current => next(current))}
+        host="acme.example"
+      />
+      {/* What the settings page's Cancel does: the draft made again from
+          what is stored, the rows left mounted. */}
+      <button
+        type="button"
+        onClick={() => setDraft(draftOf({ id: "s1", ...stored }))}
+      >
+        Cancel the draft
+      </button>
+    </>
   );
 }
 
@@ -136,13 +146,66 @@ describe("the AI files rows", () => {
     render(<Rows />);
     await sections();
     fireEvent.click(screen.getByRole("radio", { name: "Some addresses" }));
-    fireEvent.change(screen.getByLabelText("Addresses llms-full.txt holds"), {
-      target: { value: "/docs/\n\n/guides/" },
-    });
+    fireEvent.change(
+      screen.getByRole("textbox", {
+        name: "Addresses llms-full.txt holds",
+      }),
+      {
+        target: { value: "/docs/\n\n/guides/" },
+      }
+    );
     expect(latest.aiFiles.fullContents).toEqual({
       include: "addresses",
       prefixes: ["/docs/", "/guides/"],
     });
+  });
+});
+
+describe("the rows, kept true to the draft", () => {
+  it("keeps the sections to fix when a later preview is held up by one of them", async () => {
+    render(<Rows />);
+    const list = await sections();
+    fireEvent.change(within(list).getByLabelText("Heading for Docs"), {
+      target: { value: "# Docs" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview again" }));
+    expect(screen.getByText("Fix the choices above to preview.")).toBeTruthy();
+    // The heading that holds it up is still there to fix.
+    expect(
+      screen.getByRole("list", { name: "Sections of llms.txt" })
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Heading for Docs")).toHaveProperty(
+      "value",
+      "# Docs"
+    );
+  });
+
+  it("shows the saved folders and addresses again once the draft is cancelled", async () => {
+    render(
+      <Rows
+        stored={{
+          aiFiles: {
+            folderFiles: ["docs"],
+            fullContents: { include: "addresses", prefixes: ["/docs/"] },
+          },
+        }}
+      />
+    );
+    await sections();
+    const folders = screen.getByRole("textbox", {
+      name: "Folders with their own files",
+    });
+    const prefixes = screen.getByRole("textbox", {
+      name: "Addresses llms-full.txt holds",
+    });
+    fireEvent.change(folders, { target: { value: "docs\nguides" } });
+    fireEvent.change(prefixes, { target: { value: "/guides/" } });
+    expect(latest.aiFiles.folderFiles).toEqual(["docs", "guides"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel the draft" }));
+    expect(latest.aiFiles.folderFiles).toEqual(["docs"]);
+    expect(folders).toHaveProperty("value", "docs");
+    expect(prefixes).toHaveProperty("value", "/docs/");
   });
 });
 

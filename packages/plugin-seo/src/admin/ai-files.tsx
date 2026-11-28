@@ -80,8 +80,14 @@ type Preview =
 function useAiFilesPreview(files: AiFiles): {
   preview: Preview;
   refresh: () => void;
+  /**
+   * The groups the last preview made listed, kept while a later one fails,
+   * so the list of sections stays to fix what held that one up.
+   */
+  groups: readonly AiFilesGroupListed[] | undefined;
 } {
   const [preview, setPreview] = useState<Preview>({ state: "idle" });
+  const [groups, setGroups] = useState<readonly AiFilesGroupListed[]>();
   const asking = useRef<AbortController | null>(null);
   const latest = useRef(files);
   latest.current = files;
@@ -103,6 +109,7 @@ function useAiFilesPreview(files: AiFiles): {
     }).then(
       body => {
         if (controller.signal.aborted) return;
+        if (body !== undefined) setGroups(body.groups);
         setPreview(
           body === undefined
             ? { state: "failed", why: "The preview could not be made." }
@@ -123,7 +130,25 @@ function useAiFilesPreview(files: AiFiles): {
     refresh();
     return () => asking.current?.abort();
   }, [refresh]);
-  return { preview, refresh };
+  return { preview, refresh, groups };
+}
+
+/**
+ * A box of lines and the draft's list it edits: the box keeps what is typed,
+ * half-typed lines included, while the draft holds its lines; when the draft
+ * is given another list (Cancel, or a newer save), the box shows that one.
+ */
+function useLinesBox(
+  lines: readonly string[]
+): [string, (text: string) => void] {
+  const joined = lines.join("\n");
+  const [text, setText] = useState(joined);
+  const [seen, setSeen] = useState(joined);
+  if (joined !== seen) {
+    setSeen(joined);
+    if (linesOf(text).join("\n") !== joined) setText(joined);
+  }
+  return [text, setText];
 }
 
 /**
@@ -472,8 +497,8 @@ function FullContentsRow({
     include: "everything",
   };
   // The prefixes as typed, so a half-typed line stays while it is edited.
-  const [prefixText, setPrefixText] = useState(
-    contents.include === "addresses" ? contents.prefixes.join("\n") : ""
+  const [prefixText, setPrefixText] = useLinesBox(
+    contents.include === "addresses" ? contents.prefixes : []
   );
   const setContents = (next: AiFilesFullContents) =>
     changeFiles(current => ({ ...current, fullContents: next }));
@@ -596,7 +621,7 @@ function FolderFilesRow({
   changeFiles: ChangeFiles;
   host: string;
 }): JSX.Element {
-  const [text, setText] = useState((files.folderFiles ?? []).join("\n"));
+  const [text, setText] = useLinesBox(files.folderFiles ?? []);
   const problem =
     linesOf(text)
       .map(folderProblem)
@@ -700,8 +725,7 @@ export function AiFilesRows({
   const files = draft.aiFiles;
   const changeFiles: ChangeFiles = next =>
     change(current => ({ ...current, aiFiles: next(current.aiFiles) }));
-  const { preview, refresh } = useAiFilesPreview(files);
-  const listed = preview.state === "done" ? preview.body.groups : undefined;
+  const { preview, refresh, groups: listed } = useAiFilesPreview(files);
   return (
     <>
       <SectionsRow files={files} changeFiles={changeFiles} listed={listed} />

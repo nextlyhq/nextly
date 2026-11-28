@@ -35,6 +35,11 @@ describe("an extra section's links", () => {
     expect(extraLinkProblem("- [Bad](ftp://example.com)")).toMatch(
       /not a web address/
     );
+    // An address that reads as one but that a URL parser refuses, which
+    // would break the file that writes it.
+    expect(extraLinkProblem("- [API](https://example.com:bad)")).toMatch(
+      /not a web address/
+    );
     // Words, not markup.
     expect(extraLinkProblem("- [<b>Bold</b>](/a)")).toMatch(/holds markup/);
     expect(extraLinkProblem("- [A](/a): see <script>")).toMatch(/holds markup/);
