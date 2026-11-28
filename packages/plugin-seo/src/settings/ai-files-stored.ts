@@ -15,6 +15,7 @@ import {
   FULL_MB_CHOICES,
   folderProblem,
   headingProblem,
+  keptFolder,
   prefixProblem,
   type AiFiles,
 } from "./ai-files";
@@ -55,7 +56,12 @@ const fullContents = z.discriminatedUnion("include", [
     .object({
       include: z.literal("addresses"),
       prefixes: z
-        .array(z.string().superRefine(checkedBy(prefixProblem)))
+        .array(
+          z
+            .string()
+            .superRefine(checkedBy(prefixProblem))
+            .transform(prefix => prefix.trim())
+        )
         .min(1)
         .max(AI_FILES_LIMITS.prefixes),
     })
@@ -77,8 +83,12 @@ const storedAiFiles: z.ZodType<AiFiles> = z
         `llms-full.txt may hold ${FULL_MB_CHOICES.join(", ")} MB.`
       )
       .optional(),
+    // Kept as the files name them, without slashes around: `/docs/` is
+    // `docs`, whichever way it was written.
     folderFiles: z
-      .array(z.string().superRefine(checkedBy(folderProblem)))
+      .array(
+        z.string().superRefine(checkedBy(folderProblem)).transform(keptFolder)
+      )
       .max(AI_FILES_LIMITS.folderFiles)
       .optional(),
     copyLeftOut: z

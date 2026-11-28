@@ -1026,7 +1026,8 @@ export const Tools = defineCollection({
 ```
 
 `custom: { seo: { copy: false } }` leaves the field out at any depth, inside a group or a
-repeater too.
+repeater too. A field group (a component) is copied as the rich text it holds, read from its
+stored value, so a field inside one is left out by unticking the field group itself.
 
 ### A page's own name
 

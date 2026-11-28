@@ -157,6 +157,17 @@ describe("the choices, kept and checked", () => {
     expect(storedAiFilesOf({ fullMaxMegabytes: 2 })).toEqual({
       fullMaxMegabytes: 2,
     });
+    // A folder written with slashes around, past the screen, is read as the
+    // files name it, so it is served and linked at its folder.
+    expect(
+      storedAiFilesOf({
+        folderFiles: ["/docs/"],
+        fullContents: { include: "addresses", prefixes: [" /docs/ "] },
+      })
+    ).toEqual({
+      folderFiles: ["docs"],
+      fullContents: { include: "addresses", prefixes: ["/docs/"] },
+    });
   });
 
   it("are held up on the screen while a part is unfinished", () => {
@@ -170,6 +181,13 @@ describe("the choices, kept and checked", () => {
     expect(
       aiFilesProblem({ extraSections: [{ heading: "Docs", links: "" }] })
     ).toMatch(/has no links/);
+    // More than the stored rule keeps is said on the screen, not refused
+    // by the save alone.
+    expect(
+      aiFilesProblem({
+        folderFiles: Array.from({ length: 21 }, (_, at) => `f${at}`),
+      })
+    ).toMatch(/20 folders at most/);
     // A blank section is dropped on save, so it holds nothing up.
     expect(
       aiFilesProblem({ extraSections: [{ heading: "", links: "" }] })

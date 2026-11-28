@@ -352,6 +352,21 @@ describe("withNextly serves a folder's own llms files from plugins", () => {
     // The folder's llms-full.txt is not one the site rewrites.
     expect(sources(afterFiles)).toContain("/:section/llms-full.txt");
 
+    // A site rule for a folder named `section` is that folder's alone.
+    const named = await rewritesOf(
+      withNextly({
+        rewrites: async () => ({
+          fallback: [{ source: "/section/llms.txt", destination: "/api/x" }],
+        }),
+      })
+    );
+    const namedList = named.afterFiles.find(rule =>
+      rule.destination.endsWith("/llms-files/:section/llms.txt")
+    );
+    const namedMatch = getPathMatch(namedList?.source ?? "");
+    expect(namedMatch("/section/llms.txt")).toBe(false);
+    expect(namedMatch("/docs/llms.txt")).toEqual({ section: "docs" });
+
     const off = await rewritesOf(withNextly({}, { folderLlmsFiles: false }));
     for (const source of FOLDER_LLMS_FILES) {
       expect(sources(off.afterFiles)).not.toContain(source);

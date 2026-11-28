@@ -554,11 +554,15 @@ export async function llmsFullTxtOf(
     maxBytes: limit,
   });
   await noteCopyResults(ctx, writing.results.failed, writing.results.made);
-  await noteFullFileCut(
-    ctx,
-    fullAddress,
-    file.cut ? { limit, leftOut: pages.length - file.written } : null
-  );
+  // Noted only for an origin the site names as its own: a request's host
+  // can be anything its sender says, and each would keep a note of its own.
+  if ((await siteOriginFor(origin, ctx, config)) === origin) {
+    await noteFullFileCut(
+      ctx,
+      fullAddress,
+      file.cut ? { limit, leftOut: pages.length - file.written } : null
+    );
+  }
   return file.text;
 }
 

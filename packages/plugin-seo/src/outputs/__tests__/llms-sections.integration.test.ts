@@ -23,10 +23,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
+import {
+  pageRefKey,
+  problemList,
+  type ProblemChecks,
+} from "../../problems/check";
+import type { Reader } from "../../problems/reader";
 import type { ReadRules } from "../../resolver/provider";
 import { aiFilesPreview } from "../../settings/ai-files-route";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
+import { noSocialCardRules } from "../../social/card";
+import { rulesFromOptions } from "../../structured-data/rules";
 import { llmsFullTxtOf } from "../ai-outputs";
 import { fullFileCuts } from "../full-file-cut";
 
@@ -159,6 +168,36 @@ function linksUnder(file: string, heading: string): string[] {
   return [...(section ?? "").matchAll(/^- \[[^\]]*\]\(([^)]*)\)/gm)].map(
     m => m[1] ?? ""
   );
+}
+
+/** The problem list's checks, for this site's types. */
+const CHECKS: ProblemChecks = {
+  targets: ["posts", "docs"],
+  singles: ["home", "about"],
+  readers: {
+    readRules: readSeoRules,
+    readStructuredDataRules: structuredDataFromSettings(
+      rulesFromOptions(undefined, undefined)
+    ),
+    readSocialCardRules: noSocialCardRules,
+  },
+};
+
+/** A reader who may read every page and type. */
+const everything: Reader = {
+  pages: async pages => new Set(pages.map(pageRefKey)),
+  readsType: () => true,
+  seesRedirects: true,
+  count: async () => 0,
+};
+
+/** The llms-full.txt files the problem list says stopped short. */
+async function cutsListed(): Promise<string[]> {
+  if (seoContext === undefined) throw new Error("no SEO plugin context");
+  const { problems } = await problemList(seoContext, CHECKS, everything);
+  return problems
+    .filter(problem => problem.kind === "llmsFullCut")
+    .map(problem => problem.subject.label);
 }
 
 /** The `## ` headings of a file, in order. */
@@ -437,14 +476,39 @@ describe.each(getConfiguredTestDialects())(
       const readRules: ReadRules = (ctx, locale) => readSeoRules(ctx, locale);
       const rules = await readRules(seoContext, undefined);
 
-      await llmsFullTxtOf(seoContext, SITE, { readRules }, rules, 1024);
+      // The site's configured origin, as the plugin's own reads have it.
+      const outputs = { readRules, origin: SITE };
+
+      // A host a request named is never noted: it could be any host.
+      await llmsFullTxtOf(
+        seoContext,
+        "https://elsewhere.example",
+        outputs,
+        rules,
+        1024
+      );
+      expect(await fullFileCuts(seoContext)).toEqual([]);
+
+      await llmsFullTxtOf(seoContext, SITE, outputs, rules, 1024);
       const [cut, ...others] = await fullFileCuts(seoContext);
       expect(others).toEqual([]);
       expect(cut?.file).toBe(`${SITE}/llms-full.txt`);
       expect(cut?.limit).toBe(1024);
       expect(cut?.leftOut).toBeGreaterThan(0);
+      expect(await cutsListed()).toEqual([`${SITE}/llms-full.txt`]);
 
-      await llmsFullTxtOf(seoContext, SITE, { readRules }, rules);
+      // Once the site names other production addresses, a file at this
+      // origin is not one it serves, and the list drops it.
+      await settings(t, {
+        llmsFullTxt: true,
+        productionAddresses: ["https://www.acme.example"],
+      });
+      expect(await cutsListed()).toEqual([]);
+
+      await settings(t, { llmsFullTxt: true, productionAddresses: [] });
+      await llmsFullTxtOf(seoContext, SITE, outputs, rules, 1024);
+      expect(await fullFileCuts(seoContext)).toHaveLength(1);
+      await llmsFullTxtOf(seoContext, SITE, outputs, rules);
       expect(await fullFileCuts(seoContext)).toEqual([]);
     });
 

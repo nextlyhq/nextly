@@ -227,6 +227,12 @@ export const LLMS_FILE_ROUTE_PREFIX = "/llms-files";
 const FOLDER_LLMS_FILES = ["llms.txt", "llms-full.txt"] as const;
 
 /**
+ * A folder name no site's rule names, to ask whether a rule reaches every
+ * folder's file rather than one folder's.
+ */
+const ANY_FOLDER_SAMPLE = "nextly-any-folder-7f3a";
+
+/**
  * A folder name a folder file's rewrite can leave to the site by name: the
  * characters an address's segment holds unescaped, none of which a route
  * pattern reads as anything but itself once `.` is escaped.
@@ -250,7 +256,10 @@ function sectionFileSource(
 ): string | null {
   const claimed = new Set<string>();
   for (const source of theirs) {
-    if (matches(source, `/section/${file}`)) return null;
+    // Asked of a folder no site names, so a rule for one folder (even one
+    // called `section`) is left out by name below rather than read as a
+    // rule for every folder.
+    if (matches(source, `/${ANY_FOLDER_SAMPLE}/${file}`)) return null;
     const folder = /^\/([^/]+)\//.exec(source)?.[1];
     if (folder === undefined) continue;
     if (!PLAIN_FOLDER.test(folder)) {

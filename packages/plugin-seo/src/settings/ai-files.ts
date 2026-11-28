@@ -429,6 +429,25 @@ function firstProblem<T>(
   return null;
 }
 
+/** Why the choices hold more than the stored rule keeps; null when they don't. */
+function countProblem(files: AiFiles): string | null {
+  const folders = (files.folderFiles ?? []).filter(each => each.trim() !== "");
+  if (folders.length > AI_FILES_LIMITS.folderFiles) {
+    return `Name ${AI_FILES_LIMITS.folderFiles} folders at most.`;
+  }
+  const full = files.fullContents;
+  const prefixes =
+    full?.include === "addresses"
+      ? full.prefixes.filter(each => each.trim() !== "")
+      : [];
+  if (prefixes.length > AI_FILES_LIMITS.prefixes) {
+    return `Name ${AI_FILES_LIMITS.prefixes} addresses at most.`;
+  }
+  return (files.extraSections ?? []).length > AI_FILES_LIMITS.extraSections
+    ? `Add ${AI_FILES_LIMITS.extraSections} sections at most.`
+    : null;
+}
+
 /** Why what llms-full.txt holds is unfinished; null when it is chosen whole. */
 function fullContentsProblem(
   full: AiFilesFullContents | undefined
@@ -453,6 +472,7 @@ function fullContentsProblem(
  */
 export function aiFilesProblem(files: AiFiles): string | null {
   return (
+    countProblem(files) ??
     firstProblem(
       files.extraSections ?? [],
       section => section.heading.trim() === "" && section.links.trim() === "",

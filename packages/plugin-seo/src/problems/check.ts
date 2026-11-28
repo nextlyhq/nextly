@@ -1217,6 +1217,9 @@ async function servedFullFileCuts(
   if (cuts.length === 0) return [];
   const rules = await checks.readers.readRules(ctx, undefined);
   const on = rules.llmsTxt === true && rules.llmsFullTxt === true;
+  // Where the site names its production addresses, a file at any other
+  // origin is no longer one it serves.
+  const production = productionAddressesOf(rules.productionAddresses);
   const kept: FullFileCut[] = [];
   const gone: string[] = [];
   for (const cut of cuts) {
@@ -1224,6 +1227,8 @@ async function servedFullFileCuts(
     const folder = /^\/([^/]+)\/llms-full\.txt$/.exec(path)?.[1];
     const served =
       on &&
+      (production.length === 0 ||
+        production.includes(new URL(cut.file).origin)) &&
       (path === "/llms-full.txt" ||
         (folder !== undefined && servesFolderFiles(rules, folder)));
     if (served) kept.push(cut);
