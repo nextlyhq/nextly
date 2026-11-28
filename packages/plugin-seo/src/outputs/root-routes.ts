@@ -47,6 +47,11 @@ export interface RootFilesConfig {
   codeMarkdown?: AiOutputsConfig["codeMarkdown"];
   /** The site's RSS feeds, as its options name them. */
   feeds?: readonly CheckedFeed[];
+  /**
+   * The configured origin the feeds name the site by, where a baseUrl is
+   * set, whether or not the sitemap is served.
+   */
+  feedOrigin?: string;
 }
 
 /**
@@ -369,7 +374,9 @@ function feedRoutes(config: RootFilesConfig): PluginRoute[] {
     const { origin, headers, own } = await originOf(
       req,
       ctx,
-      config,
+      config.feedOrigin === undefined
+        ? config
+        : { ...config, origin: config.feedOrigin },
       "application/rss+xml; charset=utf-8"
     );
     const body = await feedXmlOf(ctx, feed, {

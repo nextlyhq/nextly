@@ -228,8 +228,9 @@ const PLAIN_FOLDER = /^[A-Za-z0-9._~-]+$/;
  * folder's feed itself. Next asks our `afterFiles` before the site's
  * `fallback`, so a folder the site rewrites, such as `/blog/feed.xml` or
  * `/blog/:path*`, is left out of the pattern by name and keeps reaching the
- * site's rule. A site rule naming `feed.xml` under a folder pattern this
- * cannot read name by name (`/:lang(en|fr)/feed.xml`) keeps every folder's.
+ * site's rule. A site rule under a folder pattern this cannot read name by
+ * name (`/:lang(en|fr)/feed.xml`, `/:lang(en|fr)/:path*`) that reaches a
+ * folder's `feed.xml` keeps every folder's.
  */
 function sectionFeedSource(
   theirs: readonly string[],
@@ -241,7 +242,11 @@ function sectionFeedSource(
     const folder = /^\/([^/]+)\//.exec(source)?.[1];
     if (folder === undefined) continue;
     if (!PLAIN_FOLDER.test(folder)) {
-      if (source.includes("feed.xml")) return null;
+      // A folder pattern (`/:lang(en|fr)/:path*`) can't be left out by name:
+      // read as one plain folder, a rule whose rest reaches `feed.xml` keeps
+      // every folder's feed for the site.
+      const rest = source.slice(folder.length + 1);
+      if (matches(`/x${rest}`, "/x/feed.xml")) return null;
       continue;
     }
     if (matches(source, `/${folder}/feed.xml`)) claimed.add(folder);

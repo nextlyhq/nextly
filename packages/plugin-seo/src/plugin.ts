@@ -78,7 +78,11 @@ import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { watchContentDates } from "./content-dates/hooks";
 import { startFingerprintUpgrade } from "./content-dates/upgrade";
 import { withFeedLinks } from "./feeds/head";
-import { checkedFeeds, type FeedOption } from "./feeds/options";
+import {
+  checkedFeeds,
+  type CheckedFeed,
+  type FeedOption,
+} from "./feeds/options";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -687,6 +691,21 @@ function configuredOrigin(
 }
 
 /**
+ * The configured origin, `{ origin }`, that the site's feeds and the links
+ * to them name it by, wherever a feed is named and a baseUrl set, whether or
+ * not the sitemap is served: a feed is read from anywhere, often through a
+ * proxy that asks at an internal host, and names the site's own addresses.
+ */
+function feedOrigin(
+  options: SeoPluginOptions,
+  feeds: readonly CheckedFeed[]
+): { origin?: string } {
+  return feeds.length > 0 && options.baseUrl !== undefined
+    ? { origin: resolveBaseOrigin(options.baseUrl) }
+    : {};
+}
+
+/**
  * What the site's root files are served with. A configured baseUrl must be an
  * absolute http(s) origin, or every listed address is invalid: checked at
  * construction so a typo fails at boot, and only where the sitemap, which
@@ -702,10 +721,12 @@ function rootFilesConfig(
   code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown" | "feeds">
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
+  const { origin: feedSite } = feedOrigin(options, code.feeds ?? []);
   return {
     ...configuredOrigin(options, sitemap),
     ...readers,
     ...code,
+    ...(feedSite === undefined ? {} : { feedOrigin: feedSite }),
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -960,6 +981,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options,
     sitemapConfig(options, sitemapSubset)
   );
+  // The origin the feeds and the links to them name the site by.
+  const feedSiteOrigin = feedOrigin(options, feeds);
   // What the plain-text copies are served and linked by: the Proxy that
   // answers them and the head that links them make one decision.
   const plainCopies = {
@@ -1037,7 +1060,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
             ),
             plainCopies
           ),
-          { feeds, readRules, ...siteOrigin }
+          { feeds, readRules, ...feedSiteOrigin }
         ),
         readRules
       ),
@@ -1315,7 +1338,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       sitemapSubset,
       // The llms files link a page's copy where its Markdown is given, and
       // name the site's feeds.
-      { codeRoutes, codeMarkdown: stated.markdownAt, feeds }
+      {
+        codeRoutes,
+        codeMarkdown: stated.markdownAt,
+        feeds,
+      }
     ),
     shareImageRoute(options.baseUrl),
     // The cards a page's own picture is served as where networks would not

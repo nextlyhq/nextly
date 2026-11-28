@@ -247,6 +247,40 @@ describe("withNextly serves feed files from plugins", () => {
     expect(sources(afterFiles)).toContain("/feed.xml");
   });
 
+  it("leaves every folder's feed to a site whose rule under a folder pattern reaches feed.xml, and keeps them where it cannot", async () => {
+    const reaching = await rewritesOf(
+      withNextly({
+        rewrites: async () => ({
+          fallback: [
+            {
+              source: "/:lang(en|fr)/:path*",
+              destination: "/old/:lang/:path*",
+            },
+          ],
+        }),
+      })
+    );
+    expect(
+      reaching.afterFiles.some(rule =>
+        rule.destination.endsWith("/feed-files/:section/feed.xml")
+      )
+    ).toBe(false);
+
+    const elsewhere = await rewritesOf(
+      withNextly({
+        rewrites: async () => ({
+          fallback: [
+            {
+              source: "/:lang(en|fr)/docs/:path*",
+              destination: "/old/:lang/docs/:path*",
+            },
+          ],
+        }),
+      })
+    );
+    expect(sources(elsewhere.afterFiles)).toContain("/:section/feed.xml");
+  });
+
   it("leaves every folder's feed to a site whose own rule names feed.xml in a shape it cannot read folder by folder", async () => {
     const theirs = {
       source: "/:lang(en|fr)/feed.xml",

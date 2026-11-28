@@ -60,7 +60,10 @@ const releases = () => [
   { id: "release:broken", title: "No date", url: "/changelog", published: "" },
 ];
 
-async function boot(dialect: TestDialect) {
+async function boot(
+  dialect: TestDialect,
+  options: Partial<Parameters<typeof seoPlugin>[0]> = {}
+) {
   current = await createTestNextly({
     dialect,
     // The Public role a real boot makes, which judges every visitor's read.
@@ -93,6 +96,7 @@ async function boot(dialect: TestDialect) {
             limit: 10,
           },
         },
+        ...options,
       }),
     ],
     collections: [
@@ -145,11 +149,11 @@ async function boot(dialect: TestDialect) {
   return current;
 }
 
-/** A feed, as the site's rewrite reaches the API handler with it. */
-async function feed(path: string) {
+/** A feed, as the site's rewrite reaches the API handler with it, asked at `host`. */
+async function feed(path: string, host = SITE) {
   const parts = ["feed-files", ...path.split("/").filter(Boolean)];
   const response = await createDynamicHandlers().GET(
-    new Request(`${SITE}/admin/api/${parts.join("/")}`),
+    new Request(`${host}/admin/api/${parts.join("/")}`),
     { params: Promise.resolve({ params: parts }) }
   );
   return {
@@ -274,6 +278,20 @@ describe.each(getConfiguredTestDialects())("RSS feeds (%s)", dialect => {
       [`${SITE}/blog/as-blog-posting`, "Fri, 20 Nov 2026 09:00:00 GMT"],
       [`${SITE}/blog/as-article`, "Tue, 10 Nov 2026 09:00:00 GMT"],
     ]);
+  });
+
+  it("names the site's configured address, and is cached, though the sitemap is off and a proxy asks at another host", async () => {
+    const t = await boot(dialect, { sitemap: false });
+    await post(t, "hello", "published");
+
+    const blog = await feed("/blog/feed.xml", "http://internal.local:3000");
+    expect(blog.status).toBe(200);
+    expect(blog.cache).toBe("public, max-age=300, s-maxage=300");
+    expect(itemsOf(blog.body).map(item => item.link)).toEqual([
+      `${SITE}/blog/hello`,
+    ]);
+    expect(blog.body).toContain(`href="${SITE}/blog/feed.xml"`);
+    expect(blog.body).not.toContain("internal.local");
   });
 
   it("answers not found where no feed is", async () => {
