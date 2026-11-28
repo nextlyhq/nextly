@@ -41,4 +41,11 @@ paths = [
   # inside ciphertext by chance, and a test passing for that reason proves
   # nothing about encryption. Fixtures only — no real entropy, no real key.
   '''packages/nextly/src/domains/plugins/__tests__/settings-service\.test\.ts$''',
+  # The activity log's attribution tests hand credential-shaped strings
+  # (a GitHub or GitLab token's shape, a whole "nx_live_*" key) to the code
+  # that must refuse to store them in an id or a name. The shapes are the
+  # point of the tests; none is a real credential.
+  '''packages/nextly/src/domains/audit/__tests__/attribution\.test\.ts$''',
+  '''packages/nextly/src/domains/audit/__tests__/agent-attribution\.integration\.test\.ts$''',
+  '''packages/nextly/src/api/dashboard\.test\.ts$''',
 ]

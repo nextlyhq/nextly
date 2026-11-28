@@ -82,7 +82,31 @@ const ATTRIBUTION_INDEX_ADDED =
 const CLI_CREDENTIALS_KEPT =
   "The sign-ins and passes the command line and agents hold are stored from the first one made after the upgrade. The table is new, so nothing an installation held lives in it.";
 
+/**
+ * Why a form's settings group gains its column in the forms' translations
+ * table: a group keeps one structure in every language and its text per
+ * language, so on a translated collection the text inside a group is kept per
+ * language beside the structure on the entity's own table.
+ */
+const GROUP_TEXT_PER_LANGUAGE =
+  "A translated collection's group keeps its text per language: the forms' settings group gains a nullable column in the translations table beside the value the entity's own table keeps. Adding a nullable column changes no row, and the gate's value check finds every value the install held still kept.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
+  {
+    operation: "add column dc_forms_locales.settings: jsonb null",
+    dialects: ["postgresql"],
+    reason: GROUP_TEXT_PER_LANGUAGE,
+  },
+  {
+    operation: "add column dc_forms_locales.settings: json null",
+    dialects: ["mysql"],
+    reason: GROUP_TEXT_PER_LANGUAGE,
+  },
+  {
+    operation: "add column dc_forms_locales.settings: text null",
+    dialects: ["sqlite"],
+    reason: GROUP_TEXT_PER_LANGUAGE,
+  },
   {
     operation: "create table nextly_cli_credentials",
     reason: CLI_CREDENTIALS_KEPT,

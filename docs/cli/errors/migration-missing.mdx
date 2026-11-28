@@ -16,6 +16,8 @@ The database records the migration as applied, and no removal of it is recorded,
 - Restore the file from version control, or deploy the build that has it.
 - If the file was removed on purpose, record that: `nextly migrate:resolve --removed <file>`. The migration stays applied. If its file returns, it is never run again, and it is checked against its recorded checksum like any applied file.
 - For a migration a newer build tried and did not finish: deploy the build that has it and let it finish, or reverse what of it ran and record it with `nextly migrate:resolve --rolled-back <file> --file-missing`.
+- For `nextly migrate:baseline`, which adopts the database as the start of its history: if the migrations' files are gone for good and the database is to be adopted as its tables stand, record each one rolled back with `nextly migrate:resolve --rolled-back <file> --file-missing`. That runs nothing and keeps every table; the baseline then adopts them. Recording them removed instead leaves them applied, which the baseline refuses next as history before its start.
+- A ledger an early release wrote may record a migration under its bare name, without `.sql`, and under both names. Either name reaches the rows under both, so `nextly migrate:resolve --rolled-back` with the name the refusal shows records the migration rolled back however it was recorded, a row without a checksum included.
 - Then run the command again.
 
 See [Production migrations](/docs/guides/production-migrations).

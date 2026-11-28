@@ -11,6 +11,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { saveFromBar } from "./support/document-bar";
 
 const excerpt = (page: Page) =>
   page.locator("main").getByRole("textbox", { name: "Excerpt", exact: true });
@@ -22,7 +23,7 @@ async function savedPost(page: Page): Promise<void> {
   await gotoAdmin(page, "/collections/posts/create");
   await page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
   await excerpt(page).fill(`saved excerpt ${stamp}`);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
   // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,

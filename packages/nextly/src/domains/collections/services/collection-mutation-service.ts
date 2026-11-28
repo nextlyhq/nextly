@@ -2404,6 +2404,18 @@ function mergeWrittenTranslations(
   }
 }
 
+/**
+ * What {@link CollectionMutationService.judgeEntryUpdate} answers: whether the
+ * update is allowed now, and whether it still is of the row a transaction has
+ * locked. Named so a published declaration states the transaction type from
+ * `@nextlyhq/adapter-drizzle`, which `nextly` depends on, rather than whichever
+ * adapter's re-export the compiler reaches first.
+ */
+export interface EntryUpdateJudgement {
+  allowed: boolean;
+  stillAllowed(tx: TransactionContext): Promise<boolean>;
+}
+
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -14893,10 +14905,7 @@ export class CollectionMutationService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** The language the write acts in, which a rule's filter is matched in. */
     locale?: string;
-  }): Promise<{
-    allowed: boolean;
-    stillAllowed(tx: TransactionContext): Promise<boolean>;
-  }> {
+  }): Promise<EntryUpdateJudgement> {
     const refused = {
       allowed: false,
       stillAllowed: () => Promise.resolve(false),

@@ -130,6 +130,9 @@ jobs:
             Integration (postgres) shard (4)
             Integration (postgres) shard (5)
             Integration (postgres) shard (6)
+            Integration (postgres) shard (7)
+            Integration (postgres) shard (8)
+            Integration (postgres) shard (9)
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
             Integration (mysql) shard (3)
@@ -137,6 +140,9 @@ jobs:
             Integration (mysql) shard (5)
             Integration (mysql) shard (6)
             Integration (mysql) shard (7)
+            Integration (mysql) shard (8)
+            Integration (mysql) shard (9)
+            Integration (mysql) shard (10)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
             Integration (sqlite) shard (3)
@@ -205,10 +211,13 @@ jobs:
       # files, its slowest files taking the same time on each, so no file was
       # hanging. Five, on 744cda849f, took 31, 35, 50, 28 and 47 minutes,
       # about 190 between them, the slowest past the quarter every leg keeps
-      # spare. Six project to about 32, and 41 at the slowest (the rule is
-      # beside the sqlite leg's matrix, below).
+      # spare. Six projected to about 32, and 41 at the slowest. Nine, since on
+      # ca62e4a33a (2026-11-28), with every file passing, the six took 47, 59
+      # and 57 minutes on three of them, the last two stopped at 55, about 280
+      # minutes between them: nine project to about 31, and 41 at the slowest
+      # (the rule is beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     # A BACKSTOP now, not the bound that should ever fire.
     #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
@@ -391,10 +400,13 @@ jobs:
       # 644 (2026-10-27) to 1,338 (11-23), and on 744cda849f the five shards
       # took 50, 45, 49 and 50 minutes, with the first stopped at 55 and 20 of
       # its 268 nextly files to go, about 250 minutes between them. Seven
-      # project to about 36, and 41 at the slowest, inside the quarter every
-      # leg keeps spare (the rule is beside the sqlite leg's matrix, below).
+      # projected to about 36, and 41 at the slowest. Ten, since on 31a6d62cb6
+      # (2026-11-28) the seven took 12, 56, 56, 56, 42, 52 and 45 minutes, three
+      # stopped at 55, about 320 minutes between them: ten project to about 32,
+      # and 40 at the slowest, back inside the quarter every leg keeps spare
+      # (the rule is beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 

@@ -22,6 +22,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { saveFromBar } from "./support/document-bar";
 
 /**
  * The document's Excerpt field, whichever version the document is showing.
@@ -62,7 +63,7 @@ async function postWithHistory(
   // blank, and the assertions below would then be comparing against an empty
   // field — which passes for the wrong reason if the panel renders nothing.
   await documentExcerpt(page).fill(first);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
 
   // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
@@ -79,7 +80,7 @@ async function postWithHistory(
 
   // A second save, so there is a version that is NOT what is live.
   await documentExcerpt(page).fill(current);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
   await expect(documentExcerpt(page)).toHaveValue(current, { timeout: 30_000 });
 
   return { first, current };
@@ -167,7 +168,7 @@ test.describe("reading history does not write", () => {
     ).toHaveValue(current, { timeout: 15_000 });
 
     // And a save afterwards persists those live values across a reload.
-    await page.getByRole("button", { name: /save draft/i }).click();
+    await saveFromBar(page);
     await page.reload();
     await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
     await expect(

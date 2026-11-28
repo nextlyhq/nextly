@@ -68,6 +68,11 @@ interface MissingTable {
   kind: EntityKind;
   slug: string;
   table: string;
+  /**
+   * Whether the configuration declares the entity. A row of one it does not declare is left from
+   * an entity removed outside the migrations, with its table, and no migration writes that table.
+   */
+  declared: boolean;
 }
 
 /** A field a registry row records whose column its table does not have. */
@@ -206,14 +211,21 @@ function compareRows(
   rows: readonly RegistryRow[],
   live: LiveColumns,
   dialect: SupportedDialect,
-  result: RegistryDisagreements
+  result: RegistryDisagreements,
+  /** The slugs of this kind the configuration declares. */
+  declared: ReadonlySet<string>
 ): void {
   for (const row of rows) {
     const { slug, tableName } = row;
     if (!slug || !tableName) continue;
     const columns = live.get(tableName.toLowerCase());
     if (columns === undefined) {
-      result.missingTables.push({ kind, slug, table: tableName });
+      result.missingTables.push({
+        kind,
+        slug,
+        table: tableName,
+        declared: declared.has(slug),
+      });
       continue;
     }
     result.missingColumns.push(
@@ -249,7 +261,14 @@ export function compareRegistryWithTables(args: {
       result.unreadable.push(kind);
       continue;
     }
-    compareRows(kind, rows, args.live, args.dialect, result);
+    compareRows(
+      kind,
+      rows,
+      args.live,
+      args.dialect,
+      result,
+      new Set(args.declared.filter(e => e.kind === kind).map(e => e.slug))
+    );
     const registered = new Set(rows.map(row => row.slug));
     result.unregistered.push(
       ...args.declared
@@ -438,10 +457,12 @@ export function registryDisagreementLines(
 ): string[] {
   if (report === null) return [];
   const lines: string[] = [
-    ...report.missingTables.map(
-      d =>
-        `${kindLabel(d.kind)} "${d.slug}": its registry row names table "${d.table}", which does not exist.`
-    ),
+    ...report.missingTables
+      .filter(d => d.declared)
+      .map(
+        d =>
+          `${kindLabel(d.kind)} "${d.slug}": its registry row names table "${d.table}", which does not exist.`
+      ),
     ...report.missingColumns.map(
       d =>
         `${kindLabel(d.kind)} "${d.slug}": field "${d.field}" has no column "${d.column}" in table "${d.table}".`
@@ -450,6 +471,21 @@ export function registryDisagreementLines(
   if (lines.length > 0) {
     lines.push(
       "The database has not been migrated for the tables and columns above. Run `nextly migrate:create` for a change that has no migration yet, then `nextly migrate`."
+    );
+  }
+  // A row the configuration does not declare is not a migration still to write: its entity was
+  // removed, table and all, outside the migrations. Named apart, so it is not sent to
+  // `migrate:create`, which plans nothing for an entity no one declares.
+  const leftBehind = report.missingTables.filter(d => !d.declared);
+  lines.push(
+    ...leftBehind.map(
+      d =>
+        `${kindLabel(d.kind)} "${d.slug}": its registry row names table "${d.table}", which does not exist, and the configuration does not declare it.`
+    )
+  );
+  if (leftBehind.length > 0) {
+    lines.push(
+      "The rows above are left from entities removed outside the migrations, with their tables. With no table, no content of theirs remains and none is served; `nextly migrate` leaves them, since a registry row is removed only by the migration that drops its entity."
     );
   }
   lines.push(

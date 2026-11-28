@@ -3,6 +3,7 @@ import { expect } from "@playwright/test";
 import { gotoAdmin } from "../support/admin";
 import { test } from "../support/visible";
 import { signIn } from "../support/production-sign-in";
+import { saveFromBar } from "../support/document-bar";
 
 /**
  * The schema builder on a PRODUCTION build: the admin offers none, the server
@@ -57,7 +58,7 @@ test.describe("the schema builder on a production build", () => {
     // 3. An entry made through the admin is saved and listed.
     await gotoAdmin(page, "/collections/posts/create");
     await page.getByRole("textbox", { name: "Title", exact: true }).fill(TITLE);
-    await page.getByRole("button", { name: /save draft/i }).click();
+    await saveFromBar(page);
     // The first save stays on the new post, at its own address, and the
     // list then shows it.
     await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {

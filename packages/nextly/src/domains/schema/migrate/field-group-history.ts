@@ -219,6 +219,16 @@ export function fieldGroupStorageNotMigratedError(
   });
 }
 
+/** A pending app file, in the order `nextly migrate` applies it, as the naming check reads it. */
+export interface PendingFieldGroupFile {
+  /** Its file name, as the folder holds it. */
+  file: string;
+  /** The names its snapshot records; undefined where it has none, as a hand-written file has. */
+  naming: FieldGroupNaming | undefined;
+  /** Whether its snapshot records a field group (`snapshotRecordsFieldGroups`). */
+  recordsFieldGroups: boolean;
+}
+
 /**
  * Refuses a database whose field groups moved to the current names while the project's history,
  * up to its newest applied file, is still on the legacy ones, unless the next file to apply is the
@@ -226,21 +236,55 @@ export function fieldGroupStorageNotMigratedError(
  * against the legacy names the database no longer has, so the run stops before it. Read before the
  * database is compared with its newest applied file, which would otherwise name every `comp_`
  * table as missing.
+ *
+ * A newest applied file that records no field group is on neither naming
+ * (`snapshotRecordsFieldGroups`): it reads as legacy only by default, and a database on either
+ * naming holds what it describes. Such a history is refused only at a pending file that plans field
+ * groups under the legacy names, before any file that moves the history; a pending file that
+ * records none, as an upgrade of a site without field groups writes, applies on a moved database.
  */
 export async function refuseMovedStorageBehindLegacyHistory(args: {
   adapter: CatalogReadAdapter;
   newestApplied: FieldGroupNaming;
-  /** The naming the next app file to apply records, where there is one with a snapshot. */
-  nextPending: FieldGroupNaming | undefined;
+  /** Whether the newest applied file's snapshot records a field group. */
+  newestRecordsFieldGroups: boolean;
+  /** Every pending app file, in the order the run applies them. */
+  pending: readonly PendingFieldGroupFile[];
 }): Promise<void> {
   if (args.newestApplied === "current") return;
   if ((await databaseFieldGroupNaming(args.adapter)) === "legacy") return;
-  if (args.nextPending === "current") return;
-  throw fieldGroupHistoryBehindStorageError();
+  if (args.newestRecordsFieldGroups) {
+    if (args.pending[0]?.naming === "current") return;
+    throw fieldGroupHistoryBehindStorageError();
+  }
+  for (const entry of args.pending) {
+    // The move of the history settles every file after it.
+    if (entry.naming === "current") return;
+    if (entry.naming === "legacy" && entry.recordsFieldGroups) {
+      throw fieldGroupHistoryBehindStorageError(entry.file);
+    }
+  }
 }
 
-/** The refusal of a database whose field groups moved ahead of a legacy history. */
-export function fieldGroupHistoryBehindStorageError(): NextlyError {
+/**
+ * The refusal of a database whose field groups moved ahead of a legacy history; with `file`, the
+ * pending file that plans field groups under the legacy names on a history that recorded none
+ * until it. That file is new to the history, so where no database has applied it, it is written
+ * again once the history has moved.
+ */
+export function fieldGroupHistoryBehindStorageError(
+  file?: string
+): NextlyError {
+  if (file !== undefined) {
+    return new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage:
+        `This database's field groups were moved to the current names (${CURRENT_NAMES_SHOWN}), and the pending migration ${file} plans field groups under the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
+        "Applied, it would create tables and registry rows the database does not keep its field groups under. " +
+        `No file was applied. If no database has applied ${file}, delete it with its snapshot, run \`${FIELD_GROUP_TRANSITION_COMMAND}\`, then write it again with \`nextly migrate:create --name <name>\` and run \`nextly migrate\`.`,
+      logContext: { reason: "field-group-history-behind-storage", file },
+    });
+  }
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:

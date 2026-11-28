@@ -239,6 +239,10 @@ export default defineConfig({
   // stays 1 and nothing at the workflow level distinguishes it.
   reporter: process.env.CI
     ? [
+        // Each test's verdict and time as it ends, in the job's log: a job its
+        // timeout stops uploads no report, and this log is then the only record
+        // of which test it was in and how long each before it took.
+        ["list"],
         ["github"],
         ["./flaky-reporter.ts"],
         [

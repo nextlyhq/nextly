@@ -61,7 +61,7 @@ function targetText(address: DatabaseAddress): string {
       const { parts } = address;
       if (!parts) return UNREADABLE;
       const name = parts.database === "" ? "" : `/${parts.database}`;
-      return parts.host.startsWith("/")
+      return parts.socket === true || parts.host.startsWith("/")
         ? `${parts.host}${name}`
         : `${parts.host}:${parts.port}${name}`;
     }

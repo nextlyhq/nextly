@@ -7,6 +7,7 @@
  */
 
 import type { ActivityEvent } from "nextly/widget-result";
+
 import type { ActorAttributionWords } from "@admin/components/features/versions/history-story-attribution";
 
 /**
