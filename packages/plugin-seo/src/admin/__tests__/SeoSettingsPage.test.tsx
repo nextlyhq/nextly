@@ -755,6 +755,26 @@ describe("the People tab", () => {
     ]);
   });
 
+  it("says how the identifier is made where no address can be shown yet", () => {
+    serving({ _rev: "5", siteName: "Example Studio", setupStep: 3 });
+    render(<SeoSettingsPage />);
+
+    openTab("People");
+    fireEvent.click(screen.getByRole("button", { name: "Add a person" }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Sam Rivera" },
+    });
+
+    // No production address and no page of their own: nothing to show.
+    expect(
+      screen.getByLabelText("Identifier").getAttribute("placeholder")
+    ).toBeNull();
+    expect(screen.queryByText(/Empty uses the address shown/)).toBeNull();
+    expect(
+      screen.getByText(/Empty uses one made from their page, else their name/)
+    ).toBeTruthy();
+  });
+
   it("holds the save up for a profile that is not an address, naming the person", () => {
     serving({
       _rev: "5",

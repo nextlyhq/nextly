@@ -218,11 +218,22 @@ function PersonCard({
         value={person.id}
         {...(placeholderId === undefined ? {} : { placeholder: placeholderId })}
         mono
-        note="Paste the one another site gives them, such as https://example.com/#person. Empty uses the address shown."
+        note={`Paste the one another site gives them, such as https://example.com/#person. ${
+          placeholderId === undefined
+            ? "Empty uses one made from their page, else their name at the site's production address."
+            : "Empty uses the address shown."
+        }`}
         onChange={field("id")}
       />
       <div className="py-3">
-        <Button type="button" variant="outline" size="sm" onClick={remove}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          // A long name wraps within the card rather than running past it.
+          className="h-auto max-w-full whitespace-normal py-1.5 text-left [overflow-wrap:anywhere]"
+          onClick={remove}
+        >
           Remove {named}
         </Button>
       </div>
