@@ -26,6 +26,7 @@ import {
   SECOND_EDITOR,
   secondEditor,
 } from "./support/two-editors";
+import { saveFromBar } from "./support/document-bar";
 
 // Creates a second user; see support/locks.ts for what each lock guards. The
 // entry itself is this file's own, created under a unique name.
@@ -120,7 +121,7 @@ test.describe(
             response.request().method() === "PATCH",
           { timeout: 30_000 }
         );
-        await other.page.getByRole("button", { name: /save draft/i }).click();
+        await saveFromBar(other.page);
         expect((await saved).ok(), "the second editor's save").toBe(true);
 
         await takeBackAndSeeTheirs(page, theirs, mine);

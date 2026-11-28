@@ -20,6 +20,7 @@ import {
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { saveFromBar } from "./support/document-bar";
 
 // The posts flow shares the autosave state other specs use.
 test.describe.configure({ lock: [LOCK.siteSettings] });
@@ -55,7 +56,7 @@ test("a post another author wrote through REST after its recovery point is offer
   const title = `Older point ${Date.now()}`;
   await gotoAdmin(page, "/collections/posts/create");
   await page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
   // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,

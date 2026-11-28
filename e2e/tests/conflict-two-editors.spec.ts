@@ -36,6 +36,7 @@ import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 import { claimedBy, secondEditor, SECOND_EDITOR } from "./support/two-editors";
+import { saveFromBar } from "./support/document-bar";
 
 // A colleague's account each test; the Single and the homepage are claimed by
 // whoever opens them, so each file holding them frees them first.
@@ -103,10 +104,7 @@ async function staleSave(
     data: { excerpt: theirs, _overwrite: true },
   });
   expect(written.ok(), await written.text()).toBe(true);
-  await page
-    .getByRole("button", { name: /^Save( draft)?$/ })
-    .first()
-    .click();
+  await saveFromBar(page);
   return mine;
 }
 
@@ -380,11 +378,7 @@ test.describe(
             p
               .locator("main")
               .getByRole("textbox", { name: "Excerpt", exact: true });
-          save = p =>
-            p
-              .getByRole("button", { name: /^Save( draft)?$/ })
-              .first()
-              .click();
+          save = p => saveFromBar(p);
         } else {
           const read = await page.request.get(SITE_SETTINGS);
           const { siteName } = (await read.json()) as {
