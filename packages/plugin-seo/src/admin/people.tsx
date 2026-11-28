@@ -111,6 +111,12 @@ export function ownerNameOf(
   return (draft.brandName.trim() || codeBrand.name || draft.siteName).trim();
 }
 
+/** A card's words for a person's facts, and for a team's. */
+const CARD_WORDS = {
+  person: { page: "Their page", image: "Photo", description: "Short bio" },
+  organization: { page: "Its page", image: "Logo", description: "Description" },
+} as const;
+
 /** One person's card: each fact, and the identifier every site names them by. */
 function PersonCard({
   person,
@@ -130,6 +136,7 @@ function PersonCard({
   const problem = personDraftProblem(person);
   const named = person.name.trim() === "" ? "this person" : person.name.trim();
   const isPerson = person.type === "person";
+  const words = CARD_WORDS[person.type];
   const field =
     (fact: keyof PersonDraft) =>
     (value: string): void =>
@@ -175,7 +182,7 @@ function PersonCard({
         onChange={field("otherNames")}
       />
       <TextRow
-        label={isPerson ? "Their page" : "Its page"}
+        label={words.page}
         description="An address on this site, such as /about, or a whole address elsewhere."
         value={person.url}
         placeholder="/about"
@@ -183,7 +190,7 @@ function PersonCard({
         onChange={field("url")}
       />
       <TextRow
-        label={isPerson ? "Photo" : "Logo"}
+        label={words.image}
         description="The address of an image, on this site or elsewhere."
         value={person.image}
         placeholder="https://"
@@ -199,7 +206,7 @@ function PersonCard({
         />
       ) : null}
       <TextRow
-        label={isPerson ? "Short bio" : "Description"}
+        label={words.description}
         description="A sentence or two."
         value={person.description}
         multiline
