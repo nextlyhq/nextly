@@ -17,7 +17,8 @@
  *                    --file-missing, said explicitly, for a file the folder
  *                    no longer holds: it also retires an attempt a newer
  *                    build left unfinished, recording the migration rolled
- *                    back.
+ *                    back. Its rows under an early release's bare name
+ *                    (no `.sql`) are rolled back with the `.sql` ones.
  *   --removed        record that an applied migration's file was removed
  *                    from the folder on purpose: it stays applied, and the
  *                    missing-file check no longer counts it.
@@ -35,7 +36,11 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors";
-import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
+import {
+  isPluginLedgerRow,
+  ledgerFilename,
+  ledgerSpellings,
+} from "../events/ledger-scope";
 import {
   attemptCleared,
   migrationStanding,
@@ -415,27 +420,43 @@ async function resolveRolledBack(
 ): Promise<ResolveResult> {
   await assertFileAsSaid(args, filename);
 
-  const rows = await args.repo.findFileApplies(filename);
-  const current = standingOf(filename, rows);
-  // Already rolled back, unless an attempt since is unresolved and the file
-  // is gone: that attempt is what `--file-missing` retires below.
-  if (
-    current.state === "rolled_back" &&
-    (current.unresolvedAttempt === undefined || args.fileMissing !== true)
-  ) {
-    return { kind: "noop", reason: `${filename} is already rolled back.` };
+  // Each key the migration's rows may stand under (`ledgerSpellings`): an early release's bare
+  // name beside the `.sql` one. Each is judged and retired on its own rows, so every reader keyed
+  // by either finds the migration rolled back.
+  const retiring: { key: string; retired: string[] }[] = [];
+  let alreadyRolledBack = false;
+  for (const key of ledgerSpellings(filename)) {
+    const rows = await args.repo.findFileApplies(key);
+    if (rows.length === 0) continue;
+    const current = standingOf(key, rows);
+    // Already rolled back, unless an attempt since is unresolved and the file
+    // is gone: that attempt is what `--file-missing` retires below.
+    if (
+      current.state === "rolled_back" &&
+      (current.unresolvedAttempt === undefined || args.fileMissing !== true)
+    ) {
+      alreadyRolledBack = true;
+      continue;
+    }
+    // With the file gone, an attempt a newer build left unfinished is retired
+    // with the applied rows: nothing here can finish it, and the operator has
+    // said what of it ran is reversed.
+    const appliedRows = rows.filter(
+      r =>
+        r.status === "applied" ||
+        (args.fileMissing === true &&
+          !isPluginLedgerRow(key) &&
+          unresolvedAttempts(key, rows).includes(r))
+    );
+    if (appliedRows.length > 0) {
+      retiring.push({ key, retired: appliedRows.map(r => r.id) });
+    }
   }
-  // With the file gone, an attempt a newer build left unfinished is retired
-  // with the applied rows: nothing here can finish it, and the operator has
-  // said what of it ran is reversed.
-  const appliedRows = rows.filter(
-    r =>
-      r.status === "applied" ||
-      (args.fileMissing === true &&
-        !isPluginLedgerRow(filename) &&
-        unresolvedAttempts(filename, rows).includes(r))
-  );
-  if (appliedRows.length === 0) {
+  const [first, ...rest] = retiring;
+  if (first === undefined) {
+    if (alreadyRolledBack) {
+      return { kind: "noop", reason: `${filename} is already rolled back.` };
+    }
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
       publicMessage: `Cannot roll back ${filename}: no prior applied event exists.`,
@@ -453,21 +474,26 @@ async function resolveRolledBack(
   // transaction they ran in) a stop can fall between this insert and
   // retiring the applied rows; a row retiring nothing would read as a
   // cleared attempt (`isOutcome`), and the migration as still applied.
-  const retired = appliedRows.map(r => r.id);
   const eventId = await writeLedger(args, async repo => {
-    const id = await repo.insertEvent({
-      eventType: "file_apply",
-      status: "rolled_back",
-      source: "cli-migrate",
-      filename,
-      endedAt: new Date(),
-      note: NOTE,
-      supersededEventIds: retired,
-    });
-    await repo.supersede({
-      supersededEventIds: retired,
-      byEventId: id,
-    });
+    const retire = async ({ key, retired }: (typeof retiring)[number]) => {
+      const id = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "rolled_back",
+        source: "cli-migrate",
+        filename: key,
+        endedAt: new Date(),
+        note: NOTE,
+        supersededEventIds: retired,
+      });
+      await repo.supersede({
+        supersededEventIds: retired,
+        byEventId: id,
+      });
+      return id;
+    };
+    // The first key's event, the `.sql` one where it had rows to retire, is the one reported.
+    const id = await retire(first);
+    for (const spelling of rest) await retire(spelling);
     return id;
   });
   return { kind: "rolled-back", eventId };
