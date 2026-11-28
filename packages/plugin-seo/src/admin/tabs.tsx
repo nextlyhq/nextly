@@ -41,6 +41,7 @@ import {
 } from "./choices";
 import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
+import { peopleDraftProblem } from "./people-draft";
 import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
   networkOf,
@@ -457,6 +458,10 @@ export function BrandTab({
       ? (codeBrand.otherNames ?? []).join(", ")
       : undefined;
   const codeLogo = draft.logo === null ? codeBrand.logo?.url : undefined;
+  // A person's site describes the person who runs it, not a company.
+  const personal =
+    draft.siteKind === "person" ||
+    (draft.siteKind === null && codeBrand.kind === "person");
   return (
     <SettingsCard>
       <SettingsRowGroup
@@ -472,9 +477,14 @@ export function BrandTab({
           onChange={siteKind => change(current => ({ ...current, siteKind }))}
         />
       </SettingsRowGroup>
+      {personal ? <PersonalSiteNote draft={draft} codeName={codeName} /> : null}
       <TextRow
         label="Name"
-        description="The name Google shows for your company."
+        description={
+          personal
+            ? "Your name, as Google shows it."
+            : "The name Google shows for your company."
+        }
         value={draft.brandName}
         placeholder={codeName ?? draft.siteName}
         {...(codeName === undefined ? {} : { note: CODE_NOTE })}
@@ -492,8 +502,12 @@ export function BrandTab({
         }
       />
       <MediaChoice
-        label="Logo"
-        description="Shown beside your pages in Google's results."
+        label={personal ? "Photo" : "Logo"}
+        description={
+          personal
+            ? "A photo of you, shown with your profile."
+            : "Shown beside your pages in Google's results."
+        }
         shape="square"
         value={draft.logo}
         onChange={logo => change(current => ({ ...current, logo }))}
@@ -508,8 +522,48 @@ export function BrandTab({
         change={change}
         codeProfiles={codeBrand.profiles ?? []}
       />
-      <BrandDetailRows draft={draft} change={change} codeBrand={codeBrand} />
+      <BrandDetailRows
+        draft={draft}
+        change={change}
+        codeBrand={codeBrand}
+        personal={personal}
+      />
     </SettingsCard>
+  );
+}
+
+/**
+ * What a person's site says above its facts: pages describe the person who
+ * runs it, named by the name below, and their entry on People, the one of
+ * the same name, adds their job title, workplace and topics.
+ */
+function PersonalSiteNote({
+  draft,
+  codeName,
+}: {
+  draft: SettingsDraft;
+  codeName: string | undefined;
+}): JSX.Element {
+  const name = (draft.brandName.trim() || codeName || draft.siteName).trim();
+  const key = name.toLowerCase().replace(/\s+/g, " ");
+  const entry = draft.people.find(person =>
+    [person.name, ...person.otherNames.split(",")].some(
+      each => each.trim().toLowerCase().replace(/\s+/g, " ") === key
+    )
+  );
+  return (
+    <SettingsRowGroup
+      label="Who runs the site"
+      description="You publish this site, and the home page is your profile."
+    >
+      <ControlNote>
+        {name === ""
+          ? "Give your name below, and add yourself on People under the same name for your job title and workplace."
+          : entry === undefined
+            ? `Pages describe ${name}. Add ${name} on People to give your job title, workplace and topics.`
+            : `Pages describe ${name}, with the job title, workplace and topics given on People.`}
+      </ControlNote>
+    </SettingsRowGroup>
   );
 }
 
@@ -699,6 +753,7 @@ export const TABS = [
   { id: "types", label: "Content types" },
   { id: "images", label: "Share images" },
   { id: "brand", label: "Organization" },
+  { id: "people", label: "People" },
   { id: "crawlers", label: "Search engines and AI" },
   { id: "connections", label: "Connections" },
 ] as const;
@@ -737,6 +792,8 @@ export function draftProblem(
       return "Fix the social profile address first.";
     }
   }
+  const people = peopleDraftProblem(draft.people);
+  if (people !== null) return `Fix People first: ${people}`;
   return (
     brandDetailsDraftProblem(draft.brandDetails) ??
     verificationDraftProblem(draft.verificationCodes)

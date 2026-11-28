@@ -782,9 +782,12 @@ describe("each type a content type can be mapped to", () => {
     );
 
     expect(problems).toEqual([]);
+    // Named as text, the person is the one whose page this is.
     expect(nodeOf(nodes, "ProfilePage")?.mainEntity).toEqual({
       "@type": "Person",
+      "@id": `${PAGE_URL}#person`,
       name: "Sara Khan",
+      url: PAGE_URL,
     });
   });
 

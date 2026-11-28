@@ -103,7 +103,10 @@ export type {
   DetailSource,
   ReadStructuredDataRules,
   StructuredDataBrand,
+  StructuredDataEmployer,
   StructuredDataOptions,
+  StructuredDataOwnerKind,
+  StructuredDataPerson,
   StructuredDataRules,
   StructuredDataTypeRule,
 } from "./structured-data/rules";

@@ -50,6 +50,7 @@ import {
   storedBrandDetails,
   type BrandDetailsDraft,
 } from "./brand-draft";
+import { peopleDraftOf, storedPeople, type PersonDraft } from "./people-draft";
 
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
@@ -104,6 +105,11 @@ export interface SettingsDraft {
    * founded and who owns it.
    */
   brandDetails: BrandDetailsDraft;
+  /**
+   * The people (and teams) the site names, each one person on every page
+   * that names them.
+   */
+  people: PersonDraft[];
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
@@ -302,6 +308,7 @@ export function draftOf(
     logo: mediaId(stored.logo),
     socialProfiles: profilesOf(stored.socialProfiles),
     brandDetails: brandDetailsDraftOf(stored.brandDetails),
+    people: peopleDraftOf(stored.people),
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
@@ -640,6 +647,7 @@ function storedForm(
     robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
     brandDetails: storedBrandDetails(draft.brandDetails),
+    people: storedPeople(draft.people),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -705,6 +713,7 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
+    people: rebasedSet(draft.people, before.people, after.people),
     verificationCodes: rebasedVerification(
       draft.verificationCodes,
       before.verificationCodes,
@@ -772,6 +781,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "typesWithSeoOff",
   "productionAddresses",
   "socialProfiles",
+  "people",
   "verificationCodes",
   "brandDetails",
 ]);

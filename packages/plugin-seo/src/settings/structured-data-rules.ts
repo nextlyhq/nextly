@@ -88,6 +88,7 @@ function brandOf(
       "parentOrganization",
       parentOf(base.parentOrganization, brand.parentOrganization)
     ),
+    ...defined("kind", settings.ownerKind ?? base.kind),
   };
 }
 
@@ -101,6 +102,8 @@ export function structuredDataRulesOf(
     ...base,
     ...(origin === undefined ? {} : { origin }),
     brand: brandOf(base.brand, settings),
+    // The People are one fact: the settings' list once it holds anyone.
+    ...defined("people", heldList(settings.people) ?? base.people),
     types: { ...base.types, ...settings.types },
   };
 }

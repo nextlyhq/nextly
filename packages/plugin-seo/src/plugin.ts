@@ -1173,6 +1173,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // where the settings hold none of their own. Every one is public
         // already: each page's structured data states it.
         brand: codeBrandOption(options),
+        // The People the options give, which the People tab shows while
+        // the settings list none: public too, as each page names them.
+        people: JSON.parse(
+          JSON.stringify(options.structuredData?.people ?? [])
+        ) as unknown,
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each

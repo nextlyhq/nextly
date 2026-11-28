@@ -1,0 +1,321 @@
+/**
+ * The Settings screen's People tab: the people (and teams) the site names,
+ * each described to search engines as one person, with one identifier, on
+ * every page that names them: as a founder, as a post's author, or as whom a
+ * profile page is about. Each is a card of their facts; the site's code's
+ * People are shown read-only while the settings list none of their own.
+ *
+ * @module admin/people
+ */
+import {
+  Button,
+  SegmentedChoice,
+  SettingsRowGroup,
+  Switch,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useId, type JSX } from "react";
+
+import { defaultPersonId } from "../structured-data/people";
+import type { StructuredDataPerson } from "../structured-data/rules";
+
+import { CODE_LIST_NOTE } from "./brand-details";
+import {
+  EMPTY_PERSON,
+  personDraftOf,
+  personDraftProblem,
+  type PersonDraft,
+} from "./people-draft";
+import type { SettingsDraft } from "./settings-draft";
+import { ControlNote, SettingsCard, TextRow } from "./settings-parts";
+
+/** What the People tab is handed. */
+export interface PeopleTabProps {
+  draft: SettingsDraft;
+  change: (next: (draft: SettingsDraft) => SettingsDraft) => void;
+  /** The People the site's code gives, shown while the settings list none. */
+  codePeople: readonly StructuredDataPerson[];
+  /** The site's main production address, which a default identifier is made at. */
+  home?: string;
+}
+
+/** The kinds an entry can be, as the card offers them. */
+const KINDS = [
+  { value: "person", label: "A person" },
+  { value: "organization", label: "A team or company" },
+] as const;
+
+/**
+ * The identifier a person goes by where none is given, as pages make it
+ * (`defaultPersonId`): their page's address with `#person`, else one made
+ * from their name at the site's home. Nothing where the site's home is not
+ * known and their page is not a whole address.
+ */
+function defaultIdOf(
+  person: PersonDraft,
+  home: string | undefined
+): string | undefined {
+  const base = home === undefined ? undefined : `${home.replace(/\/+$/, "")}/`;
+  let url: string | undefined;
+  try {
+    const page = new URL(person.url.trim(), base);
+    if (person.url.trim() !== "" && /^https?:$/.test(page.protocol)) {
+      url = page.href;
+    }
+  } catch {
+    // An address that is not one yet: the name's identifier instead.
+  }
+  if (base === undefined && url === undefined) return undefined;
+  return defaultPersonId(
+    {
+      name: person.name,
+      type: person.type,
+      ...(url === undefined ? {} : { url }),
+    },
+    base ?? ""
+  );
+}
+
+/** One person's card: each fact, and the identifier every site names them by. */
+function PersonCard({
+  person,
+  set,
+  remove,
+  home,
+  brandName,
+}: {
+  person: PersonDraft;
+  set: (next: PersonDraft) => void;
+  remove: () => void;
+  home: string | undefined;
+  brandName: string;
+}): JSX.Element {
+  const kindId = useId();
+  const problem = personDraftProblem(person);
+  const named = person.name.trim() === "" ? "this person" : person.name.trim();
+  const isPerson = person.type === "person";
+  const placeholderId = defaultIdOf(person, home);
+  const field =
+    (fact: keyof PersonDraft) =>
+    (value: string): void =>
+      set({ ...person, [fact]: value });
+  return (
+    <SettingsCard>
+      <TextRow
+        label="Name"
+        description="As pages name them, such as in a byline."
+        value={person.name}
+        onChange={field("name")}
+        {...(problem === null
+          ? {}
+          : { note: problem, noteTone: "danger" as const })}
+      />
+      <SettingsRowGroup
+        label="Kind"
+        description="A team account, such as an editorial team, is described as an organization."
+      >
+        <span id={kindId} className="sr-only">
+          Kind
+        </span>
+        <SegmentedChoice
+          size="bordered"
+          aria-labelledby={kindId}
+          options={KINDS.map(kind => ({
+            value: kind.value,
+            label: kind.label,
+          }))}
+          value={person.type}
+          onSelect={next =>
+            set({
+              ...person,
+              type: next === "organization" ? "organization" : "person",
+            })
+          }
+        />
+      </SettingsRowGroup>
+      <TextRow
+        label="Other names"
+        description="Names a page may credit them by. Separate with commas."
+        value={person.otherNames}
+        onChange={field("otherNames")}
+      />
+      <TextRow
+        label={isPerson ? "Their page" : "Its page"}
+        description="An address on this site, such as /about, or a whole address elsewhere."
+        value={person.url}
+        placeholder="/about"
+        mono
+        onChange={field("url")}
+      />
+      <TextRow
+        label={isPerson ? "Photo" : "Logo"}
+        description="The address of an image, on this site or elsewhere."
+        value={person.image}
+        placeholder="https://"
+        mono
+        onChange={field("image")}
+      />
+      {isPerson ? (
+        <TextRow
+          label="Job title"
+          description="Their role, such as Founder or Editor."
+          value={person.jobTitle}
+          onChange={field("jobTitle")}
+        />
+      ) : null}
+      <TextRow
+        label={isPerson ? "Short bio" : "Description"}
+        description="A sentence or two."
+        value={person.description}
+        multiline
+        onChange={field("description")}
+      />
+      <TextRow
+        label="Profiles"
+        description="Their official accounts elsewhere, one address a line."
+        value={person.sameAs}
+        placeholder="https://github.com/…"
+        multiline
+        mono
+        onChange={field("sameAs")}
+      />
+      {isPerson ? (
+        <>
+          <TextRow
+            label="Knows about"
+            description="Topics they are known for. Separate with commas."
+            value={person.knowsAbout}
+            onChange={field("knowsAbout")}
+          />
+          <TextRow
+            label="Works for"
+            description="The organization they work for, where it is not this one."
+            value={person.worksForName}
+            onChange={field("worksForName")}
+          />
+          <TextRow
+            label="Works for: website"
+            description="Its home page."
+            value={person.worksForUrl}
+            placeholder="https://"
+            mono
+            onChange={field("worksForUrl")}
+          />
+          <SettingsRowGroup
+            label="Founder"
+            description={`Named as a founder of ${brandName.trim() === "" ? "the organization" : brandName.trim()} on every page.`}
+          >
+            <Switch
+              aria-label={`${named} is a founder`}
+              checked={person.founder}
+              onCheckedChange={founder => set({ ...person, founder })}
+            />
+          </SettingsRowGroup>
+        </>
+      ) : null}
+      <TextRow
+        label="Identifier"
+        description="Advanced. Use the same identifier on every site this person appears on, so search engines read one person."
+        value={person.id}
+        {...(placeholderId === undefined ? {} : { placeholder: placeholderId })}
+        mono
+        note="Paste the one another site gives them, such as https://example.com/#person. Empty uses the address shown."
+        onChange={field("id")}
+      />
+      <div className="py-3">
+        <Button type="button" variant="outline" size="sm" onClick={remove}>
+          Remove {named}
+        </Button>
+      </div>
+    </SettingsCard>
+  );
+}
+
+/** The People the site's code gives, each shown read-only. */
+function CodePeople({
+  people,
+}: {
+  people: readonly StructuredDataPerson[];
+}): JSX.Element {
+  return (
+    <SettingsCard>
+      {people.map((person, index) => (
+        <TextRow
+          key={index}
+          label={person.name}
+          description={
+            [
+              person.jobTitle,
+              person.type === "organization" ? "Team" : undefined,
+            ]
+              .filter(Boolean)
+              .join(", ") || "Person"
+          }
+          value={person.url ?? person.id ?? ""}
+          readOnly
+          mono
+          {...(index === people.length - 1 ? { note: CODE_LIST_NOTE } : {})}
+        />
+      ))}
+    </SettingsCard>
+  );
+}
+
+/**
+ * The People tab: one card per person, each edited in place, and room for
+ * another. A name a page gives is matched to a person here by their page's
+ * address or by the same name (or one of their other names), never a near
+ * one, so the tab says so above the list.
+ */
+export function PeopleTab({
+  draft,
+  change,
+  codePeople,
+  home,
+}: PeopleTabProps): JSX.Element {
+  const people = draft.people;
+  const setPeople = (next: (people: PersonDraft[]) => PersonDraft[]) =>
+    change(current => ({ ...current, people: next(current.people) }));
+  const showsCode = people.length === 0 && codePeople.length > 0;
+  return (
+    <div className="grid gap-4">
+      <ControlNote>
+        Each person here is one person to search engines on every page that
+        names them: as a founder, as the author of a post, or on their profile
+        page. A page names them by their page&apos;s address, or by the same
+        name or one of their other names, never a near one.
+      </ControlNote>
+      {showsCode ? <CodePeople people={codePeople} /> : null}
+      {people.map((person, index) => (
+        <PersonCard
+          key={index}
+          person={person}
+          home={home}
+          brandName={draft.brandName || draft.siteName}
+          set={next =>
+            setPeople(all =>
+              all.map((each, at) => (at === index ? next : each))
+            )
+          }
+          remove={() => setPeople(all => all.filter((_, at) => at !== index))}
+        />
+      ))}
+      <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            setPeople(all => [
+              ...(all.length === 0 && showsCode
+                ? codePeople.map(each => personDraftOf({ ...each }))
+                : all),
+              { ...EMPTY_PERSON },
+            ])
+          }
+        >
+          Add a person
+        </Button>
+      </div>
+    </div>
+  );
+}
