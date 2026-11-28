@@ -103,8 +103,12 @@ const FEED_ITEMS = { least: 10, most: 50 } as const;
  */
 const FEED_PATH = /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)?feed\.xml$/;
 
-/** An address from the site's root with nothing past its path. */
-const SITE_PATH = /^\/[^?#\s]*$/;
+/**
+ * An address from the site's root with nothing past its path. Not `//…`,
+ * which a URL reads as another host (`//other.example/blog`), or none, and
+ * no backslash, which a URL reads as a slash (`/\other.example`).
+ */
+const SITE_PATH = /^\/(?!\/)[^?#\s\\]*$/;
 
 /** A collection's slug, as Nextly spells one. */
 const COLLECTION_SLUG = /^[a-z0-9][a-z0-9_-]*$/;

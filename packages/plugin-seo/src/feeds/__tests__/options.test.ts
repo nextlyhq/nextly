@@ -80,6 +80,21 @@ describe("the feeds the options name", () => {
       { path: "/feed.xml", sources: ["posts"], link: "blog" },
       '"bad".link',
     ],
+    [
+      "a listing page on another host",
+      { path: "/feed.xml", sources: ["posts"], link: "//other.example/blog" },
+      '"bad".link',
+    ],
+    [
+      "a listing page a backslash takes to another host",
+      { path: "/feed.xml", sources: ["posts"], link: "/\\other.example/blog" },
+      '"bad".link',
+    ],
+    [
+      "a listing page with no host",
+      { path: "/feed.xml", sources: ["posts"], link: "//" },
+      '"bad".link',
+    ],
   ])("refuse a feed with %s", (_case, option, named) => {
     expect(() => checkedFeeds({ bad: option })).toThrow(named);
   });
