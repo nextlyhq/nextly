@@ -107,11 +107,20 @@ describe("a package manager's run", () => {
       "prints.mjs",
       "for (let i = 0; i < 4000; i++) console.error('x'.repeat(1000) + i);\nconsole.error('the last line');\n"
     );
-    const run = await runManager(
-      "npm",
-      ["exec", "--offline", "--", "node", prints],
-      process.cwd()
+    // A script of a project's own, which npm runs through its shell on every
+    // platform. `npm exec --offline -- node` was refused on Windows with
+    // ENOTCACHED: it looked for a package called `node` rather than the program.
+    const project = join(scripts, "prints-project");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(
+      join(project, "package.json"),
+      JSON.stringify({
+        name: "prints",
+        private: true,
+        scripts: { prints: `node ${prints}` },
+      })
     );
+    const run = await runManager("npm", ["run", "prints"], project);
 
     expect(run.output).toContain("the last line");
     expect(run.output.length).toBeLessThan(300_000);

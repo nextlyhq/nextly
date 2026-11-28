@@ -33,6 +33,26 @@ const DEMONSTRATED_RULES = [
   "no-experimental-sdk",
 ];
 
+/**
+ * The experimental surfaces the template's own lint config adopts on purpose,
+ * read from that file, so a template file is held to the rule as a new plugin
+ * runs it. The config cannot be imported here (its packages are the template's
+ * dependencies, not this repository's), so its `allow` list is read as text.
+ */
+const TEMPLATE_CONFIG = readFileSync(
+  resolve(REPO_ROOT, "templates/plugin/eslint.config.mjs"),
+  "utf8"
+);
+const ADOPTED = TEMPLATE_CONFIG.match(
+  /"@nextlyhq\/no-experimental-sdk":\s*\[\s*"warn",\s*\{\s*allow:\s*\[([^\]]*)\]/
+);
+const ADOPTED_SURFACES = ADOPTED
+  ? [...ADOPTED[1].matchAll(/"([^"]+)"/g)].map(([, name]) => name)
+  : [];
+const RULE_OPTIONS = {
+  "no-experimental-sdk": [{ allow: ADOPTED_SURFACES }],
+};
+
 // Asserted on its own: zero cases is the same output as a conforming template,
 // so without this the cases below would all pass on a glob that stopped
 // resolving.
@@ -41,6 +61,12 @@ it("finds the template files, the admin page among them", () => {
   expect(TEMPLATE_FILES.some(file => file.endsWith("SettingsPage.tsx"))).toBe(
     true
   );
+});
+
+// Asserted on its own for the same reason: a config the pattern stopped
+// matching would read as adopting nothing, and fail below for the wrong cause.
+it("reads the surfaces the template's lint config adopts", () => {
+  expect(ADOPTED_SURFACES).toEqual(["checkPluginPackageDeclaration"]);
 });
 
 // The language comes from each case's filename, so `.ts` and `.tsx` files are
@@ -53,6 +79,7 @@ for (const ruleName of DEMONSTRATED_RULES) {
       name: file,
       filename: resolve(REPO_ROOT, file),
       code: readFileSync(resolve(REPO_ROOT, file), "utf8"),
+      ...(RULE_OPTIONS[ruleName] ? { options: RULE_OPTIONS[ruleName] } : {}),
     })),
     invalid: [],
   });

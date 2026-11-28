@@ -199,16 +199,37 @@ function credentialsMisread(parsed: URL): boolean {
 }
 
 /**
+ * MySQL's socket as the driver opens it: its `path`, and whether that path was
+ * `resolved` here from a relative one the URL wrote. A resolved path was read as
+ * a path in the form it was written (`RELATIVE_SOCKET`), and is then spelled as
+ * the platform spells the project folder: a drive and backslashes on Windows,
+ * and any character the folder's own name holds.
+ */
+interface MysqlSocket {
+  path: string;
+  resolved: boolean;
+}
+
+/**
  * Whether each part is what it should be: a host or a socket's path, a port,
  * a database name, and a MySQL socket parameter that is a path.
  */
-function partsReadable(parts: ServerParts, socket: string | null): boolean {
+function partsReadable(
+  parts: ServerParts,
+  socket: MysqlSocket | null
+): boolean {
+  const resolvedSocket = socket?.resolved === true ? socket.path : undefined;
   return (
-    (HOST.test(parts.host) || SOCKET.test(parts.host)) &&
+    (HOST.test(parts.host) ||
+      SOCKET.test(parts.host) ||
+      parts.host === resolvedSocket) &&
     PORT.test(parts.port) &&
     DATABASE.test(parts.database) &&
     // A socket parameter that is not a path is not MySQL's socket.
-    (socket === null || socket === "" || SOCKET.test(socket))
+    (socket === null ||
+      socket.path === "" ||
+      socket.resolved ||
+      SOCKET.test(socket.path))
   );
 }
 
@@ -236,7 +257,7 @@ function oneParameter(
 function mysqlSocket(
   parsed: URL,
   folder: string
-): string | null | typeof AMBIGUOUS {
+): MysqlSocket | null | typeof AMBIGUOUS {
   const named = oneParameter(parsed, "socketPath");
   if (typeof named !== "string") return named;
   const value = asMysqlReads(named);
@@ -244,8 +265,10 @@ function mysqlSocket(
   if (value === null) return null;
   // `true` or a number names no path the driver could open.
   if (typeof value !== "string") return AMBIGUOUS;
-  if (value.startsWith("/")) return value;
-  return RELATIVE_SOCKET.test(value) ? resolve(folder, value) : value;
+  if (value.startsWith("/")) return { path: value, resolved: false };
+  return RELATIVE_SOCKET.test(value)
+    ? { path: resolve(folder, value), resolved: true }
+    : { path: value, resolved: false };
 }
 
 /**
@@ -335,7 +358,8 @@ function serverParts(
   }
   const defaults = driverDefaults(dialect, env);
   const parts = {
-    host: socket || host || (named === NO_HOST ? "" : named) || defaults.host,
+    host:
+      socket?.path || host || (named === NO_HOST ? "" : named) || defaults.host,
     port: port || parsed.port || defaults.port,
     database: database || defaults.database,
   };

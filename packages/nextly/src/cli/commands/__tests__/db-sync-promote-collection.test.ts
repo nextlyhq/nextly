@@ -23,6 +23,21 @@ import {
   type PromotedRecord,
 } from "../db-sync-promote-collection";
 
+/**
+ * `value` with its string keys alone, the settings a stored definition, the schema hash and a
+ * comparison of settings read. `defineCollection` marks the title and slug it adds under a symbol
+ * key (`systemFieldsBeside`), and a field printed from the Schema Builder's record is declared in
+ * the code instead, so it carries no mark; only a Single's identity fields read that mark.
+ */
+function settingsOf(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(settingsOf);
+  if (typeof value !== "object" || value === null) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, inner]) => [key, settingsOf(inner)])
+  );
+}
+
 const FIELDS = [
   { name: "title", type: "text" },
   { name: "slug", type: "text" },
@@ -233,7 +248,9 @@ describe("a promoted collection's fields", () => {
     // no other field has none stored.
     const config = printed(record({ fields: [] }));
     expect(() => defineCollection(config as never)).not.toThrow();
-    expect(defineCollection(config as never).fields).toEqual(systemFields());
+    expect(settingsOf(defineCollection(config as never).fields)).toEqual(
+      settingsOf(systemFields())
+    );
   });
 
   it("are the stored ones for a collection with fields of its own", () => {

@@ -161,8 +161,8 @@
       "compiled": 5
     },
     "docs/localization/index.mdx": {
-      "samples": 8,
-      "compiled": 5
+      "samples": 9,
+      "compiled": 6
     },
     "docs/notices/index.mdx": {
       "samples": 1,
@@ -248,6 +248,10 @@
       "samples": 2,
       "compiled": 2
     },
+    "docs/plugins/declaration.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/plugins/distribution.mdx": {
       "samples": 1,
       "compiled": 1
@@ -273,8 +277,8 @@
       "compiled": 1
     },
     "docs/plugins/proxy.mdx": {
-      "samples": 2,
-      "compiled": 2
+      "samples": 4,
+      "compiled": 3
     },
     "docs/plugins/public-addresses.mdx": {
       "samples": 4,
@@ -297,8 +301,8 @@
       "compiled": 3
     },
     "docs/plugins/seo.mdx": {
-      "samples": 31,
-      "compiled": 20
+      "samples": 32,
+      "compiled": 21
     },
     "docs/plugins/services.mdx": {
       "samples": 20,
@@ -517,20 +521,6 @@
       "reader-name #1 error TS2304: Cannot find name 'Media'.": 1,
       "reader-name #2 error TS2552: Cannot find name 'MyCollection'. Did you mean 'HTMLCollection'?": 1
     },
-    "docs/guides/build-your-front-end-in-code.mdx": {
-      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #2 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
-      "reader-file #3 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #4 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
-      "reader-file #6 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
-      "reader-file #9 error TS2307: Cannot find module './src/lib/post-path' or its corresponding type declarations.": 1,
-      "reader-file #11 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #11 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
-      "reader-file #11 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1
-    },
     "docs/guides/routing-and-seo.mdx": {
       "implicit-any #7 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
@@ -620,6 +610,20 @@
     "docs/getting-started/project-structure.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../db/schemas/collections/zod' or its corresponding type declarations.": 1
     },
+    "docs/guides/build-your-front-end-in-code.mdx": {
+      "reader-file #11 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #11 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #11 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '@/lib/post-path' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
+      "reader-file #6 error TS2307: Cannot find module '@/lib/site-url' or its corresponding type declarations.": 1,
+      "reader-file #9 error TS2307: Cannot find module './src/lib/post-path' or its corresponding type declarations.": 1
+    },
     "docs/guides/email.mdx": {
       "reader-file #8 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
     },
@@ -658,12 +662,16 @@
       "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
       "reader-file #5 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
     },
+    "docs/plugins/declaration.mdx": {
+      "reader-file #0 error TS2307: Cannot find module './index' or its corresponding type declarations.": 1
+    },
     "docs/plugins/proxy.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #0 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/seo.mdx": {
-      "reader-file #16 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #17 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #18 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #19 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #8 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #9 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },

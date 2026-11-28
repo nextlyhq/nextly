@@ -31,10 +31,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
-import {
-  keepsTranslationsInside,
-  type StructuredField,
-} from "../../../i18n/shared-structure";
+import { keepsTranslationsInside } from "../../../i18n/shared-structure";
 import {
   assertIndexBuildable,
   type WeighedColumn,

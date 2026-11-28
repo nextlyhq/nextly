@@ -49,6 +49,14 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     place: "local",
   },
   {
+    // Resolved against the folder, the path is spelled as the folder is: with a
+    // space here, as with a drive and backslashes on Windows.
+    name: "a MySQL Unix socket written relative to a folder whose name has a space",
+    url: "mysql://app@localhost/shop?socketPath=./mysql.sock",
+    folder: "/srv/my app",
+    place: "local",
+  },
+  {
     name: "node-postgres's socket form",
     url: "/var/run/postgresql shop",
     dialect: "postgresql",

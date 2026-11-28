@@ -41,17 +41,35 @@ const { names: AGENT_VARIABLES, unnamed } = readsOf(detector);
 // Every tracked file in the repository, not only the ones CI is known to run:
 // a workflow, an action's implementation, a script, or a command a package
 // generates for a CI step could each set one through `GITHUB_ENV`, and no
-// list of what CI reaches stays complete. Binary files aside, and this file,
-// which names them.
+// list of what CI reaches stays complete. Binary files aside, this file, which
+// names them, and the usage-data package's agent detector, listed by name below.
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
+
+/**
+ * Files that READ these variables to tell which coding agent ran a command: the
+ * usage-data detector, the catalog that documents its answers, and their tests,
+ * which hand the detector a plain object as its environment. None sets a
+ * variable a build would see. Named one by one, so any other file naming a
+ * variable is still found, and each must still exist and name one, so a moved
+ * or emptied entry fails here rather than excusing nothing.
+ */
+const AGENT_DETECTOR_FILES = [
+  "packages/telemetry/src/usage/agent.ts",
+  "packages/telemetry/src/usage/catalog.ts",
+  "packages/telemetry/src/__tests__/agent.test.ts",
+  "packages/telemetry/src/__tests__/base-properties.test.ts",
+  "packages/telemetry/src/__tests__/no-markers.test.ts",
+];
+
 // Room for a listing past the 1 MiB a spawn may print by default.
-const files = execFileSync("git", ["ls-files", "-z"], {
+const tracked = execFileSync("git", ["ls-files", "-z"], {
   cwd: ROOT,
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 })
   .split("\0")
   .filter(path => path && path !== "scripts/workflows-set-no-agent-env.test.mjs");
+const files = tracked.filter(path => !AGENT_DETECTOR_FILES.includes(path));
 
 describe("the variables that tell Next.js a coding agent is building", () => {
   it("are every one Next.js's own detector reads", () => {
@@ -73,7 +91,17 @@ describe("the variables that tell Next.js a coding agent is building", () => {
     expect(mentioned("env:\n  MY_CODEX_CI_FLAG: 1", names)).toEqual([]);
   });
 
-  it("are named by no tracked file in the repository", () => {
+  it("are named by the agent detector's files, each of them tracked", () => {
+    for (const path of AGENT_DETECTOR_FILES) {
+      expect(tracked, path).toContain(path);
+      const text = readFileSync(join(ROOT, path), "utf8");
+      expect(mentioned(text, AGENT_VARIABLES).length, path).toBeGreaterThan(0);
+      // A reader, not a setter: nothing in it writes to a step's environment.
+      expect(text, path).not.toMatch(/GITHUB_ENV/);
+    }
+  });
+
+  it("are named by no other tracked file in the repository", () => {
     for (const area of [".github/workflows/", ".github/actions/", "scripts/", "packages/create-nextly-app/src/"]) {
       expect(files.filter(path => path.startsWith(area)).length, area).toBeGreaterThan(4);
     }
