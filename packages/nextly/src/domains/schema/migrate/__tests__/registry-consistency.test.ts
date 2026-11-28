@@ -221,9 +221,31 @@ describe("compareRegistryWithTables — tables and rows", () => {
     });
 
     expect(report.missingTables).toEqual([
-      { kind: "single", slug: "home", table: "single_home" },
+      { kind: "single", slug: "home", table: "single_home", declared: false },
     ]);
     expect(report.missingColumns).toEqual([]);
+  });
+
+  it("says whether the configuration declares the entity whose table is gone", () => {
+    const report = compare({
+      rows: rows({
+        fieldGroup: [
+          { slug: "card", tableName: "fg_card", fields: [] },
+          { slug: "meta", tableName: "fg_meta", fields: [] },
+        ],
+      }),
+      live: live({}),
+      // The same slug declared as another kind does not declare the field group.
+      declared: [
+        { kind: "fieldGroup", slug: "card" },
+        { kind: "collection", slug: "meta" },
+      ],
+    });
+
+    expect(report.missingTables).toEqual([
+      { kind: "fieldGroup", slug: "card", table: "fg_card", declared: true },
+      { kind: "fieldGroup", slug: "meta", table: "fg_meta", declared: false },
+    ]);
   });
 
   it("looks for a declared entity's row in its own registry only", () => {
@@ -271,7 +293,9 @@ describe("registryDisagreementLines", () => {
   it("names each disagreement, with the commands after the tables and columns", () => {
     expect(
       registryDisagreementLines({
-        missingTables: [{ kind: "collection", slug: "a", table: "dc_a" }],
+        missingTables: [
+          { kind: "collection", slug: "a", table: "dc_a", declared: true },
+        ],
         missingColumns: [
           {
             kind: "fieldGroup",
@@ -290,6 +314,30 @@ describe("registryDisagreementLines", () => {
       'field group "b": field "linkUrl" has no column "link_url" in table "comp_b".',
       "The database has not been migrated for the tables and columns above. Run `nextly migrate:create` for a change that has no migration yet, then `nextly migrate`.",
       'single "c" is declared in the configuration but has no registry row.',
+    ]);
+  });
+
+  // A row nothing declares is left from an entity removed outside the migrations: no
+  // `migrate:create` would write its table, so it is not sent there.
+  it("names a row the configuration does not declare apart, without the migrate commands", () => {
+    expect(
+      registryDisagreementLines({
+        missingTables: [
+          {
+            kind: "fieldGroup",
+            slug: "meta",
+            table: "fg_meta",
+            declared: false,
+          },
+        ],
+        missingColumns: [],
+        unregistered: [],
+        behindSnapshot: [],
+        unreadable: [],
+      })
+    ).toEqual([
+      'field group "meta": its registry row names table "fg_meta", which does not exist, and the configuration does not declare it.',
+      "The rows above are left from entities removed outside the migrations, with their tables. With no table, no content of theirs remains and none is served; `nextly migrate` leaves them, since a registry row is removed only by the migration that drops its entity.",
     ]);
   });
 

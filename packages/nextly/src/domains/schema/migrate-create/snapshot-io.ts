@@ -182,6 +182,22 @@ export function snapshotFieldGroupNaming(
   return "current";
 }
 
+/**
+ * Whether a snapshot records any field group: a table with a field group's system columns, under
+ * either naming, or a group in its settings record. One that records none says nothing about which
+ * names the history is on, though `snapshotFieldGroupNaming` reads it as legacy, the default every
+ * earlier release wrote: none of its tables is a field group's, so a database on either naming
+ * holds what it describes, and nothing planned from it addresses a field-group table.
+ */
+export function snapshotRecordsFieldGroups(
+  file: Pick<SnapshotFile, "snapshot"> & Partial<Pick<SnapshotFile, "entities">>
+): boolean {
+  if (Object.keys(file.entities?.fieldGroups ?? {}).length > 0) return true;
+  return file.snapshot.tables.some(table =>
+    FIELD_GROUP_SYSTEM_COLUMNS.every(column => holdsColumn(table, column))
+  );
+}
+
 /** The columns every field group's table carries, whatever its names: what tells one apart. */
 const FIELD_GROUP_SYSTEM_COLUMNS = [
   STORAGE_FORMAT.columns.parentId,

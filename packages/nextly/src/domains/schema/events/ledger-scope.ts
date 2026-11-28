@@ -60,6 +60,19 @@ export function ledgerFilename(name: string): string {
 }
 
 /**
+ * Every key the ledger may hold one migration's rows under, from the name a caller has: its
+ * ledger key (`ledgerFilename`) and, for an app migration, its bare name too. An early release
+ * recorded app migrations without `.sql`, and every reader of the applied set takes the two as
+ * one migration (`appliedAppMigrations` reads by base name), so a command recording how one ended
+ * reaches the rows under both. A plugin module has the one key.
+ */
+export function ledgerSpellings(name: string): string[] {
+  const key = ledgerFilename(name);
+  if (isPluginLedgerRow(key)) return [key];
+  return [key, key.replace(/\.sql$/, "")];
+}
+
+/**
  * Keep only the rows a command should act on.
  *
  * `plugin` undefined means the app's own rows, which is every command's

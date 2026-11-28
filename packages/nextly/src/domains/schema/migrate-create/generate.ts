@@ -242,6 +242,7 @@ import {
   newestSnapshotName,
   prepareSnapshot,
   snapshotPathOf,
+  snapshotRecordsFieldGroups,
   type SnapshotFile,
 } from "./snapshot-io";
 import {
@@ -1369,6 +1370,7 @@ export async function generateMigration(
     pendingTables,
     hasSettingsChanges: changesBeyondTables,
     record,
+    previous,
   });
   if (recorded !== undefined) return recorded;
   // Nothing to write: the same answer every report of the changes not yet in a migration reads.
@@ -2116,10 +2118,17 @@ async function recordedUnlessChanged(
     pendingTables: readonly string[];
     hasSettingsChanges: boolean;
     record: Omit<MigrationPair, "sqlContent">;
+    /** The newest snapshot the run started from. */
+    previous: { data: SnapshotFile; template?: true } | null | undefined;
   }
 ): Promise<GenerateResult | undefined> {
   // `--field-group-names=current`: the move to the current names, and nothing else.
   if (args.fieldGroupTransition === true) {
+    const history = historyWithNothingToRename(run.previous);
+    const changed = run.pendingTables.length > 0 || run.hasSettingsChanges;
+    if (changed && history !== undefined) {
+      return transitionFromHistory(args, run.record, history);
+    }
     refuseChangesToTransition({
       tables: run.pendingTables,
       beyondTables: run.hasSettingsChanges,
@@ -2337,6 +2346,52 @@ async function transitionSnapshot(
       record.contributions ?? {},
       groupTables
     ),
+    fieldGroupNaming: "current",
+    sqlContent: formatFieldGroupTransitionFile(
+      args.name,
+      args.dialect,
+      record.now
+    ),
+  });
+}
+
+/**
+ * The newest snapshot, where the move to the current field-group names can be written from it
+ * alone while the config has other changes to migrate: it records no field group
+ * (`snapshotRecordsFieldGroups`), so under the current names it is the same history, and it records
+ * which fields are translated, as every snapshot written now says. Undefined otherwise, and for a
+ * template's older-format file, which records no settings.
+ */
+function historyWithNothingToRename(
+  previous: { data: SnapshotFile; template?: true } | null | undefined
+): SnapshotFile | undefined {
+  if (previous === null || previous === undefined) return undefined;
+  if (previous.template === true) return undefined;
+  if (previous.data.translatedFieldsRecorded !== true) return undefined;
+  if (snapshotRecordsFieldGroups(previous.data)) return undefined;
+  return previous.data;
+}
+
+/**
+ * `--field-group-names=current` on a history with no field group to rename, while the config has
+ * other changes to migrate: the move written from the newest snapshot as it stands, its tables,
+ * contributions, settings and permissions unchanged, so it changes nothing and carries none of the
+ * config's changes. The next `migrate:create` writes those, planned on the current names. Without
+ * it, a site whose storage moved and whose history never held a field group could neither write
+ * the move (the upgrade's own changes are pending) nor apply the upgrade first (`nextly migrate`
+ * holds a moved database to the move before a file that plans field groups).
+ */
+async function transitionFromHistory(
+  args: GenerateArgs,
+  record: Omit<MigrationPair, "sqlContent">,
+  history: SnapshotFile
+): Promise<GenerateResult> {
+  return writeUnchangedMigration(args, {
+    ...record,
+    written: history.snapshot,
+    contributions: history.contributions ?? {},
+    entities: history.entities,
+    permissions: history.permissions,
     fieldGroupNaming: "current",
     sqlContent: formatFieldGroupTransitionFile(
       args.name,

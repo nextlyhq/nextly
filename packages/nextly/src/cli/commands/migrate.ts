@@ -144,6 +144,7 @@ import {
 } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   isFieldGroupTransition,
+  type PendingFieldGroupFile,
   refuseFieldGroupTransitionOnLegacy,
   refuseMovedStorageBehindLegacyHistory,
   refuseTypeColumnsHistoryDoesNotRecord,
@@ -298,6 +299,7 @@ import {
   isOlderFormatSnapshot,
   parseSnapshotFile,
   snapshotFieldGroupNaming,
+  snapshotRecordsFieldGroups,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
@@ -4024,7 +4026,8 @@ async function refuseFieldGroupHistoryBehindStorage(
     await refuseMovedStorageBehindLegacyHistory({
       adapter,
       newestApplied: snapshotFieldGroupNaming(newest),
-      nextPending: next === null ? undefined : snapshotFieldGroupNaming(next),
+      newestRecordsFieldGroups: snapshotRecordsFieldGroups(newest),
+      pending: await pendingFieldGroupFiles(metaDir, files),
     });
     // What the run holds the database to: the newest applied file, and the move of the history
     // where it is the next to apply.
@@ -4041,6 +4044,30 @@ async function refuseFieldGroupHistoryBehindStorage(
     });
     return;
   }
+}
+
+/**
+ * Every app file still to apply, in order, with the field-group names its snapshot records and
+ * whether it records a field group at all: what tells a moved database's run whether a pending
+ * file is planned against names the database does not keep its field groups under.
+ */
+async function pendingFieldGroupFiles(
+  metaDir: string,
+  files: ReadonlyArray<{ applied: boolean; file: { name: string } }>
+): Promise<PendingFieldGroupFile[]> {
+  const pending: PendingFieldGroupFile[] = [];
+  for (const entry of files) {
+    if (entry.applied) continue;
+    const snapshot = await loadTargetSnapshot(metaDir, entry.file.name);
+    pending.push({
+      file: `${entry.file.name}.sql`,
+      naming:
+        snapshot === null ? undefined : snapshotFieldGroupNaming(snapshot),
+      recordsFieldGroups:
+        snapshot !== null && snapshotRecordsFieldGroups(snapshot),
+    });
+  }
+  return pending;
 }
 
 /**
@@ -4918,6 +4945,9 @@ function refuseMissing(
   }
 }
 
+/** The command that adopts a database as the start of its history, as its refusals name it. */
+const BASELINE_COMMAND = "nextly migrate:baseline";
+
 /** Each file named in backticks, separated by commas. */
 function namedFiles(files: readonly string[]): string {
   return files.map(f => `\`${f}\``).join(", ");
@@ -4944,7 +4974,12 @@ export function appliedFilesMissing(
       "A newer build has migrated this database, or a file was removed from the folder after it ran."
     );
     nexts.push(
-      "Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`: the migration stays applied, and is never run again if its file returns."
+      // A baseline adopts the database as the start of a history, so an applied migration it
+      // keeps would stand before that start: it is recorded rolled back, its tables adopted,
+      // rather than recorded removed and still applied, which the baseline refuses next.
+      command === BASELINE_COMMAND
+        ? "Deploy the build that holds the files, or put them back, and run `nextly migrate` instead. If their files are gone for good and the database is to be adopted as it stands, record each rolled back with `nextly migrate:resolve --rolled-back <file> --file-missing`, which runs nothing and keeps every table, then run `nextly migrate:baseline` again."
+        : "Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`: the migration stays applied, and is never run again if its file returns."
     );
   }
   if (tried.length > 0) {

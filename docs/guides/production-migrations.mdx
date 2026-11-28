@@ -383,6 +383,23 @@ Two things it deliberately refuses:
 - **An empty database.** There is nothing to adopt; your first migration is an
   ordinary `nextly migrate:create`.
 
+A database whose ledger still records migrations as applied that the folder no
+longer holds is refused too (`MIGRATION_MISSING`), since those would stand
+before the new start. When their files are gone for good, as on a site whose
+schema has only ever changed through `db:sync`, record each one rolled back,
+by the name the refusal shows, and baseline again. Rolling back here runs no
+statement: it records that the history those rows describe is replaced by the
+baseline, which adopts the tables as they stand.
+
+```bash
+nextly migrate:resolve --rolled-back <file> --file-missing   # once per file named
+nextly migrate:baseline
+```
+
+An early release recorded some migrations under their bare names, without
+`.sql`, sometimes under both. Either name reaches the rows under both, and a
+row recorded with no checksum is rolled back like any other.
+
 If you reach this the other way round — you ran `nextly migrate` on a
 `db:sync` project and it refused with schema drift where every difference reads
 `+ table '...' present in DB` — that is this same situation, and the error
@@ -963,13 +980,25 @@ collection "forms": field "notifyEmail" has no column "notify_email" in table "d
 The database has not been migrated for the tables and columns above. Run `nextly migrate:create` for a change that has no migration yet, then `nextly migrate`.
 ```
 
+A row whose table is gone and whose entity the configuration does not declare is named apart: it
+is left from a collection, single or field group removed outside the migrations, table and all, so
+no `nextly migrate:create` would write that table. With no table, none of its content remains and
+none is served, and `nextly migrate` leaves the row, since a registry row is removed only by the
+migration that drops its entity:
+
+```text
+field group "hero": its registry row names table "fg_hero", which does not exist, and the configuration does not declare it.
+The rows above are left from entities removed outside the migrations, with their tables. With no table, no content of theirs remains and none is served; `nextly migrate` leaves them, since a registry row is removed only by the migration that drops its entity.
+```
+
 A field that keeps its values somewhere else is not expected on the entity's table: a field group,
 a many-to-many relationship on a collection or single, a virtual field, and a translatable field
 of a localized entity, which lives in its `_locales` table. A row whose table is missing is named
 once, not once per field.
 
 Both commands only read, and neither changes its exit code for what it names. `migrate:status --json`
-carries the same findings under `registry`: `missingTables`, `missingColumns`, `unregistered`, and
+carries the same findings under `registry`: `missingTables` (each with `declared`, whether the
+configuration declares its entity), `missingColumns`, `unregistered`, and
 `unreadable` (a registry that could not be read, so it was not compared). `registry` is `null` on a
 database with no registry yet, and when the comparison could not run, with the reason in
 `registryError`.

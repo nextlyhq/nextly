@@ -164,7 +164,8 @@ describe("a moved database behind a legacy history", () => {
       refuseMovedStorageBehindLegacyHistory({
         adapter,
         newestApplied: "legacy",
-        nextPending: "current",
+        newestRecordsFieldGroups: true,
+        pending: [pending("move", "current", true)],
       })
     ).resolves.toBeUndefined();
   });
@@ -174,7 +175,8 @@ describe("a moved database behind a legacy history", () => {
       refuseMovedStorageBehindLegacyHistory({
         adapter,
         newestApplied: "legacy",
-        nextPending: "legacy",
+        newestRecordsFieldGroups: true,
+        pending: [pending("edit", "legacy", true)],
       })
     ).rejects.toThrow(/nextly migrate:create --field-group-names=current/);
   });
@@ -185,11 +187,73 @@ describe("a moved database behind a legacy history", () => {
       refuseMovedStorageBehindLegacyHistory({
         adapter,
         newestApplied: "legacy",
-        nextPending: undefined,
+        newestRecordsFieldGroups: true,
+        pending: [],
       })
     ).resolves.toBeUndefined();
   });
+
+  // A history that records no field group is on neither naming: a moved database holds what it
+  // describes, and a pending file that records none plans nothing against a field-group table.
+  it("goes on where neither the applied history nor the pending files record a field group", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        newestRecordsFieldGroups: false,
+        pending: [pending("upgrade", "legacy", false), pending("blank")],
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("is refused at a pending file that plans field groups under the legacy names, naming it", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        newestRecordsFieldGroups: false,
+        pending: [
+          pending("upgrade", "legacy", false),
+          pending("add_card", "legacy", true),
+        ],
+      })
+    ).rejects.toThrow(/pending migration add_card\.sql plans field groups/);
+  });
+
+  it("goes on where the move to the current names comes before a file with field groups", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        newestRecordsFieldGroups: false,
+        pending: [
+          pending("move", "current", false),
+          pending("add_card", "legacy", true),
+        ],
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("still refuses a history that records field groups when the next file is not the move", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        newestRecordsFieldGroups: true,
+        pending: [pending("upgrade", "legacy", false)],
+      })
+    ).rejects.toThrow(/history is still on the legacy ones/);
+  });
 });
+
+/** A pending file as the naming check reads it. */
+function pending(
+  name: string,
+  naming?: "legacy" | "current",
+  recordsFieldGroups = false
+) {
+  return { file: `${name}.sql`, naming, recordsFieldGroups };
+}
 
 describe("a legacy snapshot read under a moved database's names", () => {
   const legacySnapshot = {
