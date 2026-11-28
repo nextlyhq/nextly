@@ -33,7 +33,18 @@ interface Outcome {
 
 const KEPT: Outcome = { posts: "kept", middle: "kept", guest: "kept" };
 
-describe.each(LOCK_DIALECTS.filter(dialect => dialect !== "sqlite"))(
+/** The servers configured for this run: the keys need a schema or database to reach into. */
+const SERVERS = LOCK_DIALECTS.filter(dialect => dialect !== "sqlite");
+
+// A run with neither server configured, as the SQLite leg is, still holds a suite: one that says
+// why it runs nothing, rather than a file Vitest refuses for having none.
+if (SERVERS.length === 0) {
+  describe.skip("the rows a run removes through keys it adds", () => {
+    it("needs a PostgreSQL or MySQL server", () => {});
+  });
+}
+
+describe.each(SERVERS)(
   "the rows a run removes through keys it adds, on %s",
   dialect => {
     const P = `fdk_${randomBytes(3).toString("hex")}`;

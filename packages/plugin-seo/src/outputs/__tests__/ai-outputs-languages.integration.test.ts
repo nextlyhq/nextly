@@ -105,7 +105,10 @@ describe.each(getConfiguredTestDialects())(
       expect(german.body).toMatch(
         /^---\n[\s\S]*\nurl: https:\/\/acme\.de\/ueber\n/
       );
-      expect(german.body.endsWith("---\n\n# Über uns\n")).toBe(true);
+      expect(
+        german.body.endsWith("---\n\n# Über uns\n"),
+        JSON.stringify(german.body)
+      ).toBe(true);
       expect(german.link).toBe('<https://acme.de/ueber>; rel="canonical"');
 
       const english = await ask(`${SITE}/about.md`);
