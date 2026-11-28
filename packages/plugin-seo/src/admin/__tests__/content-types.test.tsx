@@ -170,7 +170,9 @@ describe("the Content types tab", () => {
     expect(button.getAttribute("aria-checked")).toBe("false");
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(within(list).getByText(/left out in the site's code/)).toBeTruthy();
-    expect(within(list).getByText(/holds no words/)).toBeTruthy();
+    expect(
+      within(list).getByText(/copies don't write this kind of field/)
+    ).toBeTruthy();
   });
 
   it("offers no FAQ section on a type whose pages are Questions and answers already", () => {

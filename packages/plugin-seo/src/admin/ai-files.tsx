@@ -207,7 +207,9 @@ function GroupRow({
   const heading = choice?.heading ?? "";
   const shown = heading.trim() === "" ? group.defaultHeading : heading.trim();
   return (
-    <li className="grid gap-2 border-b border-border px-3 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    // Stacked at every width: the control column is narrow beside the row's
+    // label, so the heading takes the whole line and its choices sit below.
+    <li className="grid gap-2 border-b border-border px-3 py-3 last:border-b-0">
       <div className="grid gap-1">
         <label htmlFor={`${id}-heading`} className="sr-only">
           Heading for {group.defaultHeading}
@@ -229,7 +231,7 @@ function GroupRow({
             : ` · listed as ${shown}, not ${group.defaultHeading}`}
         </span>
       </div>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <label className="flex items-center gap-2 text-sm text-foreground">
           <Checkbox
             checked={choice?.optional === true}
@@ -249,7 +251,7 @@ function GroupRow({
           />
           Leave out
         </label>
-        <span className="flex gap-1">
+        <span className="ml-auto flex gap-1">
           <Button
             type="button"
             variant="ghost"
@@ -667,14 +669,18 @@ function PreviewRow({
           <>
             <pre
               aria-label="Preview of llms.txt"
-              className="max-h-96 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-foreground"
+              // It scrolls, so it takes focus, for a keyboard to scroll it.
+              tabIndex={0}
+              className="max-h-96 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {preview.body.preview}
             </pre>
             <ControlNote>
               {preview.body.lines > PREVIEW_LINES
                 ? `The first ${PREVIEW_LINES} of ${preview.body.lines} lines.`
-                : `All ${preview.body.lines} lines.`}
+                : preview.body.lines === 1
+                  ? "The whole file, one line."
+                  : `The whole file, ${preview.body.lines} lines.`}
             </ControlNote>
           </>
         ) : preview.state === "failed" ? (
@@ -715,7 +721,7 @@ export function AiFilesRows({
 /** Why a field is left out whatever the list says, as the list says it. */
 const LEFT_OUT_WHY: Readonly<Record<"code" | "kind", string>> = {
   code: "left out in the site's code",
-  kind: "left out; it holds no words, such as a number, a date or code",
+  kind: "left out; copies don't write this kind of field",
 };
 
 /** `files` with `field` of the type `key` in its copies or left out. */
@@ -763,8 +769,9 @@ export function CopyFieldsChoice({
       <ul className="grid gap-1.5">
         {fields.map(field => (
           <li key={field.name}>
-            <label className="flex items-center gap-2 text-sm text-foreground">
+            <label className="flex items-start gap-2 text-sm text-foreground">
               <Checkbox
+                className="mt-0.5"
                 checked={
                   field.leftOut === undefined && !leftOut.has(field.name)
                 }
@@ -781,12 +788,22 @@ export function CopyFieldsChoice({
                   }))
                 }
               />
-              <span>{field.label}</span>
-              {field.leftOut === undefined ? null : (
-                <span className="text-xs text-muted-foreground">
-                  {LEFT_OUT_WHY[field.leftOut]}
+              {/* The reason sits under the name, so a narrow screen wraps
+                  neither. */}
+              <span className="grid gap-0.5">
+                <span
+                  className={
+                    field.leftOut === undefined ? "" : "text-muted-foreground"
+                  }
+                >
+                  {field.label}
                 </span>
-              )}
+                {field.leftOut === undefined ? null : (
+                  <span className="text-xs text-muted-foreground">
+                    {LEFT_OUT_WHY[field.leftOut]}
+                  </span>
+                )}
+              </span>
             </label>
           </li>
         ))}

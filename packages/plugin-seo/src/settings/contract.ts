@@ -112,7 +112,8 @@ export interface MappableField {
  * A top-level field of a type as the "In plain-text copies" list offers it:
  * its name and label, and why it is left out whatever the site chooses
  * there: the site's code leaves it out (`custom: { seo: { copy: false } }`),
- * or its kind holds no words a copy can say (a number, a date, code, JSON).
+ * or a copy doesn't write its kind of field (a number, a date, code, JSON,
+ * a Page Builder layout, whose words come from the rendered page).
  */
 export interface CopyFieldChoice {
   name: string;
