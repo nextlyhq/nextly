@@ -91,7 +91,7 @@ export interface CheckedFeed {
 }
 
 /** How many items a feed holds where its options say nothing. */
-export const DEFAULT_FEED_ITEMS = 20;
+const DEFAULT_FEED_ITEMS = 20;
 
 /** The fewest and most items a feed may hold. */
 const FEED_ITEMS = { least: 10, most: 50 } as const;
@@ -149,6 +149,44 @@ function refuse(message: string): never {
   throw NextlyError.invalidInput({ message: `seoPlugin feeds: ${message}` });
 }
 
+/** The feed's options, parsed; refused, naming the feed and the option that is wrong, where they are not. */
+function parsedFeed(
+  name: string,
+  option: FeedOption
+): z.infer<typeof feedSchema> {
+  const parsed = feedSchema.safeParse(option);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  const at = issue?.path.join(".") ?? "";
+  refuse(`"${name}"${at === "" ? "" : `.${at}`} ${issue?.message ?? ""}`);
+}
+
+/** One feed's parsed options with its defaults filled. */
+function filledFeed(
+  name: string,
+  feed: z.infer<typeof feedSchema>
+): CheckedFeed {
+  const collections: string[] = [];
+  const code: FeedSource[] = [];
+  for (const source of feed.sources) {
+    if (typeof source === "string") collections.push(source);
+    else code.push(source);
+  }
+  return {
+    name,
+    path: feed.path,
+    ...(feed.title === undefined ? {} : { title: feed.title }),
+    ...(feed.description === undefined
+      ? {}
+      : { description: feed.description }),
+    link: feed.link ?? folderOf(feed.path),
+    collections,
+    code,
+    limit: feed.limit ?? DEFAULT_FEED_ITEMS,
+    everyPage: feed.everyPage ?? feed.path === "/feed.xml",
+  };
+}
+
 /**
  * The feeds the options name, checked, with their defaults filled; none
  * where they name none. Two feeds at one address are refused.
@@ -160,35 +198,13 @@ export function checkedFeeds(
   const checked: CheckedFeed[] = [];
   const paths = new Map<string, string>();
   for (const [name, option] of Object.entries(feeds)) {
-    const parsed = feedSchema.safeParse(option);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const at = issue?.path.join(".") ?? "";
-      refuse(`"${name}"${at === "" ? "" : `.${at}`} ${issue?.message ?? ""}`);
-    }
-    const feed = parsed.data;
+    const feed = parsedFeed(name, option);
     const other = paths.get(feed.path);
     if (other !== undefined) {
       refuse(`"${name}" and "${other}" are both served at ${feed.path}`);
     }
     paths.set(feed.path, name);
-    checked.push({
-      name,
-      path: feed.path,
-      ...(feed.title === undefined ? {} : { title: feed.title }),
-      ...(feed.description === undefined
-        ? {}
-        : { description: feed.description }),
-      link: feed.link ?? folderOf(feed.path),
-      collections: feed.sources.filter(
-        (source): source is string => typeof source === "string"
-      ),
-      code: feed.sources.filter(
-        (source): source is FeedSource => typeof source === "function"
-      ),
-      limit: feed.limit ?? DEFAULT_FEED_ITEMS,
-      everyPage: feed.everyPage ?? feed.path === "/feed.xml",
-    });
+    checked.push(filledFeed(name, feed));
   }
   return checked;
 }
