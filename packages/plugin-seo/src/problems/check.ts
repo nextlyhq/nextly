@@ -46,6 +46,11 @@ import {
   type CopyFailure,
 } from "../outputs/copy-failures";
 import {
+  forgetFullFileCuts,
+  fullFileCuts,
+  type FullFileCut,
+} from "../outputs/full-file-cut";
+import {
   listedPageAt,
   listPages,
   type ListedPage,
@@ -62,6 +67,7 @@ import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readRouteValues, routeValuesKey } from "../route-values/store";
+import { servesFolderFiles } from "../settings/ai-files";
 import {
   crawledPathOf,
   robotsBlockOf,
@@ -92,6 +98,7 @@ import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
   connectionProblems,
+  llmsFullCutProblems,
   plainCopyProblems,
   listingProblems,
   noAddressProblems,
@@ -1192,7 +1199,38 @@ async function siteProblems(
     ...connectionProblems(await connectionsReport(ctx, checks)),
     // Pages whose copy failed are public pages the sitemap lists, by address.
     ...plainCopyProblems(await servedCopyFailures(ctx, checks)),
+    ...llmsFullCutProblems(await servedFullFileCuts(ctx, checks)),
   ];
+}
+
+/**
+ * The llms-full.txt files noted as stopping short that are still served:
+ * while llms.txt and llms-full.txt are on, the site's own, and a folder's
+ * while the settings give it files of its own. The rest are forgotten. A
+ * site with none pays one read.
+ */
+async function servedFullFileCuts(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<FullFileCut[]> {
+  const cuts = await fullFileCuts(ctx);
+  if (cuts.length === 0) return [];
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const on = rules.llmsTxt === true && rules.llmsFullTxt === true;
+  const kept: FullFileCut[] = [];
+  const gone: string[] = [];
+  for (const cut of cuts) {
+    const path = new URL(cut.file).pathname;
+    const folder = /^\/([^/]+)\/llms-full\.txt$/.exec(path)?.[1];
+    const served =
+      on &&
+      (path === "/llms-full.txt" ||
+        (folder !== undefined && servesFolderFiles(rules, folder)));
+    if (served) kept.push(cut);
+    else gone.push(cut.file);
+  }
+  if (gone.length > 0) await forgetFullFileCuts(ctx, gone);
+  return kept;
 }
 
 /**

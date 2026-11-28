@@ -186,12 +186,17 @@ describe("seoPlugin", () => {
       // Registered always; it answers once switched on in the settings.
       ["GET", "/llms.txt", "root", true],
       ["GET", "/llms-full.txt", "root", true],
+      // A folder's own llms files, through withNextly's rewrite.
+      ["GET", "/llms-files/:section/llms.txt", "root", true],
+      ["GET", "/llms-files/:section/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The cards a page's own picture is served as, fetched by networks.
       ["GET", "/share-card/:media/:file", undefined, true],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
+      // The AI files card's groups and llms.txt preview.
+      ["POST", "/settings/ai-files/preview", undefined, undefined],
       // Which sitemap pages own robots.txt rules being typed would block.
       ["POST", "/settings/robots-rules-check", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
@@ -306,9 +311,12 @@ describe("seoPlugin", () => {
       "/robots.txt",
       "/llms.txt",
       "/llms-full.txt",
+      "/llms-files/:section/llms.txt",
+      "/llms-files/:section/llms-full.txt",
       "/share-image",
       "/share-card/:media/:file",
       "/settings/content-types",
+      "/settings/ai-files/preview",
       "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
@@ -358,9 +366,12 @@ describe("seoPlugin", () => {
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
       "/llms-full.txt",
+      "/llms-files/:section/llms.txt",
+      "/llms-files/:section/llms-full.txt",
       "/share-image",
       "/share-card/:media/:file",
       "/settings/content-types",
+      "/settings/ai-files/preview",
       "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",

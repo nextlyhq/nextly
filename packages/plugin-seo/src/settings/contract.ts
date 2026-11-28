@@ -99,6 +99,18 @@ export interface MappableField {
   kind?: "built-in" | "seo";
 }
 
+/**
+ * A top-level field of a type as the "In plain-text copies" list offers it:
+ * its name and label, and why it is left out whatever the site chooses
+ * there: the site's code leaves it out (`custom: { seo: { copy: false } }`),
+ * or its kind holds no words a copy can say (a number, a date, code, JSON).
+ */
+export interface CopyFieldChoice {
+  name: string;
+  label: string;
+  leftOut?: "code" | "kind";
+}
+
 /** A page of a type a pattern is previewed with: its title and fields. */
 export interface PatternExample {
   /** The page's title, which `{Title}` stands for. */
@@ -135,6 +147,8 @@ export interface SeoContentType {
   count?: number;
   /** The type's own fields a structured data detail may be read from. */
   mappableFields: MappableField[];
+  /** Its top-level fields, as its plain-text copies read or leave them out. */
+  copyFields?: CopyFieldChoice[];
   /** Whether its pages have a public address yet. */
   public: boolean;
 }

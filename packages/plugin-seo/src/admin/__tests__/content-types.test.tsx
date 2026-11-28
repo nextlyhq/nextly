@@ -144,6 +144,35 @@ describe("the Content types tab", () => {
     expect(latest.structuredData.posts).toEqual({});
   });
 
+  it("leaves a field out of the type's plain-text copies, and puts it back, with the fields left out whatever is chosen greyed", () => {
+    const withFields = seoType("posts", "Posts", {
+      copyFields: [
+        { name: "body", label: "Body" },
+        { name: "aside", label: "Aside" },
+        { name: "buttonLabel", label: "Button label", leftOut: "code" },
+        { name: "price", label: "Price", leftOut: "kind" },
+      ],
+    });
+    render(<Tab types={[withFields]} />);
+    fireEvent.click(
+      within(row("Posts")).getByRole("button", { name: /Posts/ })
+    );
+    const list = screen.getByRole("group", { name: "In plain-text copies" });
+    const aside = within(list).getByRole("checkbox", { name: /Aside/ });
+    expect(aside.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(aside);
+    expect(latest.aiFiles.copyLeftOut).toEqual({ posts: ["aside"] });
+    fireEvent.click(aside);
+    expect(latest.aiFiles.copyLeftOut).toEqual({});
+
+    const button = within(list).getByRole("checkbox", { name: /Button label/ });
+    expect(button.getAttribute("aria-checked")).toBe("false");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(within(list).getByText(/left out in the site's code/)).toBeTruthy();
+    expect(within(list).getByText(/holds no words/)).toBeTruthy();
+  });
+
   it("offers no FAQ section on a type whose pages are Questions and answers already", () => {
     render(
       <Tab types={[posts]} structuredData={{ posts: { type: "faqPage" } }} />

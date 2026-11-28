@@ -26,6 +26,9 @@ const KEY_FILE = "/:key([0-9a-f]{32}).txt";
 /** The sources of the feed files' rewrites. */
 const FEED_FILES = ["/feed.xml", "/:section/feed.xml"];
 
+/** The sources of a folder's own llms files' rewrites. */
+const FOLDER_LLMS_FILES = ["/:section/llms.txt", "/:section/llms-full.txt"];
+
 describe("withNextly serves the site's root files from plugins", () => {
   it("rewrites robots.txt, sitemap.xml, llms.txt and llms-full.txt to the API handler, after the site's own files", async () => {
     const { afterFiles, beforeFiles, fallback } = await rewritesOf(
@@ -45,6 +48,14 @@ describe("withNextly serves the site's root files from plugins", () => {
       {
         source: "/:section/feed.xml",
         destination: "/admin/api/feed-files/:section/feed.xml",
+      },
+      {
+        source: "/:section/llms.txt",
+        destination: "/admin/api/llms-files/:section/llms.txt",
+      },
+      {
+        source: "/:section/llms-full.txt",
+        destination: "/admin/api/llms-files/:section/llms-full.txt",
       },
     ]);
     expect(beforeFiles).toEqual([]);
@@ -85,7 +96,7 @@ describe("withNextly serves the site's root files from plugins", () => {
     );
     expect(fromPhases.beforeFiles).toEqual([own]);
     expect(fromPhases.afterFiles[0]).toEqual(own);
-    expect(fromPhases.afterFiles).toHaveLength(8);
+    expect(fromPhases.afterFiles).toHaveLength(10);
     expect(fromPhases.fallback).toEqual([own]);
   });
 
@@ -104,6 +115,7 @@ describe("withNextly serves the site's root files from plugins", () => {
       "/llms-full.txt",
       KEY_FILE,
       ...FEED_FILES,
+      ...FOLDER_LLMS_FILES,
     ]);
     expect(fallback).toEqual([theirs]);
   });
@@ -136,6 +148,10 @@ describe("withNextly serves the site's root files from plugins", () => {
       // The site's own feed pattern keeps a folder's feed.xml; the root's is
       // not one it matches.
       "/feed.xml",
+      // Its blog rule keeps the blog folder's llms files; every other
+      // folder's reaches the plugins.
+      "/:section((?:(?!(?:blog)/)[^/]+))/llms.txt",
+      "/:section((?:(?!(?:blog)/)[^/]+))/llms-full.txt",
     ]);
   });
 
@@ -295,5 +311,51 @@ describe("withNextly serves feed files from plugins", () => {
       )
     ).toBe(false);
     expect(sources(afterFiles)).toContain("/feed.xml");
+  });
+});
+
+describe("withNextly serves a folder's own llms files from plugins", () => {
+  it("rewrites llms.txt and llms-full.txt in one folder to the handler's routes for them, as Next matches them", async () => {
+    const { afterFiles } = await rewritesOf(
+      withNextly({}, { apiRoute: "/cms/api" })
+    );
+    expect(afterFiles).toContainEqual({
+      source: "/:section/llms.txt",
+      destination: "/cms/api/llms-files/:section/llms.txt",
+    });
+    expect(afterFiles).toContainEqual({
+      source: "/:section/llms-full.txt",
+      destination: "/cms/api/llms-files/:section/llms-full.txt",
+    });
+
+    // Next's own matcher: one folder deep and no deeper, and only the file.
+    const list = getPathMatch("/:section/llms.txt");
+    expect(list("/docs/llms.txt")).toEqual({ section: "docs" });
+    expect(list("/docs/guides/llms.txt")).toBe(false);
+    expect(list("/docs/llms-full.txt")).toBe(false);
+    expect(list("/llms.txt")).toBe(false);
+  });
+
+  it("leaves a folder's files to a site that rewrites them itself, and all of them when turned off", async () => {
+    const theirs = [
+      { source: "/docs/llms.txt", destination: "/api/docs-llms" },
+    ];
+    const { afterFiles } = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: theirs }) })
+    );
+    const list = afterFiles.find(rule =>
+      rule.destination.endsWith("/llms-files/:section/llms.txt")
+    );
+    const ours = getPathMatch(list?.source ?? "");
+    expect(ours("/docs/llms.txt")).toBe(false);
+    expect(ours("/guides/llms.txt")).toEqual({ section: "guides" });
+    // The folder's llms-full.txt is not one the site rewrites.
+    expect(sources(afterFiles)).toContain("/:section/llms-full.txt");
+
+    const off = await rewritesOf(withNextly({}, { folderLlmsFiles: false }));
+    for (const source of FOLDER_LLMS_FILES) {
+      expect(sources(off.afterFiles)).not.toContain(source);
+    }
+    expect(sources(off.afterFiles)).toContain("/llms.txt");
   });
 });

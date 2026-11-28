@@ -42,7 +42,7 @@ import { feedLinksOf } from "../feeds/links";
 import type { CheckedFeed } from "../feeds/options";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
-import { isRecord, textOf } from "../plain-values";
+import { isRecord } from "../plain-values";
 import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
 import {
   ownTitleIn,
@@ -58,13 +58,30 @@ import {
   type RouteRecord,
   type RouteValuesPage,
 } from "../route-values/store";
+import {
+  CODE_GROUP_PREFIX,
+  extraLinksOf,
+  folderHeading,
+  FULL_MB_DEFAULT,
+  servesFolderFiles,
+  type AiFiles,
+} from "../settings/ai-files";
 
 import { noteCopyResults, type CopyFailure } from "./copy-failures";
+import { noteFullFileCut } from "./full-file-cut";
 import { listedPageAt, listPages, type ListedPage } from "./listing";
 import {
-  llmsFullTxt,
+  inFolderFiles,
+  inFullFile,
+  llmsListOf,
+  type GroupedPage,
+  type LlmsGroup,
+} from "./llms-groups";
+import {
+  llmsFullFile,
   llmsTxt,
   type LlmsEntry,
+  type LlmsExtraSection,
   type LlmsFullPage,
 } from "./llms-txt";
 import {
@@ -89,6 +106,9 @@ import {
 } from "./rendered-fetch";
 import { siteOriginFor } from "./site-origin";
 
+/** The fields each content type leaves out of its copies, by the type's key. */
+type CopyLeftOut = NonNullable<AiFiles["copyLeftOut"]>;
+
 /** What the AI outputs read: the site's rules, and what the sitemap lists. */
 export interface AiOutputsConfig {
   readRules: ReadRules;
@@ -110,43 +130,6 @@ export interface AiOutputsConfig {
   collections?: readonly string[];
   /** The site's RSS feeds, which llms.txt names in its head. */
   feeds?: readonly CheckedFeed[];
-}
-
-/** The heading a page of a Single is listed under in llms.txt. */
-const SINGLES_SECTION = "Pages";
-
-/** A collection's plural label, as the admin's lists use it. */
-async function collectionLabel(
-  ctx: PluginContext,
-  slug: string
-): Promise<string> {
-  const meta: unknown = await ctx.services.collections.getCollection(slug, {});
-  const record = isRecord(meta) ? meta : {};
-  const labels = isRecord(record.labels) ? record.labels : {};
-  return (
-    textOf(labels.plural) ??
-    textOf(labels.singular) ??
-    textOf(record.label) ??
-    slug
-  );
-}
-
-/** The heading each listed page goes under, its type's label read once. */
-async function sectionsOf(
-  ctx: PluginContext,
-  pages: readonly ListedPage[]
-): Promise<Map<string, string>> {
-  const sections = new Map<string, string>();
-  for (const { holder } of pages) {
-    if (sections.has(holder.collection)) continue;
-    sections.set(
-      holder.collection,
-      holder.collection.startsWith("single:")
-        ? SINGLES_SECTION
-        : await collectionLabel(ctx, holder.collection)
-    );
-  }
-  return sections;
 }
 
 /**
@@ -276,16 +259,12 @@ async function listedHeads(
   };
 }
 
-/**
- * The pages both llms files list, as the sitemap lists them, with the site's
- * rules read once per language for the whole file, as the listing reads
- * them, not once a page.
- */
-async function llmsPagesOf(
+/** The pages the sitemap lists at `origin`, with the site's rules read once per language. */
+async function sitemapPagesOf(
   ctx: PluginContext,
   origin: string,
   config: AiOutputsConfig
-): Promise<{ pages: readonly ListedPage[]; readRules: ReadRules }> {
+): Promise<{ pages: ListedPage[]; readRules: ReadRules }> {
   const readRules = onceEach(config.readRules);
   const { pages } = await listPages(ctx, {
     origin,
@@ -301,27 +280,97 @@ async function llmsPagesOf(
 }
 
 /**
+ * The pages both llms files list, as the sitemap lists them, grouped and
+ * ordered as the site's settings choose (`llmsListOf`), with the site's
+ * rules read once per language for the whole file, as the listing reads
+ * them, not once a page. Narrowed to `folder`'s pages, where given, for
+ * that folder's own files.
+ */
+async function llmsPagesOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig,
+  rules: SiteRules,
+  folder?: string
+): Promise<{ listed: GroupedPage[]; readRules: ReadRules }> {
+  const { pages, readRules } = await sitemapPagesOf(ctx, origin, config);
+  const { listed } = await llmsListOf(ctx, pages, rules.aiFiles);
+  return {
+    listed: folder === undefined ? listed : inFolderFiles(listed, folder),
+    readRules,
+  };
+}
+
+/**
+ * The groups of pages llms.txt lists at `origin`, left out or not, as the
+ * settings screen offers them, grouped by `files`: the choices as the
+ * screen holds them.
+ */
+export async function llmsGroupsOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig,
+  files: AiFiles | undefined
+): Promise<LlmsGroup[]> {
+  const { pages } = await sitemapPagesOf(ctx, origin, config);
+  return (await llmsListOf(ctx, pages, files)).groups;
+}
+
+/** Each folder with files of its own, by its heading and its llms.txt's address. */
+function folderFilesOf(
+  origin: string,
+  rules: SiteRules
+): { title: string; url: string }[] {
+  return (rules.aiFiles?.folderFiles ?? []).map(folder => ({
+    title: folderTitleOf(rules, folder),
+    url: new URL(`/${folder}/llms.txt`, origin).href,
+  }));
+}
+
+/**
+ * What a folder's files are named by: the heading the site gives the pages
+ * built in code in it, where it renames them, else the folder's name.
+ */
+function folderTitleOf(rules: SiteRules, folder: string): string {
+  const renamed = rules.aiFiles?.groups?.find(
+    group => group.key === `${CODE_GROUP_PREFIX}${folder}`
+  )?.heading;
+  return renamed ?? folderHeading(folder);
+}
+
+/**
  * The llms.txt of the site at `origin`, by the site's `rules`, or null while
  * it is switched off. Each page links to its plain-text copy where copies are
  * switched on and the public may read it, else to the page itself; a page
  * the public may not read is listed by its address alone, as the sitemap
- * lists it.
+ * lists it. Pages are listed under the sections the settings choose
+ * (`llmsListOf`), the site's own sections of links after them. Given a
+ * `folder`, the folder's own llms.txt: only its pages, and null unless the
+ * settings give the folder files of its own.
  */
 export async function llmsTxtOf(
   ctx: PluginContext,
   origin: string,
   config: AiOutputsConfig,
-  rules: SiteRules
+  rules: SiteRules,
+  folder?: string
 ): Promise<string | null> {
   if (rules.llmsTxt !== true) return null;
-  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
-  const sections = await sectionsOf(ctx, pages);
+  if (folder !== undefined && !servesFolderFiles(rules, folder)) return null;
+  const { listed, readRules } = await llmsPagesOf(
+    ctx,
+    origin,
+    config,
+    rules,
+    folder
+  );
+  const pages = listed.map(each => each.page);
   const linked = await linkedCopies(ctx, pages, rules, config);
   const headOf = await listedHeads(ctx, pages, config, readRules);
-  const entries: LlmsEntry[] = pages.map((page, at) => {
+  const entries: LlmsEntry[] = listed.map(({ page, section }, at) => {
     const head = headOf(at);
     return {
-      section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
+      section,
       title: listedName(head) ?? page.path,
       url: (head.readable ? linked(at) : undefined) ?? page.loc,
       ...(head.description === undefined
@@ -330,26 +379,65 @@ export async function llmsTxtOf(
     };
   });
   return llmsTxt({
-    ...fileHeadOf(origin, rules),
+    ...fileHeadOf(origin, rules, folder),
     ...(rules.llmsFullTxt === true
-      ? { fullTxt: new URL("/llms-full.txt", origin).href }
+      ? { fullTxt: new URL(fullTxtPath(folder), origin).href }
       : {}),
-    feeds: feedLinksOf(config.feeds ?? [], rules, origin),
+    // The site's feeds, its folders' files and its own sections are the
+    // whole site's, named in its own llms.txt alone.
+    ...(folder === undefined
+      ? {
+          feeds: feedLinksOf(config.feeds ?? [], rules, origin),
+          folderFiles: folderFilesOf(origin, rules),
+          extraSections: extraSectionsOf(origin, rules),
+        }
+      : { folder: true }),
     entries,
   });
 }
 
-/** What both llms files begin with: the site's name, summary and own words. */
+/** Where llms-full.txt is served: the site's, or a folder's. */
+const fullTxtPath = (folder: string | undefined): string =>
+  folder === undefined ? "/llms-full.txt" : `/${folder}/llms-full.txt`;
+
+/** Where llms.txt is served: the site's, or a folder's. */
+const llmsTxtPath = (folder: string | undefined): string =>
+  folder === undefined ? "/llms.txt" : `/${folder}/llms.txt`;
+
+/**
+ * The site's own sections of links, each link's address made whole
+ * against `origin` where it is written from the site's root.
+ */
+function extraSectionsOf(origin: string, rules: SiteRules): LlmsExtraSection[] {
+  return (rules.aiFiles?.extraSections ?? []).map(section => ({
+    heading: section.heading,
+    links: extraLinksOf(section.links).map(link => ({
+      ...link,
+      url: new URL(link.url, origin).href,
+    })),
+  }));
+}
+
+/**
+ * What both llms files begin with: the site's name, summary and own words;
+ * a folder's files are named by the site and the folder, and carry the
+ * summary without the site's own words, which are said in its llms.txt.
+ */
 function fileHeadOf(
   origin: string,
-  rules: SiteRules
+  rules: SiteRules,
+  folder?: string
 ): { name: string; description?: string; intro?: string } {
+  const site = rules.siteName ?? new URL(origin).host;
   return {
-    name: rules.siteName ?? new URL(origin).host,
+    name:
+      folder === undefined ? site : `${site}: ${folderTitleOf(rules, folder)}`,
     ...(rules.description === undefined
       ? {}
       : { description: rules.description }),
-    ...(rules.llmsIntro === undefined ? {} : { intro: rules.llmsIntro }),
+    ...(rules.llmsIntro === undefined || folder !== undefined
+      ? {}
+      : { intro: rules.llmsIntro }),
   };
 }
 
@@ -379,6 +467,8 @@ interface FullWriting {
   headOf: (at: number) => ListedHead;
   fields: ReadonlyMap<string, readonly CopyField[] | undefined>;
   titleFields: TitleFields | undefined;
+  /** The fields each type leaves out of its copies, by the type's key. */
+  copyLeftOut: CopyLeftOut | undefined;
   /** Whether the site's pages may be rendered (`rendersPages`). */
   renders: boolean;
   /** When rendering stops, as a time in milliseconds. */
@@ -399,18 +489,35 @@ interface FullWriting {
  * problem list. A page the public may not read is named by its address
  * alone. Each type's fields and every page's document are read once for the
  * file, and a page's words are built only as the file takes the page, so
- * none past where the file stops short is ever built. `maxBytes` is the
- * file's size, 5 MB unless given; only a test gives a smaller one.
+ * none past where the file stops short is ever built. It holds what the
+ * settings choose of llms.txt's pages (`inFullFile`), and stops at the size
+ * they choose, 5 MB unless chosen (`maxBytes` where given, as only a test
+ * gives it); a file cut short is noted for the problem list, and the note
+ * taken off once it fits. Given a `folder`, the folder's own llms-full.txt:
+ * only its pages, and null unless the settings give it files of its own.
  */
 export async function llmsFullTxtOf(
   ctx: PluginContext,
   origin: string,
   config: AiOutputsConfig,
   rules: SiteRules,
-  maxBytes?: number
+  maxBytes?: number,
+  folder?: string
 ): Promise<string | null> {
   if (rules.llmsTxt !== true || rules.llmsFullTxt !== true) return null;
-  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
+  if (folder !== undefined && !servesFolderFiles(rules, folder)) return null;
+  const { listed, readRules } = await llmsPagesOf(
+    ctx,
+    origin,
+    config,
+    rules,
+    folder
+  );
+  // A folder's file holds the folder's pages; the site's, what its
+  // settings choose of every page llms.txt lists.
+  const pages = (
+    folder === undefined ? inFullFile(listed, rules.aiFiles) : listed
+  ).map(each => each.page);
   const headOf = await listedHeads(ctx, pages, config, readRules);
   // The fields of each type with a page the public may read, one read a
   // type, taken before the file is written so the pages can be built as
@@ -422,13 +529,14 @@ export async function llmsFullTxtOf(
       fields.set(collection, await fieldsOf(ctx, collection));
     }
   }
-  const fullAddress = new URL("/llms-full.txt", origin).href;
+  const fullAddress = new URL(fullTxtPath(folder), origin).href;
   const writing: FullWriting = {
     ctx,
     config,
     headOf,
     fields,
     titleFields: rules.titleFields,
+    copyLeftOut: rules.aiFiles?.copyLeftOut,
     renders: await rendersPages(ctx, config),
     deadline: Date.now() + FULL_RENDER_BUDGET_MS,
     // Asking for this file again renders the page again, whatever holds
@@ -436,14 +544,22 @@ export async function llmsFullTxtOf(
     retry: fullAddress,
     results: { failed: [], made: [] },
   };
-  const file = await llmsFullTxt({
-    ...fileHeadOf(origin, rules),
+  const limit =
+    maxBytes ??
+    (rules.aiFiles?.fullMaxMegabytes ?? FULL_MB_DEFAULT) * 1024 * 1024;
+  const file = await llmsFullFile({
+    ...fileHeadOf(origin, rules, folder),
     pages: fullPagesOf(pages, writing),
-    listUrl: new URL("/llms.txt", origin).href,
-    ...(maxBytes === undefined ? {} : { maxBytes }),
+    listUrl: new URL(llmsTxtPath(folder), origin).href,
+    maxBytes: limit,
   });
   await noteCopyResults(ctx, writing.results.failed, writing.results.made);
-  return file;
+  await noteFullFileCut(
+    ctx,
+    fullAddress,
+    file.cut ? { limit, leftOut: pages.length - file.written } : null
+  );
+  return file.text;
 }
 
 /** Keep what rendering `page` gave in `results`. */
@@ -501,6 +617,7 @@ async function documentBodyOf(
   const stored = await documentCopyOf(writing.ctx, page, head.document, head, {
     fields: writing.fields.get(page.holder.collection),
     titleFields: writing.titleFields,
+    copyLeftOut: writing.copyLeftOut,
   });
   if (holdsWords(stored)) {
     // Its words are had: a failure noted for it before is settled.
@@ -1066,9 +1183,11 @@ async function copyOf(
   const head = await publicHead(ctx, page, document, readRules, route);
   // The stored copy without front matter, so a page whose stored fields
   // hold no words can be copied from its rendered page instead.
+  const { titleFields, aiFiles } = await readRules(ctx, page.language);
   const stored = await documentCopyOf(ctx, page, document, head, {
     fields: await fieldsOf(ctx, page.holder.collection),
-    titleFields: (await readRules(ctx, page.language)).titleFields,
+    titleFields,
+    copyLeftOut: aiFiles?.copyLeftOut,
   });
   if (holdsWords(stored)) {
     return madeCopy(ctx, page, withFrontMatter(aboutOf(page, head), stored));
@@ -1085,7 +1204,8 @@ async function copyOf(
  * page's own name (`pageNameOf`), the field it was read from said once,
  * and a Single's `title` that is Nextly's left out; each page a
  * relationship field names written by its title, linked to its address;
- * without front matter, which each caller adds where it wants one.
+ * the fields the site leaves out of its type's copies (`copyLeftOut`) left
+ * out; without front matter, which each caller adds where it wants one.
  */
 async function documentCopyOf(
   ctx: PluginContext,
@@ -1095,11 +1215,17 @@ async function documentCopyOf(
   {
     fields,
     titleFields,
+    copyLeftOut,
   }: {
     fields: readonly CopyField[] | undefined;
     titleFields: TitleFields | undefined;
+    copyLeftOut: CopyLeftOut | undefined;
   }
 ): Promise<string> {
+  const skip = [
+    ...(head.labelTitle === true ? ["title"] : []),
+    ...(copyLeftOut?.[page.holder.collection] ?? []),
+  ];
   const title = listedName(head);
   const related =
     fields === undefined
@@ -1111,7 +1237,7 @@ async function documentCopyOf(
     document,
     ...(fields === undefined ? {} : { fields }),
     base: page.loc,
-    ...(head.labelTitle === true ? { skip: ["title"] } : {}),
+    ...(skip.length === 0 ? {} : { skip }),
     ...(related === undefined ? {} : { related }),
   });
 }

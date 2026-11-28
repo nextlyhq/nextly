@@ -145,6 +145,7 @@ import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
 import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
+import { aiFilesPreviewRoute } from "./settings/ai-files-route";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -1351,6 +1352,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(types, titleFields),
+    // The groups llms.txt lists, and llms.txt as the choices being edited
+    // would write it.
+    aiFilesPreviewRoute({ ...plainCopies, feeds }),
     // Which sitemap pages the own robots.txt rules being typed would block.
     ownRulesCheckRoute(options, {
       readRules,

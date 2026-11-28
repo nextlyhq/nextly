@@ -22,6 +22,8 @@ import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 import type { StructuredDataTypeRule } from "../structured-data/rules";
 
+import type { AiFiles } from "./ai-files";
+import { storedAiFilesOf } from "./ai-files-stored";
 import { brandDetailsOf, type BrandDetails } from "./brand-details";
 import {
   AI_CRAWLER_CHOICES,
@@ -97,6 +99,11 @@ export interface SeoRules {
   llmsFullTxt?: boolean;
   /** What the site tells AI tools in its own words, at the top of llms.txt. */
   llmsIntro?: string;
+  /**
+   * How the files for AI tools are shaped, where the settings choose and
+   * the stored value passes its rule.
+   */
+  aiFiles?: AiFiles;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
   /**
@@ -245,6 +252,7 @@ async function rulesOf(
       document.llmsFullTxt === true ? true : undefined
     ),
     ...withDefined("llmsIntro", trimmed(document.llmsIntro)),
+    ...withDefined("aiFiles", storedAiFilesOf(document.aiFiles)),
     ...withDefined(
       "plainTextCopies",
       document.plainTextCopies === true ? true : undefined

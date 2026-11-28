@@ -29,6 +29,7 @@ import { humanizeFieldName } from "@nextlyhq/plugin-sdk";
 import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
 
 import { isRecord, textOf } from "../plain-values";
+import { leftOutInCode } from "../settings/ai-files";
 
 /** A field as the type declares it, as far as a copy needs it. */
 export interface CopyField {
@@ -41,6 +42,11 @@ export interface CopyField {
   options?: unknown;
   /** The type a relationship field names pages of. */
   relationTo?: unknown;
+  /**
+   * The field's data for plugins: `{ seo: { copy: false } }` leaves it out
+   * of every copy (`leftOutInCode`).
+   */
+  custom?: unknown;
 }
 
 /** Another page a relationship field names: its title, and its address where it has one. */
@@ -97,7 +103,7 @@ export interface CopySource {
 }
 
 /** Fields that are the page's address, SEO or bookkeeping, never its words. */
-const NOT_CONTENT: ReadonlySet<string> = new Set([
+export const NOT_CONTENT: ReadonlySet<string> = new Set([
   "id",
   "slug",
   "seo",
@@ -778,6 +784,10 @@ const FIELD_READERS: Readonly<Record<string, FieldReader>> = {
   relationship: relationshipField,
 };
 
+/** Whether a copy reads the words of a field of `type`; every other type is left out. */
+export const copyReads = (type: string): boolean =>
+  Object.hasOwn(FIELD_READERS, type);
+
 /** The words of each of `fields` in `document`, in their order. */
 function fieldsWords(
   fields: readonly CopyField[],
@@ -789,6 +799,8 @@ function fieldsWords(
     const read = FIELD_READERS[field.type];
     if (read === undefined || field.name === undefined) continue;
     if (NOT_CONTENT.has(field.name)) continue;
+    // Left out by the site's code, at any depth.
+    if (leftOutInCode(field)) continue;
     if (at.depth === 0 && field.name === at.titleField) continue;
     if (at.depth === 0 && at.skip?.has(field.name) === true) continue;
     read(field, document[field.name], at);

@@ -22,6 +22,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { codePagesSlug } from "../code-pages/collection";
 import { isRecord, textOf } from "../plain-values";
+import type { AiFiles } from "../settings/ai-files";
 import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
 import type { StoredRobotsRules } from "../settings/robots-rules-stored";
@@ -69,6 +70,8 @@ export interface SiteRules {
   llmsFullTxt?: boolean;
   /** What the site tells AI tools in its own words, at the top of llms.txt. */
   llmsIntro?: string;
+  /** How the files for AI tools are shaped, where the settings choose. */
+  aiFiles?: AiFiles;
   /**
    * The field each content type's pages are named from, where the site's
    * options choose one (`titleFields`): what `{Title}` stands for.

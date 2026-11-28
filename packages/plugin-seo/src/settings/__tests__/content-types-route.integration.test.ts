@@ -265,6 +265,13 @@ describe.each(getConfiguredTestDialects())(
             ...SEO_GROUP_FIELDS,
             ...ENTRY_DATES,
           ],
+          // The fields its plain-text copies write, in order: never its
+          // address or its SEO.
+          copyFields: [
+            { name: "title", label: "Title" },
+            { name: "category", label: "Category" },
+            { name: "excerpt", label: "Excerpt" },
+          ],
           example: {
             title: "Surfer SEO vs Rext AI",
             values: {
@@ -292,6 +299,10 @@ describe.each(getConfiguredTestDialects())(
             { name: "name", label: "Name" },
             ...SEO_GROUP_FIELDS,
             ...ENTRY_DATES,
+          ],
+          copyFields: [
+            { name: "title", label: "Title" },
+            { name: "name", label: "Name" },
           ],
           count: 0,
           public: false,
