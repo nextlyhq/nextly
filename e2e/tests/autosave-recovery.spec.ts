@@ -22,6 +22,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { saveFromBar } from "./support/document-bar";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.siteSettings] });
@@ -51,7 +52,7 @@ async function createSavedPost(page: Page, title: string): Promise<string> {
   await // `exact`, because Playwright matches an accessible name as a SUBSTRING by
   // default and this form also has a "Meta Title".
   page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
 
   // The first save stays on the new entry, replacing the create address with
   // the entry's own, which is also the signal that an id now exists. Waiting

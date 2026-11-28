@@ -28,10 +28,7 @@ import {
   liveCompanionColumns,
   localizedColumnsOnMain,
 } from "../runtime/companion-io";
-import {
-  fieldsTurningTranslatedInside,
-  type StructuredField,
-} from "../shared-structure";
+import { fieldsTurningTranslatedInside } from "../shared-structure";
 
 import { companionColumnsThatCannotHold } from "./companion-column-holds";
 import {

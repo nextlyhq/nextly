@@ -102,6 +102,8 @@ describe.each(getConfiguredTestDialects())(
       const first = await waitingFor(t.adapter, query());
       expect(first).toMatchObject({ items: [], totalCapped: true });
       expect(first.next, "the first request names where it stopped").toEqual({
+        // A position in the review states, not among the unmoved parts.
+        source: "state",
         enteredAt: expect.any(Date),
         partKey: expect.stringMatching(/^[0-9a-f]{64}$/),
       });

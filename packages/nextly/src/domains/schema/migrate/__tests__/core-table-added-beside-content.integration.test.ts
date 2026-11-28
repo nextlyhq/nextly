@@ -38,6 +38,7 @@ import {
   noMigrationsDir,
 } from "../../../../__tests__/helpers/migrate-core";
 import { getDialectTablesForPush } from "../../../../database/index";
+import { resolveRegistryNameFromCatalog } from "../../../field-groups/storage/resolve-storage-names";
 import { emitDdl } from "../../pipeline/ddl-emitter";
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -248,10 +249,17 @@ describe.each(availableDialects())(
         await withFreshDatabase(dialect, "nextly_ctab_push", async fresh => {
           await siteFromBeforeTheTable(fresh);
 
+          // The bundle names the registry the first migrate made, as
+          // `nextly migrate` does: a new site's is on the current names.
           const result = await freshPushSchema(
             dialect,
             fresh.db,
-            getDialectTablesForPush(dialect, {})
+            getDialectTablesForPush(dialect, {
+              fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+                dialect,
+                getDrizzle: <T>() => fresh.db as T,
+              }),
+            })
           );
 
           expect(

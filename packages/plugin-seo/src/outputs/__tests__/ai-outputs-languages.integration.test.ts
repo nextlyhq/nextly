@@ -38,7 +38,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     localization: { locales: ["en", "de"], defaultLocale: "en" },
     languageAddresses: {
       by: "domain",
-      domains: { en: SITE, de: "https://acme.de" },
+      // Both on the reserved .example names, which never resolve: a copy of a page
+      // with no stored words is rendered by fetching it, and a real domain would
+      // answer from the internet.
+      domains: { en: SITE, de: "https://acme-de.example" },
     },
     plugins: [seoPlugin({ collections: ["pages"], baseUrl: SITE })],
     collections: [
@@ -100,13 +103,18 @@ describe.each(getConfiguredTestDialects())(
     it("serves a language's copy on its own domain, naming the page there", async () => {
       await boot(dialect);
 
-      const german = await ask("https://acme.de/ueber.md");
+      const german = await ask("https://acme-de.example/ueber.md");
       // Front matter naming the page at its own domain, then its words.
       expect(german.body).toMatch(
-        /^---\n[\s\S]*\nurl: https:\/\/acme\.de\/ueber\n/
+        /^---\n[\s\S]*\nurl: https:\/\/acme-de\.example\/ueber\n/
       );
-      expect(german.body.endsWith("---\n\n# Über uns\n")).toBe(true);
-      expect(german.link).toBe('<https://acme.de/ueber>; rel="canonical"');
+      expect(
+        german.body.endsWith("---\n\n# Über uns\n"),
+        JSON.stringify(german.body)
+      ).toBe(true);
+      expect(german.link).toBe(
+        '<https://acme-de.example/ueber>; rel="canonical"'
+      );
 
       const english = await ask(`${SITE}/about.md`);
       expect(english.body.endsWith("---\n\n# About us\n")).toBe(true);

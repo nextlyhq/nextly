@@ -37,6 +37,7 @@ import type {
 } from "nextly/widget-result";
 import type React from "react";
 
+import { actorSubject } from "@admin/components/features/versions/history-story-attribution";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
@@ -49,7 +50,6 @@ import {
   activityFromRow,
   activityHref,
 } from "@admin/hooks/queries/useRecentActivity";
-import { actorSubject } from "@admin/components/features/versions/history-story-attribution";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import type { Activity } from "@admin/types/dashboard/activity";

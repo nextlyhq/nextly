@@ -23,6 +23,7 @@ import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 import { claimedBy, SECOND_EDITOR, secondEditor } from "./support/two-editors";
+import { saveFromBar } from "./support/document-bar";
 
 // Creates a second user; see support/locks.ts for what each lock guards. The
 // entry itself is this file's own, created under a unique name.
@@ -85,7 +86,7 @@ async function saveAsA(page: Page, id: string): Promise<void> {
       response.request().method() === "PATCH",
     { timeout: 30_000 }
   );
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
   expect((await saved).ok(), "A's save must be stored").toBe(true);
 }
 

@@ -12,6 +12,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { saveFromBar } from "./support/document-bar";
 
 const LIST_PATH = /\/admin\/collections\/posts$/;
 const EDIT_PATH = /\/admin\/collections\/posts\/(?!create$)[^/]+$/;
@@ -50,7 +51,7 @@ async function openSavedPost(page: Page): Promise<string> {
   await gotoAdmin(page, "/collections/posts/create");
   await page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
   await excerpt(page).fill(saved);
-  await page.getByRole("button", { name: /save draft/i }).click();
+  await saveFromBar(page);
 
   // The first save stays on the new post. It is then opened again from the
   // list, so the page before it in the history is the list.

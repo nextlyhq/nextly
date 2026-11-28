@@ -15,6 +15,7 @@ import { expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
 import { retirementCheckpoint } from "../../../domains/schema/migrate/retired-documents";
+import { tableHold } from "../../../domains/schema/migrate/retirement-hold";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import {
@@ -790,7 +791,9 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
           entities: [{ kind: "collection", slug: "gt_posts", table: POSTS }],
         },
       },
-      false
+      false,
+      // The hold a migration run makes for the unit, so this case reads what the run reads.
+      tableHold(project.adapter, dialect)
     );
     const db = project.adapter.getDrizzle();
 

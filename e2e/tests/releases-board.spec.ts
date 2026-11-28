@@ -22,7 +22,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import {
@@ -373,7 +373,11 @@ test.describe("the Releases page's views", () => {
       const filtered = await expectColumnsAsTheList(page, "release");
       expect(filtered.upcoming.ids).not.toContain(single);
       expect(filtered.upcoming.ids).toContain(scheduled);
-      await expect(page.getByText("Single document")).toHaveCount(0);
+      // Read hidden elements too: a mark the board should not draw at all must not be there hidden.
+      // Exact, so the "Hide single documents" switch's own words are not taken for the mark.
+      await expect(
+        includingHidden(page).getByText("Single document", { exact: true })
+      ).toHaveCount(0);
 
       // Counted without it first, so its absence is read from the filtered
       // calendar rather than from one not drawn yet.

@@ -180,6 +180,16 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * collection's code, the settling of a left Builder save at migrate, and the
  * CLI's first line. CI and a local run both measured 109 and 1,508; the tail
  * mean's pin holds.
+ * Both rose, to 130 and 1,593, as a debt to pay back: CI and a local run both
+ * measured 127 and 1,558 after the merges of 2026-11-25 to 11-27. Eighteen
+ * files crossed the heavy line with no single new edge: each gained 25 to 60
+ * modules spread over many features on chains it already held (into
+ * `di/register` through the route handler's auth, the plugin hook boot and
+ * the Builder access check, and into a dialect's schema bundle through
+ * `database/index` and `database/dialect-tables`), and one new test
+ * (`migrate:check`'s pending changes) loads them by design. Raised on the
+ * owner's word of 2026-11-28 so the release is not held; the trim that makes
+ * those edges lazy follows and brings both back down.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -187,7 +197,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 112, tailMeanModules: 1_520 };
+export const BUDGET = { heavyFiles: 130, tailMeanModules: 1_593 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

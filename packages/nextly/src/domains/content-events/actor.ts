@@ -8,8 +8,8 @@
  */
 
 import type { RequestActor } from "../../auth/request-actor";
-import { storedAttribution } from "../audit/attribution";
 import { NextlyError } from "../../errors";
+import { storedAttribution } from "../audit/attribution";
 
 /**
  * The actor of one event.

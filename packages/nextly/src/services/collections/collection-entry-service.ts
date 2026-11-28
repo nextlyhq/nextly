@@ -47,6 +47,7 @@ import { CollectionBulkService } from "../../domains/collections/services/collec
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
 import {
   CollectionMutationService,
+  type EntryUpdateJudgement,
   type FieldRewriteCall,
 } from "../../domains/collections/services/collection-mutation-service";
 import { CollectionQueryService } from "../../domains/collections/services/collection-query-service";
@@ -840,7 +841,7 @@ export class CollectionEntryService extends BaseService {
    */
   judgeEntryUpdate(
     params: Parameters<CollectionMutationService["judgeEntryUpdate"]>[0]
-  ) {
+  ): Promise<EntryUpdateJudgement> {
     return this.mutationService.judgeEntryUpdate(params);
   }
 

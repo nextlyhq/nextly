@@ -3,7 +3,9 @@
 import { PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 
-import { Breadcrumbs } from "@admin/components/shared";
+// From its own module: the shared barrel brings every shared component, forms and all, into each
+// settings page that only shows a trail.
+import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import { ROUTES } from "@admin/constants/routes";
 
 interface SettingsLayoutProps {

@@ -84,7 +84,7 @@ describeEachDialect("a plugin's field a start could not add", dialect => {
     refused = false;
     const send = adapter.executeQuery.bind(adapter);
     vi.spyOn(adapter, "executeQuery").mockImplementation(
-      async (sql: string, params?: never[]) => {
+      async (sql, params) => {
         if (refused && /ADD COLUMN .rank_by/.test(sql)) {
           throw new Error("refused by the database");
         }

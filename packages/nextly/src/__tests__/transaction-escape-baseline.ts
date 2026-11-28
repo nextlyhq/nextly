@@ -145,15 +145,8 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     // The same row count, on a field group's shared table: a removed plugin's
-    // column there, whose drop the push then leaves out.
-    dialect: "mysql",
-    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select comp_*",
-    witness:
-      "packages/nextly/src/domains/schema/ownership/__tests__/push-keeps-others-elements.integration.test.ts",
-    reason: PIPELINE,
-  },
-  {
-    // The same, under the table's current name.
+    // column there, whose drop the push then leaves out. A new site's group
+    // is under the current name.
     dialect: "mysql",
     key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select fg_*",
     witness:

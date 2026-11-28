@@ -11,6 +11,7 @@ import { container } from "../di/container";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { EntryUpdateJudgement } from "../domains/collections/services/collection-mutation-service";
 import type { PublishPartsRequest } from "../domains/collections/services/publish-parts";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import { collectionMetadataFetcher } from "../domains/dynamic-collections/services/collection-metadata-fetcher";
@@ -403,7 +404,7 @@ export class CollectionsHandler {
    */
   judgeEntryUpdate(
     params: Parameters<CollectionEntryService["judgeEntryUpdate"]>[0]
-  ) {
+  ): Promise<EntryUpdateJudgement> {
     return this.entryService.judgeEntryUpdate(params);
   }
 

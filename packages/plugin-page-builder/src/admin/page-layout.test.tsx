@@ -257,7 +257,10 @@ describe("on a site that draws its header and footer in code", () => {
   });
 });
 
-describe("the page's Layout picker", () => {
+// Its searches draw the first answer's 200 Layouts, each with its picture and
+// note: 1 to 2.5 s a test locally, and 4 to 5 s on a loaded CI runner, at
+// Vitest's 5 s default. Three times that, for this describe alone.
+describe("the page's Layout picker", { timeout: 15_000 }, () => {
   it("is one labelled control, described by the line saying which Layout is in effect", () => {
     renderPicker();
     const trigger = screen.getByRole("combobox", { name: "Header & footer" });

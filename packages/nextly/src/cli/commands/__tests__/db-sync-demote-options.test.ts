@@ -28,6 +28,21 @@ import {
 } from "../db-sync-demote";
 import { promotedCollection } from "../db-sync-promote-collection";
 
+/**
+ * `value` with its string keys alone, the settings a stored definition, the schema hash and a
+ * comparison of settings read. `defineCollection` marks the title and slug it adds under a symbol
+ * key (`systemFieldsBeside`), and a field printed from the Schema Builder's record is declared in
+ * the code instead, so it carries no mark; only a Single's identity fields read that mark.
+ */
+function settingsOf(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(settingsOf);
+  if (typeof value !== "object" || value === null) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, inner]) => [key, settingsOf(inner)])
+  );
+}
+
 vi.mock("../db-sync-registry", async importOriginal => ({
   ...(await importOriginal<typeof import("../db-sync-registry")>()),
   withCollectionRegistryWrite: (_args: unknown, work: () => Promise<unknown>) =>
@@ -261,9 +276,9 @@ describe("a demoted collection's record", () => {
     async (_what, options) => {
       const collection = coded(options);
       const record = asRecord(await registeredFor(collection));
-      expect(toCodeFirstCollectionConfig(promotedFrom(record), "code")).toEqual(
-        toCodeFirstCollectionConfig(collection, "code")
-      );
+      expect(
+        settingsOf(toCodeFirstCollectionConfig(promotedFrom(record), "code"))
+      ).toEqual(settingsOf(toCodeFirstCollectionConfig(collection, "code")));
     }
   );
 
