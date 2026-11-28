@@ -30,3 +30,5 @@
 ---
 
 The SEO plugin no longer fails `next build` on a site that sets no `deploymentId`. Inside the bundle Next.js replaces `process.env.NEXT_DEPLOYMENT_ID` with `false` when none is set, and the plugin read it as a string, so prerendering any page that lists the site's code pages, such as `pages-sitemap.xml`, threw `false.trim is not a function`. Only a non-empty string now names a deployment.
+
+Under Cache Components the same build no longer fails on a page that calls `seoMetadata`: the pages a build records were dated with `new Date()`, which a prerender refuses outside a cache scope, and are now dated from the timing API.
