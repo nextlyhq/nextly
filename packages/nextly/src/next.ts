@@ -193,6 +193,33 @@ const KEY_FILE_SOURCE = "/:key([0-9a-f]{32}).txt";
  */
 export const KEY_FILE_ROUTE_PREFIX = "/indexnow-key";
 
+/**
+ * Where a feed file is answered behind the API handler: `<prefix><address>`,
+ * so `/blog/feed.xml` reaches `<api>/feed-files/blog/feed.xml`. A plugin's
+ * root route at that path answers it. A prefix of its own, as the key file's
+ * is, so a feed under a name the built-in router claims (`/users/feed.xml`)
+ * still reaches the plugin.
+ */
+export const FEED_FILE_ROUTE_PREFIX = "/feed-files";
+
+/**
+ * The feed addresses a plugin may answer: `feed.xml` at the site's root, or
+ * in one folder of it (`/blog/feed.xml`), the names feed readers and sites
+ * use for a site's feed and a section's. On the same terms as the files
+ * above: the site's own page, route file, `public/` file or rewrite of such
+ * an address comes first.
+ */
+const FEED_FILE_SOURCES = ["/feed.xml", "/:section/feed.xml"] as const;
+
+/**
+ * An address each feed source matches, to ask whether the site rewrites such
+ * addresses itself.
+ */
+const FEED_FILE_SAMPLES: Readonly<Record<string, string>> = {
+  "/feed.xml": "/feed.xml",
+  "/:section/feed.xml": "/section/feed.xml",
+};
+
 /** A key file's address, to ask whether the site rewrites such addresses itself. */
 const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
 
@@ -205,6 +232,14 @@ export interface WithNextlyOptions {
   apiRoute?: string;
   /** More root files, beyond robots.txt, sitemap.xml, llms.txt and llms-full.txt, that a plugin answers. */
   rootFiles?: readonly string[];
+  /**
+   * Whether `/feed.xml` and `/<folder>/feed.xml` reach a plugin that answers
+   * feeds, where the site serves no file of its own there. On by default.
+   * Turn it off where the site's own dynamic route answers such an address
+   * (`app/[section]/feed.xml/route.ts`): a rewrite is asked before a dynamic
+   * route, so the plugin would answer it instead.
+   */
+  feedFiles?: boolean;
   /**
    * The app's migrations folder, relative to the project root, as
    * `db.migrationsDir` in the Nextly config sets it. Defaults to
@@ -312,12 +347,30 @@ function withRootFileRewrites(
             destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
           },
         ];
+    // The feed files, on the same terms: each source left to a site that
+    // rewrites such an address itself, and all of them where the site turns
+    // them off.
+    const feedFileRewrites =
+      options.feedFiles === false
+        ? []
+        : FEED_FILE_SOURCES.filter(
+            source =>
+              !all.some(
+                rule =>
+                  typeof rule.source === "string" &&
+                  matches(rule.source, FEED_FILE_SAMPLES[source] ?? source)
+              )
+          ).map(source => ({
+            source,
+            destination: `${apiRoute}${FEED_FILE_ROUTE_PREFIX}${source}`,
+          }));
     return {
       beforeFiles: phases.beforeFiles ?? [],
       afterFiles: [
         ...(phases.afterFiles ?? []),
         ...rootRewrites,
         ...keyFileRewrites,
+        ...feedFileRewrites,
       ],
       fallback: phases.fallback ?? [],
     };

@@ -32,6 +32,8 @@ export interface LlmsFile {
   intro?: string;
   /** Where llms-full.txt is served, linked after the intro; none while it is off. */
   fullTxt?: string;
+  /** The site's RSS feeds, each by its name and address, named after that. */
+  feeds?: readonly { title: string; url: string }[];
   entries: readonly LlmsEntry[];
 }
 
@@ -79,6 +81,13 @@ export function llmsTxt(file: LlmsFile): string {
       "",
       `The whole site in one file: [llms-full.txt](${linkAddress(file.fullTxt)}).`
     );
+  }
+  const feeds = file.feeds ?? [];
+  if (feeds.length > 0) {
+    const links = feeds.map(
+      feed => `[${linkText(feed.title)}](${linkAddress(feed.url)})`
+    );
+    lines.push("", `What is new, as RSS: ${links.join(", ")}.`);
   }
   // Each section once, where its first page is, its pages in the order given.
   const sections = new Map<string, string[]>();
